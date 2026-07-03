@@ -1,0 +1,64 @@
+version: 1
+defaults:
+  action: allow
+  on_error: block
+
+# Trust model:
+# - Intended for research agents that gather and summarize web, file, resource,
+#   and prompt content.
+# - Requires tools to be classified before use; unknown tools are blocked.
+# - Allows source/pure read paths while blocking writes, shell/code execution,
+#   messaging/email, credential access, and generic sink-class tool calls.
+rules:
+  - id: deny-server-sampling
+    name: Deny server-initiated model access
+    when:
+      direction: request
+      method: sampling/createMessage
+    action: block
+    reason: Read-only research agents should not let MCP servers invoke the model.
+
+  - id: block-unknown-tools
+    name: Block unclassified tools
+    when:
+      direction: request
+      method: tools/call
+      tool_class: unknown
+    action: block
+    reason: Research read-only mode requires explicit source/pure/sink classification.
+
+  - id: block-side-effect-capabilities
+    name: Block write, shell, message, and credential capabilities
+    when:
+      direction: request
+      method: tools/call
+      capabilities_any:
+        - writes_local
+        - writes_remote
+        - deletes_data
+        - executes_code
+        - sends_message
+        - accesses_credentials
+    action: block
+    reason: Research read-only mode must not write, delete, execute, message, publish, or access credentials.
+
+  - id: block-sink-tools
+    name: Block sink-class tools
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+    action: block
+    reason: Research read-only mode only permits source and pure tools.
+
+  - id: sanitize-suspicious-research-content
+    name: Spotlight suspicious research content
+    when:
+      direction: response
+      method:
+        - tools/call
+        - resources/read
+        - prompts/get
+      detector_score_gte: 0.35
+    action: sanitize
+    reason: Research content may be untrusted and should be spotlighted when suspicious.

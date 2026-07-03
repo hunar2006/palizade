@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { evaluatePolicy } from "./evaluator.js";
-import type { PolicyDocument } from "./types.js";
+import { parsePolicy } from "./loader.js";
+import type { PolicyDocument, ToolCapability } from "./types.js";
 
 describe("evaluatePolicy", () => {
   const policy: PolicyDocument = {
@@ -40,5 +42,58 @@ describe("evaluatePolicy", () => {
     });
 
     expect(decision.action).toBe("allow");
+  });
+
+  it("blocks sink classes in the research read-only preset", () => {
+    const researchPolicy = parsePolicy(
+      readFileSync(
+        new URL("../../../policies/research-read-only.yaml", import.meta.url),
+        "utf8"
+      )
+    );
+    const blockedCapabilities: ToolCapability[] = [
+      "writes_local",
+      "writes_remote",
+      "deletes_data",
+      "executes_code",
+      "sends_message",
+      "accesses_credentials"
+    ];
+
+    expect(
+      evaluatePolicy(researchPolicy, {
+        direction: "request",
+        method: "tools/call",
+        tool_class: "sink"
+      }).action
+    ).toBe("block");
+
+    expect(
+      evaluatePolicy(researchPolicy, {
+        direction: "request",
+        method: "tools/call",
+        tool_class: "unknown"
+      }).action
+    ).toBe("block");
+
+    for (const capability of blockedCapabilities) {
+      expect(
+        evaluatePolicy(researchPolicy, {
+          direction: "request",
+          method: "tools/call",
+          tool_class: "pure",
+          capabilities: [capability]
+        }).action
+      ).toBe("block");
+    }
+
+    expect(
+      evaluatePolicy(researchPolicy, {
+        direction: "request",
+        method: "tools/call",
+        tool_class: "source",
+        capabilities: ["reads_untrusted_content"]
+      }).action
+    ).toBe("allow");
   });
 });
