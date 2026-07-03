@@ -17,6 +17,10 @@
     "example:server": "node examples/toy-mcp-server/server.mjs",
     "example:flow": "node examples/run-toy-flow.mjs",
     "demo:cross-server": "node examples/cross-server-taint-demo.mjs",
+    "demo:benign-block": "node examples/benign-taint-block-demo.mjs",
+    "demo:secret-block": "node examples/secret-egress-block-demo.mjs",
+    "demo:pii-redact": "node examples/pii-redact-demo.mjs",
+    "demo:egress-allowlist": "node examples/egress-allowlist-demo.mjs",
     "smoke:filesystem": "node examples/real-filesystem-smoke.mjs"
   },
   "keywords": [

@@ -1,4 +1,4 @@
-export type PolicyAction = "allow" | "block" | "sanitize" | "redact_spans" | "require_approval" | "log_only";
+export type PolicyAction = "allow" | "block" | "sanitize" | "redact_spans" | "redact_secrets" | "require_approval" | "log_only";
 
 export type Direction = "request" | "response";
 export type TrustLevel = "trusted" | "semi" | "untrusted";
@@ -8,6 +8,7 @@ export type ToolCapability =
   | "reads_untrusted_content"
   | "reads_sensitive_data"
   | "network_egress"
+  | "file_write"
   | "writes_local"
   | "writes_remote"
   | "deletes_data"
@@ -35,7 +36,12 @@ export interface PolicyCondition {
   capabilities_all?: ToolCapability[] | undefined;
   trust?: TrustLevel | TrustLevel[] | undefined;
   taint?: boolean | undefined;
+  sensitive_taint?: boolean | undefined;
   temporal_taint?: boolean | undefined;
+  secret_detected?: boolean | undefined;
+  pii_detected?: boolean | undefined;
+  destination_allowed?: boolean | undefined;
+  destination_allowlist_configured?: boolean | undefined;
   detector_score_gte?: number | undefined;
   detector_score_lt?: number | undefined;
   labels_any?: string[] | undefined;
@@ -64,7 +70,12 @@ export interface PolicyContext {
   capabilities?: ToolCapability[] | undefined;
   trust?: TrustLevel | undefined;
   taint?: boolean | undefined;
+  sensitive_taint?: boolean | undefined;
   temporal_taint?: boolean | undefined;
+  secret_detected?: boolean | undefined;
+  pii_detected?: boolean | undefined;
+  destination_allowed?: boolean | undefined;
+  destination_allowlist_configured?: boolean | undefined;
   detector_score?: number | undefined;
   labels?: string[] | undefined;
   lock_status?: LockStatus | undefined;

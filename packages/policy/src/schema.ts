@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const actionSchema = z.enum(["allow", "block", "sanitize", "redact_spans", "require_approval", "log_only"]);
+const actionSchema = z.enum(["allow", "block", "sanitize", "redact_spans", "redact_secrets", "require_approval", "log_only"]);
 const directionSchema = z.enum(["request", "response"]);
 const trustSchema = z.enum(["trusted", "semi", "untrusted"]);
 const toolClassSchema = z.enum(["source", "sink", "pure", "unknown"]);
@@ -9,6 +9,7 @@ const capabilitySchema = z.enum([
   "reads_untrusted_content",
   "reads_sensitive_data",
   "network_egress",
+  "file_write",
   "writes_local",
   "writes_remote",
   "deletes_data",
@@ -33,7 +34,12 @@ export const policyConditionSchema = z.object({
   capabilities_all: z.array(capabilitySchema).optional(),
   trust: singleOrArray(trustSchema).optional(),
   taint: z.boolean().optional(),
+  sensitive_taint: z.boolean().optional(),
   temporal_taint: z.boolean().optional(),
+  secret_detected: z.boolean().optional(),
+  pii_detected: z.boolean().optional(),
+  destination_allowed: z.boolean().optional(),
+  destination_allowlist_configured: z.boolean().optional(),
   detector_score_gte: z.number().min(0).max(1).optional(),
   detector_score_lt: z.number().min(0).max(1).optional(),
   labels_any: z.array(z.string()).optional(),

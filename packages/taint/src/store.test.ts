@@ -39,6 +39,37 @@ describe("InMemoryTaintStore", () => {
     });
 
     expect(store.hasTemporal("s1")).toBe(true);
-    expect(store.match("s1", "unrelated outgoing request")).toContainEqual({ taintId: record.id, reason: "temporal" });
+    expect(store.match("s1", "unrelated outgoing request")).toContainEqual({
+      taintId: record.id,
+      reason: "temporal",
+      classes: ["untrusted"]
+    });
+  });
+
+  it("filters matches by taint class while preserving default untrusted behavior", () => {
+    const store = new InMemoryTaintStore();
+    const untrusted = store.add({
+      sessionId: "s1",
+      sourceServer: "web",
+      sourceTool: "read_web",
+      trust: "untrusted",
+      text: "public tainted text",
+      detectorScore: 0,
+      labels: []
+    });
+    const sensitive = store.add({
+      sessionId: "s1",
+      sourceServer: "vault",
+      sourceTool: "read_secret",
+      trust: "trusted",
+      text: "secret token sk-testsecret000000000000000000",
+      detectorScore: 0.9,
+      labels: ["secret:openai"],
+      classes: ["sensitive"]
+    });
+
+    expect(store.match("s1", "public tainted text").map((match) => match.taintId)).toContain(untrusted.id);
+    expect(store.match("s1", "secret token sk-testsecret000000000000000000", { classes: ["sensitive"] }).map((match) => match.taintId)).toContain(sensitive.id);
+    expect(store.match("s1", "public tainted text", { classes: ["sensitive"] })).toEqual([]);
   });
 });

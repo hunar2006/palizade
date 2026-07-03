@@ -4,6 +4,48 @@
 
 It wraps MCP servers, tracks suspicious/untrusted content across tool calls, and blocks tainted data when it flows into privileged sinks such as email, HTTP, shell, or file writes.
 
+## Egress & Secret Protection
+
+Palizade is now a bidirectional dataflow firewall: untrusted data cannot silently drive sinks, and sensitive data can be stopped before it leaves through email, HTTP, or file-write style tools.
+
+The new opt-in `policies/egress.yaml` preset adds:
+
+- `block-secret-egress`: blocks sensitive taint or directly detected secrets flowing into egress-capable tools.
+- `block-sensitive-into-untrusted-destination`: blocks tainted data to destinations outside `egress.allowlist`.
+- `redact-pii-egress`: strips detected PII spans from message egress and forwards the redacted call.
+
+Pattern-based secret and PII detection is defense-in-depth. It catches common formats like AWS keys, OpenAI/GitHub/Slack/Stripe tokens, JWTs, private keys, emails, SSNs, Luhn-valid cards, and phone numbers, but it will miss custom, transformed, or obfuscated secrets. Destination allowlists are the stronger structural control because they do not rely on recognizing the secret itself.
+
+```yaml
+policy: policies/egress.yaml
+detectors:
+  secrets:
+    enabled: true
+  pii:
+    enabled: true
+egress:
+  allowlist:
+    hosts: ["good.com", "*.corp.example"]
+    emails: ["*@company.com"]
+servers:
+  secrets:
+    sensitive: true
+  filesystem:
+    sensitiveTools:
+      read_file: true
+    sensitivePathPatterns:
+      - "\\.env$"
+      - "id_rsa"
+```
+
+Run the demos:
+
+```bash
+pnpm demo:secret-block
+pnpm demo:pii-redact
+pnpm demo:egress-allowlist
+```
+
 ## Launch Proof
 
 The key demo is cross-server taint: content enters through a fetch-like source and exits through a Gmail/write-like sink.
@@ -34,6 +76,14 @@ block_reason=Cross-server tainted data entered Gmail send.
 audit=gmail block block-tainted-sink Cross-server tainted data entered Gmail send.
 taint_ids=taint_...
 ```
+
+Provenance-only block demo: benign content is read from a source tool and then reused in a `write_file` sink. The text has no injection string; the block fires because tainted provenance flowed into a privileged sink.
+
+```bash
+pnpm demo:benign-block
+```
+
+Blocked calls return an actionable JSON-RPC error message with the policy rule and reason, without exposing raw tainted content or taint IDs.
 
 Real MCP SDK smoke test:
 
@@ -92,7 +142,7 @@ Upstream MCP server
 - Provenance and taint store with HMAC-protected exact fragments/tokens, SimHash fuzzy comparison, TTL, and temporal taint checks.
 - Profile-scoped SQLite taint store for wrapped servers in the same Palizade profile, with optional `PALIZADE_RUN_ID` correlation.
 - First-match-wins YAML policy engine.
-- Actions: `allow`, `block`, `sanitize`, `redact_spans`, `require_approval`, and `log_only`.
+- Actions: `allow`, `block`, `sanitize`, `redact_spans`, `redact_secrets`, `require_approval`, and `log_only`.
 - Terminal approval provider with secure non-interactive deny default.
 - JSONL audit log plus SQLite mirror when Node's `node:sqlite` module is available.
 - Toy MCP server and replay harness.
@@ -154,31 +204,13 @@ node packages/cli/dist/index.cjs wrap toy
 
 The proxy reads MCP JSON-RPC messages from stdin and writes responses to stdout, so MCP clients can point their server command at the wrapper.
 
-Before:
+Install a Claude Desktop entry for a configured server:
 
-```json
-{
-  "mcpServers": {
-    "toy": {
-      "command": "node",
-      "args": ["examples/toy-mcp-server/server.mjs"]
-    }
-  }
-}
+```bash
+palizade install-config filesystem
 ```
 
-After:
-
-```json
-{
-  "mcpServers": {
-    "toy": {
-      "command": "npx",
-      "args": ["palizade", "wrap", "toy"]
-    }
-  }
-}
-```
+By default this edits Claude Desktop's config and adds an entry named `palizade-filesystem`. It writes an absolute `node` command plus an absolute path to the Palizade CLI, which avoids Windows `.cmd` and `.ps1` shim issues. Use `--dry-run` to preview the full JSON first, `--client-config <path>` for non-standard installs, and `--force` to replace an existing entry.
 
 Real filesystem server before:
 
@@ -193,18 +225,9 @@ Real filesystem server before:
 }
 ```
 
-After wrapping:
+After `palizade install-config filesystem`, the client config points to `palizade wrap filesystem -c <absolute path to palizade.yaml>`.
 
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["palizade", "wrap", "filesystem"]
-    }
-  }
-}
-```
+Relative paths inside `palizade.yaml` are resolved against the config file's own directory, not the client's launch directory. That means generated paths like `policies/default.yaml`, `.palizade/taint.sqlite`, and `.palizade/models` continue to work when Claude Desktop spawns Palizade from another cwd. Server `args` are intentionally opaque and are not rewritten; use absolute paths there if your upstream server depends on a specific file path.
 
 ## Example Behavior
 
@@ -299,9 +322,10 @@ Shipped presets:
 
 - `policies/audit-only.yaml`
 - `policies/default.yaml`
+- `policies/egress.yaml`
 - `policies/strict.yaml`
 
-Policy can match on direction, method, server, tool, tool class, trust, taint presence, detector score, labels, lock status, temporal taint, and argument regex.
+Policy can match on direction, method, server, tool, tool class, capabilities, trust, taint presence, sensitive taint, secret/PII detection, destination allowlist status, detector score, labels, lock status, temporal taint, argument roles, tainted argument roles, and argument regex.
 
 ## Taint Model
 
@@ -327,7 +351,7 @@ Classifiers and heuristics can miss obfuscated attacks and can overfire on benig
 ## Security And Privacy
 
 - Audit logs hash payloads by default.
-- Raw payload capture requires `audit.captureRawPayloads: true`.
+- Raw payload capture requires `audit.captureRawPayloads: true`; detected sensitive strings are masked before capture.
 - SQLite taint fingerprints are HMAC-protected by `.palizade/taint.key`; the key is local and never printed.
 - Policy evaluation errors fail closed by default in shipped enforcement policies.
 - Localhost approval is tokenized, one-time, POST-only, loopback-bound, and expires with the approval timeout.
@@ -339,6 +363,7 @@ Classifiers and heuristics can miss obfuscated attacks and can overfire on benig
 
 ```bash
 palizade init
+palizade install-config <serverName>
 palizade wrap <serverName>
 palizade lock approve <serverName>
 palizade detectors install promptguard2

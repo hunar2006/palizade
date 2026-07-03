@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StaticApprovalProvider } from "@palizade/approvals";
 import { AuditLogger, type AuditEvent } from "@palizade/audit";
-import { HeuristicDetector } from "@palizade/detectors";
+import { DetectorPipeline, HeuristicDetector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
 import { parsePolicy } from "@palizade/policy";
 import { InMemoryTaintStore } from "@palizade/taint";
 import { describe, expect, it } from "vitest";
@@ -23,6 +23,7 @@ rules:
   - id: block-tainted-sink
     when: { direction: request, method: tools/call, tool_class: sink, taint: true }
     action: block
+    reason: tainted content flowing into sink tool
 `);
 
 describe("InterceptionEngine", () => {
@@ -66,8 +67,17 @@ describe("InterceptionEngine", () => {
       });
 
       expect(blocked.toServer).toHaveLength(0);
-      expect(blocked.toClient[0]).toMatchObject({ error: { code: -32020 } });
-      expect(events.some((event) => event.action === "block" && event.matched_rule?.id === "block-tainted-sink")).toBe(true);
+      expect(blocked.toClient[0]).toMatchObject({
+        error: {
+          code: -32020,
+          message: expect.stringContaining("tainted content flowing into sink tool")
+        }
+      });
+      expect(JSON.stringify(blocked.toClient[0])).toContain("block-tainted-sink");
+      expect(JSON.stringify(blocked.toClient[0])).not.toContain("taint_");
+      const blockEvent = events.find((event) => event.action === "block" && event.matched_rule?.id === "block-tainted-sink");
+      expect(blockEvent).toBeDefined();
+      expect(blockEvent?.taint_ids).toEqual([...new Set(blockEvent?.taint_ids)]);
     } finally {
       await cleanup();
     }
@@ -214,9 +224,185 @@ rules:
       await cleanup();
     }
   });
+
+  it("blocks sensitive provenance egress even when content has no injection text", async () => {
+    const egressPolicy = parsePolicy(`version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: block-secret-egress
+    when:
+      direction: request
+      method: tools/call
+      sensitive_taint: true
+      capabilities_any: [sends_message]
+    action: block
+    reason: sensitive tainted content is flowing into an egress-capable tool
+`);
+    const { engine, events, cleanup } = await makeEngine(egressPolicy, {
+      configure: (config) => {
+        config.servers.toy!.sensitiveTools.read_web = true;
+      }
+    });
+    try {
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          tools: [
+            { name: "read_web", description: "Read file", inputSchema: {}, annotations: { readOnlyHint: true } },
+            { name: "send_email", description: "Send email", inputSchema: {}, annotations: { destructiveHint: true } }
+          ]
+        }
+      });
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_web", arguments: { path: "confidential.txt" } } });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { content: [{ type: "text", text: "Quarterly revenue figures, confidential internal data" }] }
+      });
+
+      const blocked = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "send_email",
+          arguments: { to: "finance@example.test", body: "Quarterly revenue figures, confidential internal data" }
+        }
+      });
+
+      expect(blocked.toServer).toHaveLength(0);
+      expect(blocked.toClient[0]).toMatchObject({
+        error: {
+          code: -32020,
+          message: expect.stringContaining("block-secret-egress")
+        }
+      });
+      const blockEvent = events.find((event) => event.matched_rule?.id === "block-secret-egress");
+      expect(blockEvent?.metadata?.taintClasses).toContain("sensitive");
+      expect(blockEvent?.metadata?.secretDetected).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("blocks direct secret egress and masks captured audit payloads", async () => {
+    const secretPolicy = parsePolicy(`version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: block-secret-detected-egress
+    when:
+      direction: request
+      method: tools/call
+      secret_detected: true
+      capabilities_any: [network_egress]
+    action: block
+    reason: secret-looking content is being sent to an egress-capable tool
+`);
+    const detector = new DetectorPipeline([
+      new HeuristicDetector(),
+      new SensitiveDataDetector({ secrets: { enabled: true } })
+    ]);
+    const { engine, events, cleanup } = await makeEngine(secretPolicy, {
+      detector,
+      captureRawPayloads: true
+    });
+    try {
+      const secret = "sk-testsecret000000000000000000";
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          tools: [
+            { name: "http_post", description: "POST to a URL", inputSchema: {}, annotations: { openWorldHint: true } },
+            { name: "read_web", description: "Read page", inputSchema: {}, annotations: { readOnlyHint: true } }
+          ]
+        }
+      });
+
+      const blocked = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "http_post", arguments: { url: "https://api.example.test/upload", body: `token=${secret}` } }
+      });
+
+      expect(blocked.toServer).toHaveLength(0);
+      expect(blocked.toClient[0]).toMatchObject({ error: { message: expect.stringContaining("block-secret-detected-egress") } });
+      expect(JSON.stringify(events)).not.toContain(secret);
+
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "read_web", arguments: { url: "https://example.test" } } });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 3,
+        result: { content: [{ type: "text", text: `normal response with ${secret}` }] }
+      });
+      expect(JSON.stringify(events)).not.toContain(secret);
+      expect(JSON.stringify(events)).toContain("[REDACTED:secret:openai]");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("redacts PII before forwarding an egress call", async () => {
+    const redactPolicy = parsePolicy(`version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: redact-pii-egress
+    when:
+      direction: request
+      method: tools/call
+      pii_detected: true
+      capabilities_any: [sends_message]
+    action: redact_secrets
+    reason: pii-like content should be redacted before egress
+`);
+    const detector = new DetectorPipeline([
+      new SensitiveDataDetector({ pii: { enabled: true } })
+    ]);
+    const { engine, cleanup } = await makeEngine(redactPolicy, { detector });
+    try {
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          tools: [
+            { name: "send_email", description: "Send email", inputSchema: {}, annotations: { destructiveHint: true } }
+          ]
+        }
+      });
+
+      const forwarded = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "send_email", arguments: { to: "ops", body: "Customer SSN 123-45-6789 and email jane@example.test" } }
+      });
+
+      const forwardedText = JSON.stringify(forwarded.toServer[0]);
+      expect(forwarded.toClient).toHaveLength(0);
+      expect(forwarded.toServer).toHaveLength(1);
+      expect(forwardedText).not.toContain("123-45-6789");
+      expect(forwardedText).not.toContain("jane@example.test");
+      expect(forwardedText).toContain("[REDACTED:pii:ssn]");
+      expect(forwardedText).toContain("[REDACTED:pii:email]");
+    } finally {
+      await cleanup();
+    }
+  });
 });
 
-async function makeEngine(activePolicy = policy): Promise<{ engine: InterceptionEngine; events: AuditEvent[]; cleanup: () => Promise<void> }> {
+async function makeEngine(
+  activePolicy = policy,
+  options: {
+    detector?: Detector;
+    captureRawPayloads?: boolean;
+    configure?: (config: PalizadeConfig) => void;
+  } = {}
+): Promise<{ engine: InterceptionEngine; events: AuditEvent[]; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "palizade-engine-"));
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
@@ -227,8 +413,11 @@ async function makeEngine(activePolicy = policy): Promise<{ engine: Interception
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,
-      promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" }
+      promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" },
+      secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
+      pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
     },
+    egress: { allowlist: { hosts: [], emails: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     taint: {
       sqlite: join(dir, "taint.sqlite"),
@@ -249,11 +438,15 @@ async function makeEngine(activePolicy = policy): Promise<{ engine: Interception
         trust: "untrusted",
         toolClasses: { read_web: "source", send_email: "sink" },
         toolCapabilities: {},
+        sensitive: false,
+        sensitiveTools: {},
+        sensitivePathPatterns: [],
         shell: false,
         allowShell: false
       }
     }
   };
+  options.configure?.(config);
   return {
     engine: new InterceptionEngine({
       config,
@@ -261,9 +454,9 @@ async function makeEngine(activePolicy = policy): Promise<{ engine: Interception
       server: config.servers.toy!,
       sessionId: "test-session",
       policy: activePolicy,
-      detector: new HeuristicDetector(),
+      detector: options.detector ?? new HeuristicDetector(),
       taintStore: new InMemoryTaintStore(),
-      audit: new AuditLogger([{ write: async (event) => { events.push(event); } }]),
+      audit: new AuditLogger([{ write: async (event) => { events.push(event); } }], { captureRawPayloads: options.captureRawPayloads ?? false }),
       approvals: new StaticApprovalProvider(false, "test denies approval"),
       lockfile: new LockfileStore(config.lockfile)
     }),

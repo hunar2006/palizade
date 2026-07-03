@@ -2,10 +2,10 @@ import type { ApprovalProvider } from "@palizade/approvals";
 import { createApprovalRequest } from "@palizade/approvals";
 import type { AuditLogger } from "@palizade/audit";
 import type { DetectionResult, Detector } from "@palizade/detectors";
-import { fuseDetections } from "@palizade/detectors";
+import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
-import type { TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { extractArgumentFields, argumentRolesSummary } from "./arguments.js";
+import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
+import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
@@ -39,6 +39,14 @@ export interface InterceptionEngineOptions {
 export interface EngineOutput {
   toClient: JsonRpcMessage[];
   toServer: JsonRpcMessage[];
+}
+
+interface DestinationSummary {
+  allowed: boolean;
+  allowlistConfigured: boolean;
+  hosts: string[];
+  emailRecipients: string[];
+  destinationCount: number;
 }
 
 interface PendingClientRequest {
@@ -124,14 +132,44 @@ export class InterceptionEngine {
     const toolClass = classification.toolClass;
     const argumentText = flattenArguments(params.arguments);
     const argumentFields = extractArgumentFields(params.arguments);
+    const argumentBlocks = extractTextBlocks(params.arguments);
+    const argumentDetections = await Promise.all(argumentBlocks.map(async (block) => ({
+      block,
+      detection: await this.options.detector.detect(block.text, {
+        server: this.options.serverName,
+        tool,
+        trust: this.options.server.trust,
+        surface: "argument"
+      })
+    })));
+    const argumentDetection = fuseDetections(argumentDetections.map((entry) => entry.detection));
+    const argumentDetectionsByPath = new Map(argumentDetections.map((entry) => [pathKey(entry.block), entry.detection]));
     const matches = this.options.taintStore.match(this.options.sessionId, argumentText, {
       fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax
     });
     const fieldMatches = argumentFields.flatMap((field) => this.options.taintStore.match(this.options.sessionId, field.text, {
       fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax
     }).map((match) => ({ field, match })));
+    const sensitiveMatches = this.options.taintStore.match(this.options.sessionId, argumentText, {
+      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
+      classes: ["sensitive"]
+    });
+    const sensitiveFieldMatches = argumentFields.flatMap((field) => this.options.taintStore.match(this.options.sessionId, field.text, {
+      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
+      classes: ["sensitive"]
+    }).map((match) => ({ field, match })));
     const taintedArgumentRoles = [...new Set(fieldMatches.map(({ field }) => field.role))];
     const temporal = matches.some((match) => match.reason === "temporal") || this.options.taintStore.hasTemporal(this.options.sessionId);
+    const secretDetected = hasSecretLabel(argumentDetection.labels);
+    const piiDetected = hasPiiLabel(argumentDetection.labels);
+    const sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
+    const destination = summarizeDestinations(argumentFields, this.options.config.egress.allowlist);
+    const allTaintMatches = [
+      ...matches,
+      ...fieldMatches.map(({ match }) => match),
+      ...sensitiveMatches,
+      ...sensitiveFieldMatches.map(({ match }) => match)
+    ];
 
     const decision = evaluatePolicy(this.options.policy, {
       direction: "request",
@@ -142,7 +180,14 @@ export class InterceptionEngine {
       capabilities: classification.capabilities,
       trust: this.options.server.trust,
       taint: matches.length > 0 || fieldMatches.length > 0,
+      sensitive_taint: sensitiveTaint,
       temporal_taint: temporal,
+      secret_detected: secretDetected,
+      pii_detected: piiDetected,
+      destination_allowed: destination.allowed,
+      destination_allowlist_configured: destination.allowlistConfigured,
+      detector_score: argumentDetection.score,
+      labels: argumentDetection.labels,
       argument_text: argumentText,
       argument_roles: argumentRolesSummary(argumentFields),
       tainted_argument_roles: taintedArgumentRoles
@@ -153,7 +198,7 @@ export class InterceptionEngine {
       tool,
       toolClass,
       classification,
-      taintMatches: [...matches, ...fieldMatches.map(({ match }) => match)],
+      taintMatches: allTaintMatches,
       summary: `${tool} (${toolClass}; ${classification.capabilities.join(",") || "no capabilities"}) wants to run with ${matches.length + fieldMatches.length} taint match(es).`
     });
 
@@ -161,22 +206,48 @@ export class InterceptionEngine {
       tool,
       toolClass,
       classification,
-      taintMatches: [...matches, ...fieldMatches.map(({ match }) => match)],
-      approved: approval.approved
+      detector: argumentDetection,
+      taintMatches: allTaintMatches,
+      approved: approval.approved,
+      argumentRoles: argumentRolesSummary(argumentFields),
+      taintedArgumentRoles,
+      destination,
+      sensitiveTaint,
+      secretDetected,
+      piiDetected,
+      taintClasses: classesFromMatches(allTaintMatches),
+      redacted: decision.action === "redact_secrets"
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);
 
     if (!approval.approved || decision.action === "block") {
+      const taintMatchCount = matches.length + fieldMatches.length;
       return {
         toClient: message.id === undefined ? [] : [
-          makeErrorResponse(message.id, -32020, "Palizade blocked MCP tool call", {
-            decision,
-            taint: matches,
-            taintedArgumentRoles
-          })
+          makeErrorResponse(
+            message.id,
+            -32020,
+            formatBlockedToolCallMessage(decision),
+            makeBlockedToolCallData(decision, taintedArgumentRoles, taintMatchCount)
+          )
         ],
         toServer: []
+      };
+    }
+
+    if (decision.action === "redact_secrets") {
+      const redactedArguments = applyTextTransforms(params.arguments, (text, block) => maskSensitiveText(text, argumentDetectionsByPath.get(pathKey(block))?.spans));
+      this.recordPending(message, tool);
+      return {
+        toClient: [],
+        toServer: [{
+          ...message,
+          params: {
+            ...params,
+            arguments: redactedArguments
+          }
+        }]
       };
     }
 
@@ -294,6 +365,9 @@ export class InterceptionEngine {
       capabilities: classification.capabilities,
       trust: this.options.server.trust,
       taint: taintRecords.length > 0,
+      sensitive_taint: recordsHaveClass(taintRecords, "sensitive"),
+      secret_detected: hasSecretLabel(fused.labels),
+      pii_detected: hasPiiLabel(fused.labels),
       detector_score: fused.score,
       labels: fused.labels
     });
@@ -314,6 +388,10 @@ export class InterceptionEngine {
       classification,
       detector: fused,
       taintIds: taintRecords.map((record) => record.id),
+      taintClasses: classesFromRecords(taintRecords),
+      sensitiveTaint: recordsHaveClass(taintRecords, "sensitive"),
+      secretDetected: hasSecretLabel(fused.labels),
+      piiDetected: hasPiiLabel(fused.labels),
       approved: approval.approved,
       payload: result
     });
@@ -345,7 +423,7 @@ export class InterceptionEngine {
       };
     }
 
-    if (decision.action === "redact_spans") {
+    if (decision.action === "redact_spans" || decision.action === "redact_secrets") {
       return {
         toClient: [{
           ...message,
@@ -430,8 +508,10 @@ export class InterceptionEngine {
   }
 
   private registerTaint(tool: string, toolClass: ToolClass, blocks: TextBlock[], detection: DetectionResult): TaintRecord[] {
-    const shouldTaint = this.options.server.trust !== "trusted" || toolClass === "source" || detection.score >= this.options.config.taint.suspiciousScore;
-    if (!shouldTaint) {
+    const untrusted = this.options.server.trust !== "trusted" || toolClass === "source" || detection.score >= this.options.config.taint.suspiciousScore;
+    const sensitive = this.isSensitiveOrigin(tool) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
+    const classes = taintClasses({ untrusted, sensitive });
+    if (classes.length === 0) {
       return [];
     }
     return blocks
@@ -443,27 +523,33 @@ export class InterceptionEngine {
         trust: this.options.server.trust,
         text: block.text,
         detectorScore: detection.score,
-        labels: detection.labels
+        labels: detection.labels,
+        classes
       }));
   }
 
   private registerTaintFromContents(sourceName: string, classification: ToolClassification, contents: ExtractedContent[], detection: DetectionResult): TaintRecord[] {
     const highRiskSource = this.options.server.trust === "untrusted" || classification.toolClass === "source" || classification.capabilities.includes("reads_untrusted_content");
-    const shouldTaint = highRiskSource || detection.score >= this.options.config.taint.suspiciousScore;
-    if (!shouldTaint) {
-      return [];
-    }
     return contents
       .filter((content) => content.text && content.text.trim().length >= 8 && content.kind !== "binary")
-      .map((content) => this.options.taintStore.add({
-        sessionId: this.options.sessionId,
-        sourceServer: this.options.serverName,
-        sourceTool: content.sourceToolOrResource ?? sourceName,
-        trust: this.options.server.trust,
-        text: content.text ?? "",
-        detectorScore: detection.score,
-        labels: detection.labels
-      }));
+      .flatMap((content) => {
+        const untrusted = highRiskSource || detection.score >= this.options.config.taint.suspiciousScore;
+        const sensitive = this.isSensitiveOrigin(sourceName, content) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
+        const classes = taintClasses({ untrusted, sensitive });
+        if (classes.length === 0) {
+          return [];
+        }
+        return [this.options.taintStore.add({
+          sessionId: this.options.sessionId,
+          sourceServer: this.options.serverName,
+          sourceTool: content.sourceToolOrResource ?? sourceName,
+          trust: this.options.server.trust,
+          text: content.text ?? "",
+          detectorScore: detection.score,
+          labels: detection.labels,
+          classes
+        })];
+      });
   }
 
   private async handleDescriptorListResponse(
@@ -542,6 +628,9 @@ export class InterceptionEngine {
       capabilities: classification.capabilities,
       trust: this.options.server.trust,
       taint: taintRecords.length > 0,
+      sensitive_taint: recordsHaveClass(taintRecords, "sensitive"),
+      secret_detected: hasSecretLabel(fused.labels),
+      pii_detected: hasPiiLabel(fused.labels),
       detector_score: fused.score,
       labels: fused.labels
     });
@@ -558,6 +647,10 @@ export class InterceptionEngine {
       classification,
       detector: fused,
       taintIds: taintRecords.map((record) => record.id),
+      taintClasses: classesFromRecords(taintRecords),
+      sensitiveTaint: recordsHaveClass(taintRecords, "sensitive"),
+      secretDetected: hasSecretLabel(fused.labels),
+      piiDetected: hasPiiLabel(fused.labels),
       approved: approval.approved,
       payload: result
     });
@@ -580,7 +673,7 @@ export class InterceptionEngine {
         toServer: []
       };
     }
-    if (decision.action === "redact_spans") {
+    if (decision.action === "redact_spans" || decision.action === "redact_secrets") {
       return {
         toClient: [{
           ...message,
@@ -719,6 +812,14 @@ export class InterceptionEngine {
       approved?: boolean;
       payload?: unknown;
       method?: string;
+      argumentRoles?: string[];
+      taintedArgumentRoles?: string[];
+      taintClasses?: TaintClass[];
+      destination?: DestinationSummary;
+      sensitiveTaint?: boolean;
+      secretDetected?: boolean;
+      piiDetected?: boolean;
+      redacted?: boolean;
     } = {}
   ): Promise<void> {
     await this.options.audit.write({
@@ -730,7 +831,7 @@ export class InterceptionEngine {
       tool: extra.tool,
       direction,
       method: extra.method ?? (isRequest(message) ? message.method : undefined),
-      taint_ids: extra.taintIds ?? extra.taintMatches?.map((match) => match.taintId) ?? [],
+      taint_ids: dedupePreservingOrder(extra.taintIds ?? extra.taintMatches?.map((match) => match.taintId) ?? []),
       detector: {
         score: extra.detector?.score ?? 0,
         labels: extra.detector?.labels ?? []
@@ -742,13 +843,47 @@ export class InterceptionEngine {
       action: decision.action,
       reason: decision.reason,
       latency_ms: Date.now() - startedAt,
-      payload: extra.payload,
+      payload: scrubAuditPayload(extra.payload),
       metadata: {
         toolClass: extra.toolClass,
         capabilities: extra.classification?.capabilities,
         lockChecks: extra.lockChecks,
         lockStatus: extra.lockStatus,
-        approved: extra.approved
+        approved: extra.approved,
+        argumentRoles: extra.argumentRoles,
+        taintedArgumentRoles: extra.taintedArgumentRoles,
+        taintClasses: extra.taintClasses,
+        destination: extra.destination,
+        sensitiveTaint: extra.sensitiveTaint,
+        secretDetected: extra.secretDetected,
+        piiDetected: extra.piiDetected,
+        redacted: extra.redacted
+      }
+    });
+  }
+
+  private isSensitiveOrigin(sourceName: string, content?: ExtractedContent): boolean {
+    if (this.options.server.sensitive) {
+      return true;
+    }
+    if (this.options.server.sensitiveTools[sourceName] === true) {
+      return true;
+    }
+    if (content?.sourceToolOrResource && this.options.server.sensitiveTools[content.sourceToolOrResource] === true) {
+      return true;
+    }
+    const searchable = [
+      sourceName,
+      content?.sourceToolOrResource,
+      content?.path,
+      typeof content?.rawValue === "string" ? content.rawValue : undefined
+    ].filter((value): value is string => Boolean(value));
+    return this.options.server.sensitivePathPatterns.some((pattern) => {
+      try {
+        const regex = new RegExp(pattern, "iu");
+        return searchable.some((value) => regex.test(value));
+      } catch {
+        return false;
       }
     });
   }
@@ -756,6 +891,124 @@ export class InterceptionEngine {
 
 function pathKey(block: TextBlock): string {
   return block.path.join(".");
+}
+
+function taintClasses(input: { untrusted: boolean; sensitive: boolean }): TaintClass[] {
+  const classes: TaintClass[] = [];
+  if (input.untrusted) {
+    classes.push("untrusted");
+  }
+  if (input.sensitive) {
+    classes.push("sensitive");
+  }
+  return classes;
+}
+
+function recordsHaveClass(records: TaintRecord[], taintClass: TaintClass): boolean {
+  return records.some((record) => record.classes.includes(taintClass));
+}
+
+function classesFromRecords(records: TaintRecord[]): TaintClass[] {
+  return dedupePreservingOrder(records.flatMap((record) => record.classes));
+}
+
+function classesFromMatches(matches: Array<TaintMatch | { taintId: string; reason: string; classes?: TaintClass[] | undefined }>): TaintClass[] {
+  return dedupePreservingOrder(matches.flatMap((match) => match.classes ?? []));
+}
+
+function summarizeDestinations(argumentFields: ArgumentField[], allowlist: PalizadeConfig["egress"]["allowlist"]): DestinationSummary {
+  const hosts = dedupePreservingOrder(argumentFields.flatMap((field) => hostsFromField(field)));
+  const emails = dedupePreservingOrder(argumentFields
+    .filter((field) => field.role === "email_recipient")
+    .map((field) => field.text.toLowerCase()));
+  const allowlistConfigured = allowlist.hosts.length > 0 || allowlist.emails.length > 0;
+  const hostsAllowed = hosts.every((host) => allowlist.hosts.some((entry) => matchesHost(entry, host)));
+  const emailsAllowed = emails.every((email) => allowlist.emails.some((entry) => matchesEmail(entry, email)));
+  const hasDestinations = hosts.length > 0 || emails.length > 0;
+  return {
+    allowed: !allowlistConfigured || !hasDestinations || (hostsAllowed && emailsAllowed),
+    allowlistConfigured,
+    hosts,
+    emailRecipients: emails.map(maskSensitiveValueForMetadata),
+    destinationCount: hosts.length + emails.length
+  };
+}
+
+function hostsFromField(field: ArgumentField): string[] {
+  if (field.role === "hostname") {
+    return [normalizeHost(field.text)].filter(Boolean);
+  }
+  if (field.role !== "url") {
+    return [];
+  }
+  try {
+    return [normalizeHost(new URL(field.text).hostname)].filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function matchesHost(pattern: string, host: string): boolean {
+  const normalizedPattern = normalizeHost(pattern);
+  const normalizedHost = normalizeHost(host);
+  if (!normalizedPattern || !normalizedHost) {
+    return false;
+  }
+  if (normalizedPattern === "*") {
+    return true;
+  }
+  if (normalizedPattern.startsWith("*.")) {
+    const suffix = normalizedPattern.slice(1);
+    return normalizedHost.endsWith(suffix);
+  }
+  return normalizedPattern === normalizedHost;
+}
+
+function matchesEmail(pattern: string, email: string): boolean {
+  const normalizedPattern = pattern.trim().toLowerCase();
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedPattern || !normalizedEmail) {
+    return false;
+  }
+  if (normalizedPattern === "*") {
+    return true;
+  }
+  if (normalizedPattern.startsWith("*@")) {
+    return normalizedEmail.endsWith(normalizedPattern.slice(1));
+  }
+  if (normalizedPattern.startsWith("@")) {
+    return normalizedEmail.endsWith(normalizedPattern);
+  }
+  return normalizedPattern === normalizedEmail;
+}
+
+function normalizeHost(value: string): string {
+  return value.trim().toLowerCase().replace(/\.$/u, "");
+}
+
+function maskSensitiveValueForMetadata(value: string): string {
+  const [local, domain] = value.split("@");
+  if (!local || !domain) {
+    return "[REDACTED:destination]";
+  }
+  return `${local.slice(0, 1) || "*"}***@${domain}`;
+}
+
+function scrubAuditPayload(value: unknown): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return maskKnownSensitiveText(value);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  try {
+    return applyTextTransforms(value, (text) => maskKnownSensitiveText(text));
+  } catch {
+    return "[payload omitted: audit masking failed]";
+  }
 }
 
 function worstLockStatus(checks: ToolLockCheck[]): "approved" | "new" | "changed" | "missing" | "unknown" {
@@ -776,6 +1029,33 @@ function descriptorName(item: unknown, fallback: string): string {
     }
   }
   return `${fallback}:${JSON.stringify(item).slice(0, 80)}`;
+}
+
+function formatBlockedToolCallMessage(decision: PolicyDecision): string {
+  const reason = trimTrailingPeriod(decision.reason);
+  const rule = decision.matchedRuleId ? ` (rule: ${decision.matchedRuleId})` : "";
+  return `Palizade blocked this call: ${reason}${rule}.`;
+}
+
+function makeBlockedToolCallData(decision: PolicyDecision, taintedArgumentRoles: string[], taintMatchCount: number): Record<string, unknown> {
+  return {
+    action: decision.action,
+    rule: {
+      id: decision.matchedRuleId,
+      name: decision.matchedRuleName
+    },
+    reason: decision.reason,
+    taintedArgumentRoles,
+    taintMatchCount
+  };
+}
+
+function trimTrailingPeriod(text: string): string {
+  return text.endsWith(".") ? text.slice(0, -1) : text;
+}
+
+function dedupePreservingOrder<T extends string>(values: T[]): T[] {
+  return [...new Set(values)];
 }
 
 function auditScopeId(scope: PalizadeConfig["taint"]["scope"], profileId: string, runId: string | undefined, sessionId: string): string {

@@ -43,7 +43,12 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (!matchesMaybeArray(condition.trust, ctx.trust)) return false;
   if (!matchesMaybeArray(condition.lock_status, ctx.lock_status)) return false;
   if (condition.taint !== undefined && Boolean(ctx.taint) !== condition.taint) return false;
+  if (condition.sensitive_taint !== undefined && Boolean(ctx.sensitive_taint) !== condition.sensitive_taint) return false;
   if (condition.temporal_taint !== undefined && Boolean(ctx.temporal_taint) !== condition.temporal_taint) return false;
+  if (condition.secret_detected !== undefined && Boolean(ctx.secret_detected) !== condition.secret_detected) return false;
+  if (condition.pii_detected !== undefined && Boolean(ctx.pii_detected) !== condition.pii_detected) return false;
+  if (condition.destination_allowed !== undefined && Boolean(ctx.destination_allowed) !== condition.destination_allowed) return false;
+  if (condition.destination_allowlist_configured !== undefined && Boolean(ctx.destination_allowlist_configured) !== condition.destination_allowlist_configured) return false;
   if (condition.session_quarantined !== undefined && Boolean(ctx.session_quarantined) !== condition.session_quarantined) return false;
   if (condition.detector_score_gte !== undefined && (ctx.detector_score ?? 0) < condition.detector_score_gte) return false;
   if (condition.detector_score_lt !== undefined && (ctx.detector_score ?? 0) >= condition.detector_score_lt) return false;

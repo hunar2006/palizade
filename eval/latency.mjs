@@ -63,8 +63,11 @@ function makeEngine(dir) {
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,
-      promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" }
+      promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" },
+      secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
+      pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
     },
+    egress: { allowlist: { hosts: [], emails: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     taint: {
       sqlite: join(dir, "taint.sqlite"),
@@ -85,6 +88,9 @@ function makeEngine(dir) {
         trust: "semi",
         toolClasses: { echo: "pure", send_email: "sink" },
         toolCapabilities: {},
+        sensitive: false,
+        sensitiveTools: {},
+        sensitivePathPatterns: [],
         shell: false,
         allowShell: false
       }

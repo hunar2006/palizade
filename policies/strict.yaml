@@ -22,6 +22,14 @@ rules:
     action: block
     reason: Strict mode requires pre-approved tool metadata.
 
+  - id: sanitize-strong-injection-any-trust
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.75
+    action: sanitize
+    reason: Strong injection signal in tool output.
+
   - id: block-suspicious-output
     when:
       direction: response
@@ -29,6 +37,59 @@ rules:
       detector_score_gte: 0.35
     action: block
     reason: Strict mode blocks suspicious tool output.
+
+  - id: block-secret-egress
+    when:
+      direction: request
+      method: tools/call
+      sensitive_taint: true
+      capabilities_any:
+        - network_egress
+        - sends_message
+        - writes_remote
+        - file_write
+        - writes_local
+    action: block
+    reason: Secret/credential is being sent to an external destination.
+
+  - id: block-secret-detected-egress
+    when:
+      direction: request
+      method: tools/call
+      secret_detected: true
+      capabilities_any:
+        - network_egress
+        - sends_message
+        - writes_remote
+        - file_write
+        - writes_local
+    action: block
+    reason: Secret-looking content is being sent to an egress-capable tool.
+
+  - id: block-sensitive-into-untrusted-destination
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      taint: true
+      destination_allowed: false
+      capabilities_any:
+        - network_egress
+        - sends_message
+        - writes_remote
+    action: block
+    reason: Tainted content is flowing to a destination outside the egress allowlist.
+
+  - id: redact-pii-egress
+    when:
+      direction: request
+      method: tools/call
+      pii_detected: true
+      capabilities_any:
+        - sends_message
+        - network_egress
+    action: redact_secrets
+    reason: PII-like content should be redacted before egress.
 
   - id: block-tainted-sink
     when:

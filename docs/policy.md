@@ -15,7 +15,12 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 - `capabilities_all`: every listed capability flag
 - `trust`: `trusted`, `semi`, or `untrusted`
 - `taint`: boolean
+- `sensitive_taint`: boolean, true when an argument contains taint classed as sensitive
 - `temporal_taint`: boolean
+- `secret_detected`: boolean, true when outbound arguments contain a `secret:*` detector label
+- `pii_detected`: boolean, true when outbound arguments contain a `pii:*` detector label
+- `destination_allowed`: boolean, false when an allowlist is configured and a URL/host/email destination is outside it
+- `destination_allowlist_configured`: boolean, true only when `egress.allowlist.hosts` or `egress.allowlist.emails` has entries
 - `detector_score_gte`: number from `0` to `1`
 - `detector_score_lt`: number from `0` to `1`
 - `labels_any`: detector labels
@@ -30,8 +35,21 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 - `block`: return a JSON-RPC error instead of forwarding.
 - `sanitize`: wrap untrusted content in spotlighting markers.
 - `redact_spans`: replace detector spans with `[REDACTED:<label>]`.
+- `redact_secrets`: replace detected secret/PII spans in outbound arguments with `[REDACTED:<label>]` and forward.
 - `require_approval`: ask the configured approval provider.
 - `log_only`: forward but emit an audit event.
+
+## Egress Preset
+
+`policies/egress.yaml` is opt-in. It keeps the default prompt-injection and taint protections, then adds:
+
+- `block-secret-egress`: sensitive-class taint entering egress tools is blocked.
+- `block-secret-detected-egress`: directly detected secrets in outbound arguments are blocked even if they were not previously tainted.
+- `block-sensitive-into-untrusted-destination`: tainted sink calls are blocked when URL, host, or email destinations are outside `egress.allowlist`.
+- `allow-tainted-allowed-egress-destination`: lets tainted network/message egress proceed only when an allowlist is configured and the destination matches it.
+- `redact-pii-egress`: detected PII in message/network egress is redacted before forwarding.
+
+The allowlist rule is structural: with an allowlist configured, tainted data must flow only to allowed hosts/domains/emails. Secret and PII detection is pattern-based and intentionally high precision; it can miss custom or obfuscated secrets.
 
 ## Default Unknown Tool Behavior
 
@@ -39,3 +57,9 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 - Semi-trusted server plus unknown tool: require approval.
 - Trusted server plus unknown tool: allow with audit logging.
 - Policy evaluation errors: block in enforcing presets.
+
+## Detector Defaults
+
+Detector-based response rules are trust-agnostic in the shipped presets. Semi-trusted servers such as filesystem and fetch still have suspicious `tools/call` output spotlighted or escalated when detector scores cross policy thresholds. Trust affects unknown-tool handling and taint registration, but it does not suppress detector-score rules by default.
+
+Secret and PII detectors are disabled in the default config surface until explicitly enabled. `policies/default.yaml` does not add egress-blocking behavior; use `policies/egress.yaml` or `policies/strict.yaml` when you want secret/PII egress enforcement.

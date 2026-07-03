@@ -13,6 +13,7 @@ import {
 import { JsonlAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
 import { SqliteTaintStore } from "@palizade/taint";
+import { getRunningCliPath, installClientConfig, selectInstallConfigPath } from "./install-config.js";
 import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
 
 const program = new Command();
@@ -27,10 +28,52 @@ program.command("init")
   .description("Create a starter palizade.yaml, default policy, and state directory")
   .option("--force", "Overwrite existing files", false)
   .action(async (options: { force: boolean }) => {
+    // Keep generated paths relative; loadConfig resolves them against palizade.yaml's directory.
     await writeIfMissing("palizade.yaml", DEFAULT_CONFIG, options.force);
     await writeIfMissing("policies/default.yaml", DEFAULT_POLICY, options.force);
     await mkdir(".palizade", { recursive: true });
     console.log("Initialized Palizade config, default policy, and .palizade state directory.");
+  });
+
+program.command("install-config")
+  .description("Install a Palizade wrapper entry into an MCP client config")
+  .argument("<serverName>", "Server name from palizade.yaml")
+  .option("--client <name>", "Target client", "claude-desktop")
+  .option("--config <path>", "Path to this project's palizade.yaml")
+  .option("--client-config <path>", "Override the client config file location")
+  .option("--name <entryName>", "Name for the mcpServers entry")
+  .option("--dry-run", "Print the resulting config to stdout without writing", false)
+  .option("--force", "Overwrite an existing mcpServers entry", false)
+  .action(async (serverName: string, options: {
+    client: string;
+    config?: string;
+    clientConfig?: string;
+    name?: string;
+    dryRun: boolean;
+    force: boolean;
+  }, command: Command) => {
+    const result = await installClientConfig({
+      serverName,
+      client: options.client,
+      configPath: selectInstallConfigPath(command, program),
+      clientConfigPath: options.clientConfig,
+      entryName: options.name,
+      dryRun: options.dryRun,
+      force: options.force,
+      cliPath: getRunningCliPath()
+    });
+    for (const warning of result.warnings) {
+      console.warn(warning);
+    }
+    if (options.dryRun) {
+      console.log(result.configJson);
+      return;
+    }
+    console.log(`Updated ${result.clientConfigPath}`);
+    console.log(`Entry: ${result.entryName}`);
+    console.log(`Command: ${result.entry.command} ${result.entry.args.join(" ")}`);
+    console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new config file)");
+    console.log("Fully quit and reopen Claude Desktop for the change to take effect.");
   });
 
 const detectors = program.command("detectors")

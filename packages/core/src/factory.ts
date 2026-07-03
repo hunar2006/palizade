@@ -1,6 +1,6 @@
 import { LocalhostApprovalProvider, StaticApprovalProvider, TerminalApprovalProvider, type ApprovalProvider } from "@palizade/approvals";
 import { AuditLogger, JsonlAuditSink, SqliteAuditSink } from "@palizade/audit";
-import { DetectorPipeline, HeuristicDetector, OptionalOnnxDetector, PromptGuard2Detector, type Detector } from "@palizade/detectors";
+import { DetectorPipeline, HeuristicDetector, OptionalOnnxDetector, PromptGuard2Detector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
 import { SqliteTaintStore } from "@palizade/taint";
 import { randomUUID } from "node:crypto";
 import { loadPolicyFile } from "@palizade/policy";
@@ -62,6 +62,12 @@ export function createDetector(config: PalizadeConfig): Detector {
   const detectors: Detector[] = [];
   if (config.detectors.heuristic) {
     detectors.push(new HeuristicDetector());
+  }
+  if (config.detectors.secrets.enabled || config.detectors.pii.enabled) {
+    detectors.push(new SensitiveDataDetector({
+      secrets: config.detectors.secrets,
+      pii: config.detectors.pii
+    }));
   }
   if (config.detectors.onnxModelPath) {
     detectors.push(new OptionalOnnxDetector({ modelPath: config.detectors.onnxModelPath }));

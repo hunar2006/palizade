@@ -68,7 +68,6 @@ rules:
     when:
       direction: response
       method: tools/call
-      trust: untrusted
       detector_score_gte: 0.35
     action: sanitize
     reason: Untrusted tool output contains injection-like signals.
@@ -83,6 +82,15 @@ rules:
       detector_score_gte: 0.35
     action: sanitize
     reason: Resource or prompt content contains injection-like signals.
+
+  - id: sanitize-strong-injection-any-trust
+    name: Spotlight strong injection signals regardless of trust
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.75
+    action: sanitize
+    reason: Strong injection signal in tool output.
 
   - id: block-tainted-sink
     name: Block tainted content entering sinks

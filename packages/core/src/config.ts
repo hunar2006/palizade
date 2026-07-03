@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 
@@ -9,6 +9,7 @@ const capabilitySchema = z.enum([
   "reads_untrusted_content",
   "reads_sensitive_data",
   "network_egress",
+  "file_write",
   "writes_local",
   "writes_remote",
   "deletes_data",
@@ -27,9 +28,50 @@ export const serverConfigSchema = z.object({
   trust: trustSchema.default("untrusted"),
   toolClasses: z.record(z.string(), toolClassSchema).default({}),
   toolCapabilities: z.record(z.string(), z.array(capabilitySchema)).default({}),
+  sensitive: z.boolean().default(false),
+  sensitiveTools: z.record(z.string(), z.boolean()).default({}),
+  sensitivePathPatterns: z.array(z.string()).default([]),
   shell: z.boolean().default(false),
   allowShell: z.boolean().default(false)
 }).strict();
+
+const secretDetectorConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  aws: z.boolean().default(true),
+  generic: z.boolean().default(true),
+  jwt: z.boolean().default(true),
+  privateKey: z.boolean().default(true),
+  googleApiKey: z.boolean().default(true),
+  stripe: z.boolean().default(true),
+  slack: z.boolean().default(true),
+  github: z.boolean().default(true),
+  openai: z.boolean().default(true)
+}).default({
+  enabled: false,
+  aws: true,
+  generic: true,
+  jwt: true,
+  privateKey: true,
+  googleApiKey: true,
+  stripe: true,
+  slack: true,
+  github: true,
+  openai: true
+});
+
+const piiDetectorConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  email: z.boolean().default(true),
+  ssn: z.boolean().default(true),
+  creditCard: z.boolean().default(true),
+  phone: z.boolean().default(true)
+}).default({
+  enabled: false,
+  email: true,
+  ssn: true,
+  creditCard: true,
+  phone: true
+});
 
 export const palizadeConfigSchema = z.object({
   stateDir: z.string().default(".palizade"),
@@ -53,10 +95,22 @@ export const palizadeConfigSchema = z.object({
       model: z.string().default("sinatras/Llama-Prompt-Guard-2-86M-ONNX"),
       cacheDir: z.string().optional(),
       device: z.string().default("cpu")
-    }).default({ enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" })
+    }).default({ enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" }),
+    secrets: secretDetectorConfigSchema,
+    pii: piiDetectorConfigSchema
   }).default({
     heuristic: true,
-    promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" }
+    promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" },
+    secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
+    pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
+  }),
+  egress: z.object({
+    allowlist: z.object({
+      hosts: z.array(z.string()).default([]),
+      emails: z.array(z.string()).default([])
+    }).default({ hosts: [], emails: [] })
+  }).default({
+    allowlist: { hosts: [], emails: [] }
   }),
   transport: z.object({
     maxMessageBytes: z.number().int().min(1024).default(64 * 1024 * 1024),
@@ -103,43 +157,47 @@ export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): P
   const absolute = resolve(cwd, path);
   const raw = await readFile(absolute, "utf8");
   const parsed = palizadeConfigSchema.parse(YAML.parse(raw));
-  return resolveConfigPaths(parsed, cwd);
+  return resolveConfigPaths(parsed, dirname(absolute));
 }
 
-export function parseConfig(raw: string, cwd = process.cwd()): PalizadeConfig {
-  return resolveConfigPaths(palizadeConfigSchema.parse(YAML.parse(raw)), cwd);
+export function parseConfig(raw: string, baseDir = process.cwd()): PalizadeConfig {
+  return resolveConfigPaths(palizadeConfigSchema.parse(YAML.parse(raw)), baseDir);
 }
 
-export function resolveConfigPaths(config: PalizadeConfig, cwd = process.cwd()): PalizadeConfig {
+export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd()): PalizadeConfig {
   return {
     ...config,
-    stateDir: resolve(cwd, config.stateDir),
-    policy: resolve(cwd, config.policy),
-    lockfile: resolve(cwd, config.lockfile),
+    stateDir: resolvePath(baseDir, config.stateDir),
+    policy: resolvePath(baseDir, config.policy),
+    lockfile: resolvePath(baseDir, config.lockfile),
     audit: {
       ...config.audit,
-      jsonl: resolve(cwd, config.audit.jsonl),
-      sqlite: resolve(cwd, config.audit.sqlite)
+      jsonl: resolvePath(baseDir, config.audit.jsonl),
+      sqlite: resolvePath(baseDir, config.audit.sqlite)
     },
     detectors: {
       ...config.detectors,
-      onnxModelPath: config.detectors.onnxModelPath ? resolve(cwd, config.detectors.onnxModelPath) : undefined,
+      onnxModelPath: config.detectors.onnxModelPath ? resolvePath(baseDir, config.detectors.onnxModelPath) : undefined,
       promptGuard2: {
         ...config.detectors.promptGuard2,
-        cacheDir: config.detectors.promptGuard2.cacheDir ? resolve(cwd, config.detectors.promptGuard2.cacheDir) : undefined
+        cacheDir: config.detectors.promptGuard2.cacheDir ? resolvePath(baseDir, config.detectors.promptGuard2.cacheDir) : undefined
       }
     },
     taint: {
       ...config.taint,
-      sqlite: resolve(cwd, config.taint.sqlite),
-      keyPath: resolve(cwd, config.taint.keyPath)
+      sqlite: resolvePath(baseDir, config.taint.sqlite),
+      keyPath: resolvePath(baseDir, config.taint.keyPath)
     },
     servers: Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [
       name,
       {
         ...server,
-        cwd: server.cwd ? resolve(cwd, server.cwd) : cwd
+        cwd: server.cwd ? resolvePath(baseDir, server.cwd) : baseDir
       }
     ]))
   };
+}
+
+function resolvePath(baseDir: string, path: string): string {
+  return isAbsolute(path) ? path : resolve(baseDir, path);
 }

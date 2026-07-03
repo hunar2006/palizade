@@ -1,6 +1,6 @@
 import { makeFingerprint, hammingDistanceHex, normalizeText } from "./fingerprint.js";
 import { newTaintId, sha256 } from "./hash.js";
-import type { AddTaintInput, TaintMatch, TaintMatchOptions, TaintRecord, TaintStore, TemporalTaintConfig, TemporalTaintState } from "./types.js";
+import type { AddTaintInput, TaintClass, TaintMatch, TaintMatchOptions, TaintRecord, TaintStore, TemporalTaintConfig, TemporalTaintState } from "./types.js";
 
 export class InMemoryTaintStore implements TaintStore {
   private readonly records = new Map<string, TaintRecord>();
@@ -17,6 +17,7 @@ export class InMemoryTaintStore implements TaintStore {
       payloadHash: sha256(input.text),
       detectorScore: input.detectorScore,
       labels: [...input.labels],
+      classes: normalizeClasses(input.classes),
       fingerprint: makeFingerprint(input.text)
     };
     this.records.set(record.id, record);
@@ -42,16 +43,19 @@ export class InMemoryTaintStore implements TaintStore {
       if (record.sessionId !== sessionId) {
         continue;
       }
+      if (!matchesClassFilter(record.classes, options.classes)) {
+        continue;
+      }
 
       const substring = record.fingerprint.substrings.find((candidate) => candidate.length >= minNormalizedLength && normalized.includes(candidate));
       if (substring) {
-        matches.push({ taintId: record.id, reason: "substring", token: substring });
+        matches.push({ taintId: record.id, reason: "substring", token: substring, classes: record.classes });
         continue;
       }
 
       const token = record.fingerprint.tokens.find((candidate) => candidate.length >= 8 && incoming.tokens.includes(candidate));
       if (token) {
-        matches.push({ taintId: record.id, reason: "token", token });
+        matches.push({ taintId: record.id, reason: "token", token, classes: record.classes });
         continue;
       }
 
@@ -61,6 +65,7 @@ export class InMemoryTaintStore implements TaintStore {
           matches.push({
             taintId: record.id,
             reason: "fuzzy",
+            classes: record.classes,
             score: 1 - distance / 64
           });
         }
@@ -70,7 +75,11 @@ export class InMemoryTaintStore implements TaintStore {
     const temporal = this.temporalBySession.get(sessionId);
     if (temporal && temporal.expiresAt > Date.now() && temporal.remainingTurns > 0) {
       for (const taintId of temporal.sourceTaintIds) {
-        matches.push({ taintId, reason: "temporal" });
+        const record = this.records.get(taintId);
+        const classes = record?.classes ?? ["untrusted"];
+        if (matchesClassFilter(classes, options.classes)) {
+          matches.push({ taintId, reason: "temporal", classes });
+        }
       }
     }
 
@@ -115,6 +124,15 @@ export class InMemoryTaintStore implements TaintStore {
     }
     return true;
   }
+}
+
+function normalizeClasses(classes: TaintClass[] | undefined): TaintClass[] {
+  const normalized: TaintClass[] = classes && classes.length > 0 ? classes : ["untrusted"];
+  return [...new Set<TaintClass>(normalized)];
+}
+
+function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefined): boolean {
+  return !filter || filter.some((taintClass) => classes.includes(taintClass));
 }
 
 function dedupeMatches(matches: TaintMatch[]): TaintMatch[] {

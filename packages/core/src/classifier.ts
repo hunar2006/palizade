@@ -7,7 +7,7 @@ const SOURCE_RE = /\b(read|get|fetch|search|browse|list|download|crawl|open|load
 const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
   [/\b(fetch|http|post|put|patch|request|webhook|url|browser|crawl)\b/iu, ["network_egress", "reads_untrusted_content"]],
   [/\b(email|mail|send|sms|slack|discord|message|publish)\b/iu, ["sends_message", "writes_remote", "network_egress"]],
-  [/\b(write|save|edit|create|move|append)\b/iu, ["writes_local"]],
+  [/\b(write|save|edit|create|move|append)\b/iu, ["file_write", "writes_local"]],
   [/\b(delete|remove|rm|destroy)\b/iu, ["deletes_data"]],
   [/\b(exec|shell|run|spawn|command|script|terminal)\b/iu, ["executes_code"]],
   [/\b(secret|credential|token|key|env|password)\b/iu, ["accesses_credentials", "reads_sensitive_data"]],
@@ -33,7 +33,7 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
     capabilities.add(capability);
   }
 
-  const searchable = `${toolName} ${tool?.title ?? ""} ${tool?.description ?? ""}`;
+  const searchable = `${toolName} ${tool?.title ?? ""} ${tool?.description ?? ""}`.replace(/[_-]+/gu, " ");
   for (const [regex, matched] of CAPABILITY_RULES) {
     if (regex.test(searchable)) {
       matched.forEach((capability) => capabilities.add(capability));
@@ -66,6 +66,7 @@ function capabilitiesFromAnnotations(annotations?: Record<string, unknown>): Too
   const capabilities = new Set<ToolCapability>();
   if (annotations.destructiveHint === true) {
     capabilities.add("writes_remote");
+    capabilities.add("file_write");
     capabilities.add("writes_local");
   }
   if (annotations.openWorldHint === true) {
@@ -81,6 +82,7 @@ function capabilitiesFromAnnotations(annotations?: Record<string, unknown>): Too
 function deriveClass(toolName: string, capabilities: Set<ToolCapability>): ToolClass {
   if ([...capabilities].some((capability) => [
     "network_egress",
+    "file_write",
     "writes_local",
     "writes_remote",
     "deletes_data",

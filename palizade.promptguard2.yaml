@@ -19,6 +19,15 @@ detectors:
     model: sinatras/Llama-Prompt-Guard-2-86M-ONNX
     cacheDir: .palizade/models
     device: cpu
+  secrets:
+    enabled: false
+  pii:
+    enabled: false
+
+egress:
+  allowlist:
+    hosts: []
+    emails: []
 
 transport:
   maxMessageBytes: 67108864
@@ -50,6 +59,9 @@ servers:
       read_web: source
       send_email: sink
       echo: pure
+    sensitive: false
+    sensitiveTools: {}
+    sensitivePathPatterns: []
   filesystem:
     command: node
     args:
@@ -71,3 +83,6 @@ servers:
       edit_file: sink
       create_directory: sink
       move_file: sink
+    sensitive: false
+    sensitiveTools: {}
+    sensitivePathPatterns: []

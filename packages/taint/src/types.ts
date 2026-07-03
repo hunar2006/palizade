@@ -1,5 +1,6 @@
 export type TrustLevel = "trusted" | "semi" | "untrusted";
 export type TaintScope = "process" | "profile" | "external_run_id";
+export type TaintClass = "untrusted" | "sensitive";
 
 export interface TaintFingerprint {
   normalized: string;
@@ -22,12 +23,14 @@ export interface TaintRecord {
   payloadHash: string;
   detectorScore: number;
   labels: string[];
+  classes: TaintClass[];
   fingerprint: TaintFingerprint;
 }
 
 export interface TaintMatch {
   taintId: string;
   reason: "substring" | "token" | "fuzzy" | "temporal";
+  classes?: TaintClass[] | undefined;
   token?: string;
   score?: number;
 }
@@ -43,11 +46,13 @@ export interface AddTaintInput {
   text: string;
   detectorScore: number;
   labels: string[];
+  classes?: TaintClass[] | undefined;
 }
 
 export interface TaintMatchOptions {
   fuzzyHammingMax?: number;
   minNormalizedLength?: number;
+  classes?: TaintClass[] | undefined;
 }
 
 export interface TaintStore {

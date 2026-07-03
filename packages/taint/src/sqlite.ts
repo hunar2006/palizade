@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { extractAtomicTokens, hammingDistanceHex, makeFingerprint, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
 import { hmacSha256Hex, newTaintId, sha256 } from "./hash.js";
-import type { AddTaintInput, TaintFingerprint, TaintMatch, TaintMatchOptions, TaintRecord, TaintScope, TaintStore, TemporalTaintConfig } from "./types.js";
+import type { AddTaintInput, TaintClass, TaintFingerprint, TaintMatch, TaintMatchOptions, TaintRecord, TaintScope, TaintStore, TemporalTaintConfig } from "./types.js";
 
 type SqliteDatabase = {
   exec(sql: string): void;
@@ -30,6 +30,7 @@ interface TaintRow {
   payload_hash: string;
   detector_score: number;
   labels_json: string;
+  classes_json?: string | null;
   fingerprint_json: string;
 }
 
@@ -80,6 +81,7 @@ export class SqliteTaintStore implements TaintStore {
         payload_hash text not null,
         detector_score real not null,
         labels_json text not null,
+        classes_json text,
         fingerprint_json text not null
       );
       create index if not exists idx_taint_session on taint_records(session_id);
@@ -95,6 +97,7 @@ export class SqliteTaintStore implements TaintStore {
     this.ensureColumn("taint_records", "scope_id", "text");
     this.ensureColumn("taint_records", "run_id", "text");
     this.ensureColumn("taint_records", "expires_at", "text");
+    this.ensureColumn("taint_records", "classes_json", "text");
     this.db.exec(`
       create index if not exists idx_taint_scope on taint_records(scope_id);
       create index if not exists idx_taint_expires on taint_records(expires_at);
@@ -120,12 +123,13 @@ export class SqliteTaintStore implements TaintStore {
       payloadHash: sha256(input.text),
       detectorScore: input.detectorScore,
       labels: [...input.labels],
+      classes: normalizeClasses(input.classes),
       fingerprint: makeProtectedFingerprint(input.text, this.hmacKey)
     };
     this.db.prepare(
       `insert into taint_records
-       (id, profile_id, scope_id, run_id, session_id, source_server, source_tool, trust, created_at, expires_at, payload_hash, detector_score, labels_json, fingerprint_json)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, profile_id, scope_id, run_id, session_id, source_server, source_tool, trust, created_at, expires_at, payload_hash, detector_score, labels_json, classes_json, fingerprint_json)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       record.id,
       record.profileId,
@@ -140,6 +144,7 @@ export class SqliteTaintStore implements TaintStore {
       record.payloadHash,
       record.detectorScore,
       JSON.stringify(record.labels),
+      JSON.stringify(record.classes),
       JSON.stringify(record.fingerprint)
     );
     return record;
@@ -163,30 +168,37 @@ export class SqliteTaintStore implements TaintStore {
     const matches: TaintMatch[] = [];
 
     for (const record of records) {
+      if (!matchesClassFilter(record.classes, options.classes)) {
+        continue;
+      }
       const incomingFragments = new Set(incoming.substrings);
       const substring = record.fingerprint.substrings.find((candidate) => candidate.length >= minNormalizedLength && incomingFragments.has(candidate));
       if (substring) {
-        matches.push({ taintId: record.id, reason: "substring", token: substring });
+        matches.push({ taintId: record.id, reason: "substring", token: substring, classes: record.classes });
         continue;
       }
 
       const token = record.fingerprint.tokens.find((candidate) => candidate.length >= 8 && incoming.tokens.includes(candidate));
       if (token) {
-        matches.push({ taintId: record.id, reason: "token", token });
+        matches.push({ taintId: record.id, reason: "token", token, classes: record.classes });
         continue;
       }
 
       if (record.fingerprint.normalized.length >= 32 && incoming.normalized.length >= 32) {
         const distance = hammingDistanceHex(record.fingerprint.simhash, incoming.simhash);
         if (distance <= fuzzyHammingMax) {
-          matches.push({ taintId: record.id, reason: "fuzzy", score: 1 - distance / 64 });
+          matches.push({ taintId: record.id, reason: "fuzzy", classes: record.classes, score: 1 - distance / 64 });
         }
       }
     }
 
     for (const temporal of this.activeTemporalRows(sessionId)) {
       for (const taintId of JSON.parse(temporal.source_taint_ids_json) as string[]) {
-        matches.push({ taintId, reason: "temporal" });
+        const record = this.get(taintId);
+        const classes = record?.classes ?? ["untrusted"];
+        if (matchesClassFilter(classes, options.classes)) {
+          matches.push({ taintId, reason: "temporal", classes });
+        }
       }
     }
 
@@ -298,8 +310,18 @@ function rowToRecord(row: TaintRow): TaintRecord {
     payloadHash: row.payload_hash,
     detectorScore: row.detector_score,
     labels: JSON.parse(row.labels_json) as string[],
+    classes: row.classes_json ? JSON.parse(row.classes_json) as TaintClass[] : ["untrusted"],
     fingerprint: JSON.parse(row.fingerprint_json) as TaintFingerprint
   };
+}
+
+function normalizeClasses(classes: TaintClass[] | undefined): TaintClass[] {
+  const normalized: TaintClass[] = classes && classes.length > 0 ? classes : ["untrusted"];
+  return [...new Set<TaintClass>(normalized)];
+}
+
+function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefined): boolean {
+  return !filter || filter.some((taintClass) => classes.includes(taintClass));
 }
 
 function makeProtectedFingerprint(input: string, key: Buffer): TaintFingerprint {
