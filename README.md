@@ -299,6 +299,7 @@ Shipped presets:
 
 - `policies/audit-only.yaml`
 - `policies/default.yaml`
+- `policies/research-read-only.yaml`
 - `policies/strict.yaml`
 
 Policy can match on direction, method, server, tool, tool class, trust, taint presence, detector score, labels, lock status, temporal taint, and argument regex.

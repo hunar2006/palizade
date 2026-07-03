@@ -39,3 +39,10 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 - Semi-trusted server plus unknown tool: require approval.
 - Trusted server plus unknown tool: allow with audit logging.
 - Policy evaluation errors: block in enforcing presets.
+
+## Shipped Presets
+
+- `policies/audit-only.yaml`: observe suspicious content and risky flows without enforcement.
+- `policies/default.yaml`: enforce taint-to-sink blocking while allowing classified normal use.
+- `policies/research-read-only.yaml`: for agents that gather web, file, resource, or prompt content and should not write, delete, execute shell/code, send messages/email, publish remotely, access credentials, or call unclassified tools.
+- `policies/strict.yaml`: require approval or explicit allowance for most activity.
