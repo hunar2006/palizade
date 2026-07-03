@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../approvals" },
+    { "path": "../audit" },
+    { "path": "../core" },
+    { "path": "../detectors" },
+    { "path": "../policy" },
+    { "path": "../taint" }
+  ],
+  "include": ["src/**/*.ts"]
+}

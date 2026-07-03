@@ -1,0 +1,58 @@
+{
+  "name": "palisade-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Palisade: an MCP-native prompt-injection firewall and security proxy.",
+  "scripts": {
+    "build": "tsc -b && pnpm --filter palisade bundle",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "node scripts/clean.mjs",
+    "eval": "node eval/replay.mjs && node eval/protocol-regression.mjs",
+    "eval:asr": "node eval/asr-table.mjs",
+    "eval:promptguard2": "node eval/protocol-regression.mjs --detector promptguard2",
+    "eval:combined": "node eval/protocol-regression.mjs --detector combined",
+    "bench:latency": "node eval/latency.mjs",
+    "example:server": "node examples/toy-mcp-server/server.mjs",
+    "example:flow": "node examples/run-toy-flow.mjs",
+    "demo:cross-server": "node examples/cross-server-taint-demo.mjs",
+    "smoke:filesystem": "node examples/real-filesystem-smoke.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "prompt-injection",
+    "proxy",
+    "taint"
+  ],
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.7.0",
+  "files": [
+    "README.md",
+    "docs",
+    "eval",
+    "examples",
+    "packages/*/src",
+    "packages/*/package.json",
+    "packages/*/tsconfig.json",
+    "policies",
+    "scripts",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "tsconfig.base.json",
+    "tsconfig.json",
+    "vitest.config.ts",
+    "palisade.yaml",
+    "palisade.promptguard2.yaml"
+  ],
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
+    "@types/node": "^22.13.10",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

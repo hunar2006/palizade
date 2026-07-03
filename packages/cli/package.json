@@ -1,0 +1,34 @@
+{
+  "name": "palisade",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "palisade": "./dist/index.cjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "dist/index.cjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.cjs"
+  },
+  "scripts": {
+    "build": "tsc -b && pnpm run bundle",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=cjs --external:@huggingface/transformers --outfile=dist/index.cjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "commander": "^14.0.2",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@palisade/approvals": "workspace:*",
+    "@palisade/audit": "workspace:*",
+    "@palisade/core": "workspace:*",
+    "@palisade/detectors": "workspace:*",
+    "@palisade/policy": "workspace:*",
+    "@palisade/taint": "workspace:*"
+  }
+}

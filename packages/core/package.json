@@ -1,0 +1,23 @@
+{
+  "name": "@palisade/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@palisade/approvals": "workspace:*",
+    "@palisade/audit": "workspace:*",
+    "@palisade/detectors": "workspace:*",
+    "@palisade/policy": "workspace:*",
+    "@palisade/taint": "workspace:*",
+    "yaml": "^2.8.2",
+    "zod": "^4.1.13"
+  }
+}

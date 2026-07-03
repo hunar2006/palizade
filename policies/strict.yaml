@@ -1,0 +1,58 @@
+version: 1
+defaults:
+  action: require_approval
+  on_error: block
+
+rules:
+  - id: deny-server-sampling
+    when:
+      direction: request
+      method: sampling/createMessage
+    action: block
+    reason: Server-initiated model access is denied in strict mode.
+
+  - id: block-any-tool-lock-drift
+    when:
+      direction: response
+      method: tools/list
+      lock_status:
+        - missing
+        - new
+        - changed
+    action: block
+    reason: Strict mode requires pre-approved tool metadata.
+
+  - id: block-suspicious-output
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.35
+    action: block
+    reason: Strict mode blocks suspicious tool output.
+
+  - id: block-tainted-sink
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      taint: true
+    action: block
+    reason: Tainted content cannot enter sink tools in strict mode.
+
+  - id: block-unknown-tools
+    when:
+      direction: request
+      method: tools/call
+      tool_class: unknown
+    action: block
+    reason: Strict mode blocks all unknown tools.
+
+  - id: allow-trusted-pure
+    when:
+      direction: request
+      method: tools/call
+      trust: trusted
+      tool_class: pure
+      taint: false
+    action: allow
+    reason: Trusted pure tool call.

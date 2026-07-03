@@ -1,0 +1,39 @@
+version: 1
+defaults:
+  action: allow
+  on_error: log_only
+
+rules:
+  - id: log-suspicious-tool-metadata
+    when:
+      direction: response
+      method: tools/list
+      detector_score_gte: 0.35
+    action: log_only
+    reason: Tool metadata has prompt-injection indicators.
+
+  - id: log-tainted-sinks
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      taint: true
+    action: log_only
+    reason: Tainted content would enter a sink under enforcing policies.
+
+  - id: log-resource-prompt-injection
+    when:
+      direction: response
+      method:
+        - resources/read
+        - prompts/get
+      detector_score_gte: 0.35
+    action: log_only
+    reason: Resource or prompt content would be sanitized under enforcing policies.
+
+  - id: log-sampling
+    when:
+      direction: request
+      method: sampling/createMessage
+    action: log_only
+    reason: Server requested model access.

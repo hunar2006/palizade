@@ -1,0 +1,73 @@
+stateDir: .palisade
+policy: policies/default.yaml
+lockfile: palisade.lock
+
+audit:
+  jsonl: .palisade/audit.jsonl
+  sqlite: .palisade/audit.sqlite
+  captureRawPayloads: false
+
+approvals:
+  mode: localhost
+  timeoutMs: 30000
+  default: deny
+
+detectors:
+  heuristic: true
+  promptGuard2:
+    enabled: false
+    model: sinatras/Llama-Prompt-Guard-2-86M-ONNX
+    cacheDir: .palisade/models
+    device: cpu
+
+transport:
+  maxMessageBytes: 67108864
+  maxBufferedBytes: 67108864
+  allowBatches: false
+  allowContentLength: false
+
+taint:
+  sqlite: .palisade/taint.sqlite
+  keyPath: .palisade/taint.key
+  scope: profile
+  profileId: default
+  ttlMs: 86400000
+  suspiciousScore: 0.35
+  fuzzyHammingMax: 7
+  temporal:
+    enabled: true
+    turns: 3
+    ttlMs: 300000
+    detectorScoreGte: 0.55
+
+servers:
+  toy:
+    command: node
+    args:
+      - examples/toy-mcp-server/server.mjs
+    trust: untrusted
+    toolClasses:
+      read_web: source
+      send_email: sink
+      echo: pure
+  filesystem:
+    command: node
+    args:
+      - node_modules/@modelcontextprotocol/server-filesystem/dist/index.js
+      - .
+    trust: semi
+    toolClasses:
+      read_file: source
+      read_text_file: source
+      read_media_file: source
+      read_multiple_files: source
+      list_directory: source
+      list_directory_with_sizes: source
+      directory_tree: source
+      search_files: source
+      get_file_info: source
+      list_allowed_directories: source
+      write_file: sink
+      edit_file: sink
+      create_directory: sink
+      move_file: sink

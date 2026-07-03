@@ -1,0 +1,12 @@
+node_modules/
+.palisade/
+dist/
+packages/*/dist/
+*.tgz
+*.tsbuildinfo
+.env
+.env.*
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*

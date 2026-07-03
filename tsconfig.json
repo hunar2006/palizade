@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/detectors" },
+    { "path": "./packages/taint" },
+    { "path": "./packages/policy" },
+    { "path": "./packages/audit" },
+    { "path": "./packages/approvals" },
+    { "path": "./packages/core" },
+    { "path": "./packages/cli" }
+  ]
+}
