@@ -25,6 +25,8 @@ Last run: 2026-07-03 on Windows, Node.js v22.21.0, pnpm v11.7.0.
 | `pnpm pack` | Passed; root tarball excludes `.palizade`, local logs, local DBs, and `node_modules`. |
 | `pnpm --filter palizade pack --pack-destination .palizade/smoke` | Passed; produced `.palizade/smoke/palizade-0.1.0.tgz`. |
 | `npm exec --yes --package .palizade/smoke/palizade-0.1.0.tgz -- palizade --help` | Passed; packed CLI starts and prints command help. |
+| `npm view palizade version` | Passed; npm registry reports `0.1.0`. |
+| `npm exec --yes --package palizade -- palizade --help` | Passed from a clean temp directory; published CLI installs and prints command help. |
 
 ## Local Regression Corpus
 
@@ -52,4 +54,4 @@ The corpus includes tool metadata poisoning, prompt/resource content poisoning, 
 - Manual approval UX check in the real client environment, especially headless client spawn behavior.
 - Explicit `palizade detectors install promptguard2` and `palizade detectors verify promptguard2` if claiming model-backed detection.
 - AgentDojo/InjecAgent-derived benchmark table. The current eval is local regression coverage only.
-- Release tasks: npm publish for `palizade`, demo GIF, and launch/community posts.
+- Release tasks: demo GIF and launch/community posts.
