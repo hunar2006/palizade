@@ -1,5 +1,6 @@
 node_modules/
 .palisade/
+.palizade/
 dist/
 packages/*/dist/
 *.tgz

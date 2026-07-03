@@ -63,7 +63,7 @@ export function createApprovalRequest(input: Omit<ApprovalRequest, "id">): Appro
 function formatApprovalPrompt(request: ApprovalRequest): string {
   const lines = [
     "",
-    "Palisade approval required",
+    "Palizade approval required",
     `Session: ${request.sessionId}`,
     request.server ? `Server: ${request.server}` : undefined,
     request.tool ? `Tool: ${request.tool}` : undefined,

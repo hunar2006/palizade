@@ -72,7 +72,7 @@ async function handle(message) {
       id: message.id ?? null,
       result: {
         protocolVersion: "2024-11-05",
-        serverInfo: { name: "palisade-toy", version: "0.1.0" },
+        serverInfo: { name: "palizade-toy", version: "0.1.0" },
         capabilities: { tools: {}, sampling: {} }
       }
     });

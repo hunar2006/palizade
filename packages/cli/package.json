@@ -1,13 +1,35 @@
 {
-  "name": "palisade",
+  "name": "palizade",
   "version": "0.1.0",
+  "description": "MCP-native prompt-injection firewall and security proxy.",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "palisade": "./dist/index.cjs"
+    "palizade": "dist/index.cjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "keywords": [
+    "mcp",
+    "security",
+    "prompt-injection",
+    "proxy",
+    "taint"
+  ],
+  "homepage": "https://github.com/hunar2006/palizade#readme",
+  "bugs": {
+    "url": "https://github.com/hunar2006/palizade/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hunar2006/palizade.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "dist/index.cjs",
   "types": "dist/index.d.ts",
   "exports": {
@@ -24,11 +46,11 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
-    "@palisade/approvals": "workspace:*",
-    "@palisade/audit": "workspace:*",
-    "@palisade/core": "workspace:*",
-    "@palisade/detectors": "workspace:*",
-    "@palisade/policy": "workspace:*",
-    "@palisade/taint": "workspace:*"
+    "@palizade/approvals": "workspace:*",
+    "@palizade/audit": "workspace:*",
+    "@palizade/core": "workspace:*",
+    "@palizade/detectors": "workspace:*",
+    "@palizade/policy": "workspace:*",
+    "@palizade/taint": "workspace:*"
   }
 }

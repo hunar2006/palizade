@@ -68,7 +68,7 @@ const modes = [
   { name: "strict", threshold: 0.2, description: "Lower threshold for review/approval" }
 ];
 
-console.log("Palisade local MCP ASR proxy table");
+console.log("Palizade local MCP ASR proxy table");
 console.log("This is not AgentDojo/InjecAgent ASR. Replace this table with real benchmark fixtures before launch.");
 console.log("| Mode | Attack success rate | Block/detect rate | Benign false-positive rate | Notes |");
 console.log("| --- | ---: | ---: | ---: | --- |");

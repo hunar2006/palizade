@@ -7,7 +7,7 @@ import { JsonlAuditSink } from "./jsonl.js";
 
 describe("AuditLogger", () => {
   it("writes hashed JSONL audit events without raw payloads by default", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "palisade-audit-"));
+    const dir = await mkdtemp(join(tmpdir(), "palizade-audit-"));
     const path = join(dir, "audit.jsonl");
     const logger = new AuditLogger([new JsonlAuditSink(path)]);
 
@@ -31,7 +31,7 @@ describe("AuditLogger", () => {
   });
 
   it("verifies hashed events while reporting legacy unhashed events", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "palisade-audit-"));
+    const dir = await mkdtemp(join(tmpdir(), "palizade-audit-"));
     const path = join(dir, "audit.jsonl");
     await writeFile(path, `${JSON.stringify({
       ts: new Date().toISOString(),
@@ -61,7 +61,7 @@ describe("AuditLogger", () => {
   });
 
   it("verifies multiple hash-chain segments from separate logger processes", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "palisade-audit-"));
+    const dir = await mkdtemp(join(tmpdir(), "palizade-audit-"));
     const path = join(dir, "audit.jsonl");
     const first = new AuditLogger([new JsonlAuditSink(path)]);
     const second = new AuditLogger([new JsonlAuditSink(path)]);

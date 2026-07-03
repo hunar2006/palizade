@@ -1,5 +1,5 @@
 {
-  "name": "@palisade/audit",
+  "name": "@palizade/audit",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",

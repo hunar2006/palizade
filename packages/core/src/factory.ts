@@ -1,10 +1,10 @@
-import { LocalhostApprovalProvider, StaticApprovalProvider, TerminalApprovalProvider, type ApprovalProvider } from "@palisade/approvals";
-import { AuditLogger, JsonlAuditSink, SqliteAuditSink } from "@palisade/audit";
-import { DetectorPipeline, HeuristicDetector, OptionalOnnxDetector, PromptGuard2Detector, type Detector } from "@palisade/detectors";
-import { SqliteTaintStore } from "@palisade/taint";
+import { LocalhostApprovalProvider, StaticApprovalProvider, TerminalApprovalProvider, type ApprovalProvider } from "@palizade/approvals";
+import { AuditLogger, JsonlAuditSink, SqliteAuditSink } from "@palizade/audit";
+import { DetectorPipeline, HeuristicDetector, OptionalOnnxDetector, PromptGuard2Detector, type Detector } from "@palizade/detectors";
+import { SqliteTaintStore } from "@palizade/taint";
 import { randomUUID } from "node:crypto";
-import { loadPolicyFile } from "@palisade/policy";
-import type { PalisadeConfig } from "./config.js";
+import { loadPolicyFile } from "@palizade/policy";
+import type { PalizadeConfig } from "./config.js";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
 
@@ -18,10 +18,10 @@ export interface RuntimeComponents {
   sessionId: string;
 }
 
-export async function createRuntime(config: PalisadeConfig, serverName: string): Promise<RuntimeComponents> {
+export async function createRuntime(config: PalizadeConfig, serverName: string): Promise<RuntimeComponents> {
   const server = config.servers[serverName];
   if (!server) {
-    throw new Error(`Server not found in palisade config: ${serverName}`);
+    throw new Error(`Server not found in palizade config: ${serverName}`);
   }
 
   const policy = await loadPolicyFile(config.policy);
@@ -37,7 +37,7 @@ export async function createRuntime(config: PalisadeConfig, serverName: string):
     profileId: config.taint.profileId,
     keyPath: config.taint.keyPath,
     ttlMs: config.taint.ttlMs,
-    ...(process.env.PALISADE_RUN_ID ? { runId: process.env.PALISADE_RUN_ID } : {})
+    ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
   });
   const lockfile = new LockfileStore(config.lockfile);
   const approvals = createApprovalProvider(config);
@@ -58,7 +58,7 @@ export async function createRuntime(config: PalisadeConfig, serverName: string):
   return { engine, audit, detector, taintStore, lockfile, approvals, sessionId };
 }
 
-export function createDetector(config: PalisadeConfig): Detector {
+export function createDetector(config: PalizadeConfig): Detector {
   const detectors: Detector[] = [];
   if (config.detectors.heuristic) {
     detectors.push(new HeuristicDetector());
@@ -76,7 +76,7 @@ export function createDetector(config: PalisadeConfig): Detector {
   return new DetectorPipeline(detectors);
 }
 
-function createApprovalProvider(config: PalisadeConfig): ApprovalProvider {
+function createApprovalProvider(config: PalizadeConfig): ApprovalProvider {
   if (config.approvals.mode === "static-allow") {
     return new StaticApprovalProvider(true, "configured static allow");
   }

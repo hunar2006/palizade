@@ -9,28 +9,28 @@ import {
   LockfileStore,
   StdioMcpProxy,
   type McpTool
-} from "@palisade/core";
-import { JsonlAuditSink, parseDuration, verifyAuditChain } from "@palisade/audit";
-import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palisade/detectors";
-import { SqliteTaintStore } from "@palisade/taint";
+} from "@palizade/core";
+import { JsonlAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
+import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
+import { SqliteTaintStore } from "@palizade/taint";
 import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
 
 const program = new Command();
 
 program
-  .name("palisade")
+  .name("palizade")
   .description("MCP-native prompt-injection firewall and security proxy")
   .version("0.1.0")
-  .option("-c, --config <path>", "Path to palisade.yaml", "palisade.yaml");
+  .option("-c, --config <path>", "Path to palizade.yaml", "palizade.yaml");
 
 program.command("init")
-  .description("Create a starter palisade.yaml, default policy, and state directory")
+  .description("Create a starter palizade.yaml, default policy, and state directory")
   .option("--force", "Overwrite existing files", false)
   .action(async (options: { force: boolean }) => {
-    await writeIfMissing("palisade.yaml", DEFAULT_CONFIG, options.force);
+    await writeIfMissing("palizade.yaml", DEFAULT_CONFIG, options.force);
     await writeIfMissing("policies/default.yaml", DEFAULT_POLICY, options.force);
-    await mkdir(".palisade", { recursive: true });
-    console.log("Initialized Palisade config, default policy, and .palisade state directory.");
+    await mkdir(".palizade", { recursive: true });
+    console.log("Initialized Palizade config, default policy, and .palizade state directory.");
   });
 
 const detectors = program.command("detectors")
@@ -40,7 +40,7 @@ detectors.command("install")
   .description("Download an optional detector model")
   .argument("<name>", "Detector name, currently: promptguard2")
   .option("--model <model>", "Hugging Face model id", PROMPT_GUARD_2_ONNX_MODEL)
-  .option("--cache-dir <dir>", "Model cache directory", ".palisade/models")
+  .option("--cache-dir <dir>", "Model cache directory", ".palizade/models")
   .action(async (name: string, options: { model: string; cacheDir: string }) => {
     if (name !== "promptguard2") {
       throw new Error(`Unknown detector '${name}'.`);
@@ -48,7 +48,7 @@ detectors.command("install")
     await mkdir(options.cacheDir, { recursive: true });
     console.log(`Downloading ${options.model} to ${options.cacheDir}...`);
     await downloadPromptGuard2({ model: options.model, cacheDir: options.cacheDir });
-    console.log("Prompt Guard 2 is installed. Enable detectors.promptGuard2.enabled in palisade.yaml.");
+    console.log("Prompt Guard 2 is installed. Enable detectors.promptGuard2.enabled in palizade.yaml.");
   });
 
 detectors.command("verify")
@@ -78,7 +78,7 @@ detectors.command("verify")
       const configPath = program.opts<{ config: string }>().config;
       const config = await loadConfig(configPath);
       if (!config.detectors.promptGuard2.enabled) {
-        throw new Error("promptguard2 is not enabled in palisade.yaml; inference was not performed");
+        throw new Error("promptguard2 is not enabled in palizade.yaml; inference was not performed");
       }
       const detector = new PromptGuard2Detector({
         model: config.detectors.promptGuard2.model,
@@ -107,7 +107,7 @@ detectors.command("verify")
 
 program.command("wrap")
   .description("Wrap an upstream MCP server over stdio")
-  .argument("<serverName>", "Server name from palisade.yaml")
+  .argument("<serverName>", "Server name from palizade.yaml")
   .action(async (serverName: string) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfig(configPath);
@@ -125,7 +125,7 @@ const lock = program.command("lock")
 
 lock.command("approve")
   .description("Approve current tools/list metadata for a configured server")
-  .argument("<serverName>", "Server name from palisade.yaml")
+  .argument("<serverName>", "Server name from palizade.yaml")
   .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
   .action(async (serverName: string, options: { timeout: string }) => {
     const configPath = program.opts<{ config: string }>().config;
@@ -225,7 +225,7 @@ taint.command("prune")
       profileId: config.taint.profileId,
       keyPath: config.taint.keyPath,
       ttlMs: config.taint.ttlMs,
-      ...(process.env.PALISADE_RUN_ID ? { runId: process.env.PALISADE_RUN_ID } : {})
+      ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
     });
     const pruned = store.pruneExpired();
     store.close();
@@ -233,7 +233,7 @@ taint.command("prune")
   });
 
 program.command("doctor")
-  .description("Validate local Palisade configuration")
+  .description("Validate local Palizade configuration")
   .action(async () => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfig(configPath);

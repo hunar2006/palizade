@@ -1,4 +1,4 @@
-import type { ToolCapability, ToolClass } from "@palisade/policy";
+import type { ToolCapability, ToolClass } from "@palizade/policy";
 import type { McpTool } from "./mcp.js";
 import type { ServerConfig } from "./config.js";
 

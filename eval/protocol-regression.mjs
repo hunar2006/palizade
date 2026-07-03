@@ -84,7 +84,7 @@ const benignRows = rows.filter((row) => row.expected === "benign");
 const blocked = maliciousRows.filter((row) => row.predicted === "malicious").length;
 const falsePositives = benignRows.filter((row) => row.predicted === "malicious").length;
 
-console.log("Palisade protocol-security regression suite");
+console.log("Palizade protocol-security regression suite");
 console.log(`detector=${options.detector}`);
 console.log(`fixtures=${rows.length}`);
 console.log(`malicious_detection_rate=${formatRate(blocked, maliciousRows.length)}`);
@@ -103,9 +103,9 @@ function formatRate(numerator, denominator) {
 function parseArgs(args) {
   const options = {
     detector: "heuristic",
-    model: process.env.PALISADE_PROMPTGUARD2_MODEL ?? "sinatras/Llama-Prompt-Guard-2-86M-ONNX",
-    cacheDir: process.env.PALISADE_PROMPTGUARD2_CACHE ?? ".palisade/models",
-    device: process.env.PALISADE_PROMPTGUARD2_DEVICE ?? "cpu"
+    model: process.env.PALIZADE_PROMPTGUARD2_MODEL ?? "sinatras/Llama-Prompt-Guard-2-86M-ONNX",
+    cacheDir: process.env.PALIZADE_PROMPTGUARD2_CACHE ?? ".palizade/models",
+    device: process.env.PALIZADE_PROMPTGUARD2_DEVICE ?? "cpu"
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];

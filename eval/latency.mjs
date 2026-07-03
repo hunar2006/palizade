@@ -10,7 +10,7 @@ import { StaticApprovalProvider } from "../packages/approvals/dist/index.js";
 import { InMemoryTaintStore } from "../packages/taint/dist/index.js";
 
 const iterations = Number(process.argv[2] ?? 500);
-const dir = await mkdtemp(join(tmpdir(), "palisade-latency-"));
+const dir = await mkdtemp(join(tmpdir(), "palizade-latency-"));
 const engine = makeEngine(dir);
 
 await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
@@ -58,7 +58,7 @@ function makeEngine(dir) {
   const config = {
     stateDir: dir,
     policy: "unused",
-    lockfile: join(dir, "palisade.lock"),
+    lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {

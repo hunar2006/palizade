@@ -38,7 +38,7 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
             approver: "localhost"
           });
           res.writeHead(200, headers);
-          res.end(`<h1>Palisade ${approved ? "approved" : "denied"}</h1><p>You can close this tab.</p>`);
+          res.end(`<h1>Palizade ${approved ? "approved" : "denied"}</h1><p>You can close this tab.</p>`);
           settled = true;
           return;
         }
@@ -55,7 +55,7 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
       server.listen(0, this.options.host ?? "127.0.0.1", () => {
         const address = server.address() as AddressInfo;
         const url = `http://${address.address}:${address.port}/?token=${encodeURIComponent(token)}`;
-        process.stderr.write(`[palisade] Approval required: ${url}\n`);
+        process.stderr.write(`[palizade] Approval required: ${url}\n`);
       });
 
       const timeout = setTimeout(() => {
@@ -91,7 +91,7 @@ function renderApprovalPage(request: ApprovalRequest, token: string): string {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Palisade Approval</title>
+  <title>Palizade Approval</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.45; }
     table { border-collapse: collapse; width: 100%; margin: 24px 0; }
@@ -104,7 +104,7 @@ function renderApprovalPage(request: ApprovalRequest, token: string): string {
   </style>
 </head>
 <body>
-  <h1>Palisade approval required</h1>
+  <h1>Palizade approval required</h1>
   <table>${rows.map(([key, value]) => `<tr><td>${escapeHtml(key)}</td><td><pre>${escapeHtml(value)}</pre></td></tr>`).join("")}</table>
   <form method="post" action="/decision?approved=true&token=${encodeURIComponent(token)}" style="display:inline">
     <button class="approve" type="submit">Approve</button>

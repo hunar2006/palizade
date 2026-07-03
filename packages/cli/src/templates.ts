@@ -1,10 +1,10 @@
-export const DEFAULT_CONFIG = `stateDir: .palisade
+export const DEFAULT_CONFIG = `stateDir: .palizade
 policy: policies/default.yaml
-lockfile: palisade.lock
+lockfile: palizade.lock
 
 audit:
-  jsonl: .palisade/audit.jsonl
-  sqlite: .palisade/audit.sqlite
+  jsonl: .palizade/audit.jsonl
+  sqlite: .palizade/audit.sqlite
   captureRawPayloads: false
 
 approvals:
@@ -17,7 +17,7 @@ detectors:
   promptGuard2:
     enabled: false
     model: sinatras/Llama-Prompt-Guard-2-86M-ONNX
-    cacheDir: .palisade/models
+    cacheDir: .palizade/models
     device: cpu
 
 transport:
@@ -27,8 +27,8 @@ transport:
   allowContentLength: false
 
 taint:
-  sqlite: .palisade/taint.sqlite
-  keyPath: .palisade/taint.key
+  sqlite: .palizade/taint.sqlite
+  keyPath: .palizade/taint.key
   scope: profile
   profileId: default
   ttlMs: 86400000
@@ -136,7 +136,7 @@ rules:
         - new
         - changed
     action: log_only
-    reason: Tool metadata is not approved in palisade.lock.
+    reason: Tool metadata is not approved in palizade.lock.
 
   - id: sanitize-suspicious-untrusted-output
     name: Spotlight suspicious untrusted output

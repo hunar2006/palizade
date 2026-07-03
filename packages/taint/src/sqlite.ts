@@ -348,6 +348,6 @@ function dedupeMatches(matches: TaintMatch[]): TaintMatch[] {
 }
 
 function requireNodeSqlite(): { DatabaseSync: new (path: string) => SqliteDatabase } {
-  const load = createRequire(resolve(process.cwd(), ".palisade", "taint-sqlite.cjs"));
+  const load = createRequire(resolve(process.cwd(), ".palizade", "taint-sqlite.cjs"));
   return load("node:sqlite") as { DatabaseSync: new (path: string) => SqliteDatabase };
 }

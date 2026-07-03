@@ -1,13 +1,13 @@
-import type { ApprovalProvider } from "@palisade/approvals";
-import { createApprovalRequest } from "@palisade/approvals";
-import type { AuditLogger } from "@palisade/audit";
-import type { DetectionResult, Detector } from "@palisade/detectors";
-import { fuseDetections } from "@palisade/detectors";
-import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palisade/policy";
-import type { TaintMatch, TaintRecord, TaintStore } from "@palisade/taint";
+import type { ApprovalProvider } from "@palizade/approvals";
+import { createApprovalRequest } from "@palizade/approvals";
+import type { AuditLogger } from "@palizade/audit";
+import type { DetectionResult, Detector } from "@palizade/detectors";
+import { fuseDetections } from "@palizade/detectors";
+import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
+import type { TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
-import type { PalisadeConfig, ServerConfig } from "./config.js";
+import type { PalizadeConfig, ServerConfig } from "./config.js";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
 import {
@@ -24,7 +24,7 @@ import {
 import { applyTextTransforms, extractTextBlocks, flattenArguments, redactSpans, spotlightText, type TextBlock } from "./text.js";
 
 export interface InterceptionEngineOptions {
-  config: PalisadeConfig;
+  config: PalizadeConfig;
   serverName: string;
   server: ServerConfig;
   sessionId: string;
@@ -170,7 +170,7 @@ export class InterceptionEngine {
     if (!approval.approved || decision.action === "block") {
       return {
         toClient: message.id === undefined ? [] : [
-          makeErrorResponse(message.id, -32020, "Palisade blocked MCP tool call", {
+          makeErrorResponse(message.id, -32020, "Palizade blocked MCP tool call", {
             decision,
             taint: matches,
             taintedArgumentRoles
@@ -228,7 +228,7 @@ export class InterceptionEngine {
     if (!approval.approved || decision.action === "block") {
       return {
         toClient: [
-          makeErrorResponse(message.id, -32021, "Palisade blocked tools/list metadata", {
+          makeErrorResponse(message.id, -32021, "Palizade blocked tools/list metadata", {
             decision,
             lockChecks,
             detector: fused
@@ -321,7 +321,7 @@ export class InterceptionEngine {
     if (!approval.approved || decision.action === "block") {
       return {
         toClient: [
-          makeErrorResponse(message.id, -32022, "Palisade blocked MCP tool response", {
+          makeErrorResponse(message.id, -32022, "Palizade blocked MCP tool response", {
             decision,
             detector: fused,
             taintIds: taintRecords.map((record) => record.id)
@@ -375,7 +375,7 @@ export class InterceptionEngine {
       return {
         toClient: [],
         toServer: message.id === undefined ? [] : [
-          makeErrorResponse(message.id, -32024, "Palisade blocked non-allowlisted server request", { decision })
+          makeErrorResponse(message.id, -32024, "Palizade blocked non-allowlisted server request", { decision })
         ]
       };
     }
@@ -418,7 +418,7 @@ export class InterceptionEngine {
       return {
         toClient: [],
         toServer: message.id === undefined ? [] : [
-          makeErrorResponse(message.id, -32023, "Palisade blocked server-initiated model access", {
+          makeErrorResponse(message.id, -32023, "Palizade blocked server-initiated model access", {
             decision,
             detector: detection
           })
@@ -512,7 +512,7 @@ export class InterceptionEngine {
     });
     if (!approval.approved || decision.action === "block") {
       return {
-        toClient: [makeErrorResponse(message.id, -32025, `Palisade blocked ${bucket} metadata`, { decision, detector: fused, lockChecks })],
+        toClient: [makeErrorResponse(message.id, -32025, `Palizade blocked ${bucket} metadata`, { decision, detector: fused, lockChecks })],
         toServer: []
       };
     }
@@ -563,7 +563,7 @@ export class InterceptionEngine {
     });
     if (!approval.approved || decision.action === "block") {
       return {
-        toClient: [makeErrorResponse(message.id, -32026, `Palisade blocked ${pending.method} content`, { decision, detector: fused })],
+        toClient: [makeErrorResponse(message.id, -32026, `Palizade blocked ${pending.method} content`, { decision, detector: fused })],
         toServer: []
       };
     }
@@ -622,7 +622,7 @@ export class InterceptionEngine {
     });
     if (decision.action === "block") {
       return {
-        toClient: [makeErrorResponse(message.id, -32027, "Palisade blocked initialize metadata", { decision, detector: fused, capabilityCheck })],
+        toClient: [makeErrorResponse(message.id, -32027, "Palizade blocked initialize metadata", { decision, detector: fused, capabilityCheck })],
         toServer: []
       };
     }
@@ -723,8 +723,8 @@ export class InterceptionEngine {
   ): Promise<void> {
     await this.options.audit.write({
       profile_id: this.options.config.taint.profileId,
-      scope_id: auditScopeId(this.options.config.taint.scope, this.options.config.taint.profileId, process.env.PALISADE_RUN_ID, this.options.sessionId),
-      run_id: process.env.PALISADE_RUN_ID,
+      scope_id: auditScopeId(this.options.config.taint.scope, this.options.config.taint.profileId, process.env.PALIZADE_RUN_ID, this.options.sessionId),
+      run_id: process.env.PALIZADE_RUN_ID,
       session: this.options.sessionId,
       server: this.options.serverName,
       tool: extra.tool,
@@ -778,7 +778,7 @@ function descriptorName(item: unknown, fallback: string): string {
   return `${fallback}:${JSON.stringify(item).slice(0, 80)}`;
 }
 
-function auditScopeId(scope: PalisadeConfig["taint"]["scope"], profileId: string, runId: string | undefined, sessionId: string): string {
+function auditScopeId(scope: PalizadeConfig["taint"]["scope"], profileId: string, runId: string | undefined, sessionId: string): string {
   if (scope === "process") {
     return `process:${sessionId}`;
   }

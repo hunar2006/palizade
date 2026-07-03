@@ -61,7 +61,7 @@ rules:
         - new
         - changed
     action: log_only
-    reason: Tool metadata is not approved in palisade.lock.
+    reason: Tool metadata is not approved in palizade.lock.
 
   - id: sanitize-suspicious-untrusted-output
     name: Spotlight suspicious untrusted output

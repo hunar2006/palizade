@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { LockStatus } from "@palisade/policy";
+import type { LockStatus } from "@palizade/policy";
 import { hashDescriptor, hashTool, stableStringify } from "./canonical.js";
 import type { McpTool } from "./mcp.js";
 
@@ -18,7 +18,7 @@ export interface ServerLock {
   upstream?: ToolLockEntry;
 }
 
-export interface PalisadeLock {
+export interface PalizadeLock {
   version: 1;
   servers: Record<string, ServerLock>;
 }
@@ -33,10 +33,10 @@ export interface ToolLockCheck {
 export class LockfileStore {
   constructor(private readonly path: string) {}
 
-  async read(): Promise<PalisadeLock> {
+  async read(): Promise<PalizadeLock> {
     try {
       const raw = await readFile(this.path, "utf8");
-      return JSON.parse(raw) as PalisadeLock;
+      return JSON.parse(raw) as PalizadeLock;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return { version: 1, servers: {} };
@@ -45,7 +45,7 @@ export class LockfileStore {
     }
   }
 
-  async write(lock: PalisadeLock): Promise<void> {
+  async write(lock: PalizadeLock): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(this.path, `${stableStringify(lock)}\n`, "utf8");
   }

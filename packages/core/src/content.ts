@@ -1,4 +1,4 @@
-import type { TrustLevel } from "@palisade/policy";
+import type { TrustLevel } from "@palizade/policy";
 
 export type ContentOrigin =
   | "tool_metadata"

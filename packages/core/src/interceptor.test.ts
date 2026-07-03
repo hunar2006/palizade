@@ -1,13 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StaticApprovalProvider } from "@palisade/approvals";
-import { AuditLogger, type AuditEvent } from "@palisade/audit";
-import { HeuristicDetector } from "@palisade/detectors";
-import { parsePolicy } from "@palisade/policy";
-import { InMemoryTaintStore } from "@palisade/taint";
+import { StaticApprovalProvider } from "@palizade/approvals";
+import { AuditLogger, type AuditEvent } from "@palizade/audit";
+import { HeuristicDetector } from "@palizade/detectors";
+import { parsePolicy } from "@palizade/policy";
+import { InMemoryTaintStore } from "@palizade/taint";
 import { describe, expect, it } from "vitest";
-import type { PalisadeConfig } from "./config.js";
+import type { PalizadeConfig } from "./config.js";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
 
@@ -217,12 +217,12 @@ rules:
 });
 
 async function makeEngine(activePolicy = policy): Promise<{ engine: InterceptionEngine; events: AuditEvent[]; cleanup: () => Promise<void> }> {
-  const dir = await mkdtemp(join(tmpdir(), "palisade-engine-"));
+  const dir = await mkdtemp(join(tmpdir(), "palizade-engine-"));
   const events: AuditEvent[] = [];
-  const config: PalisadeConfig = {
+  const config: PalizadeConfig = {
     stateDir: dir,
     policy: "unused",
-    lockfile: join(dir, "palisade.lock"),
+    lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {

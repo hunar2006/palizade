@@ -1,6 +1,6 @@
 ---
 name: Good first issue
-about: Small, well-scoped contribution for Palisade
+about: Small, well-scoped contribution for Palizade
 title: "[good first issue] "
 labels: good first issue
 assignees: ""

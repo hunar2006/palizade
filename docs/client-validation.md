@@ -8,7 +8,7 @@ Use one untrusted source server and one sink server. For the launch demo:
 
 - Source: fetch/web/page reader.
 - Sink: Gmail/email server or filesystem `write_file` as a fallback if Gmail credentials are not ready.
-- Palisade config: same `stateDir`, same `taint.profileId`, same `.palisade/taint.key`, and `taint.scope: profile`.
+- Palizade config: same `stateDir`, same `taint.profileId`, same `.palizade/taint.key`, and `taint.scope: profile`.
 
 Example Claude config shape:
 
@@ -17,11 +17,11 @@ Example Claude config shape:
   "mcpServers": {
     "fetch": {
       "command": "npx",
-      "args": ["palisade", "wrap", "fetch"]
+      "args": ["palizade", "wrap", "fetch"]
     },
     "gmail": {
       "command": "npx",
-      "args": ["palisade", "wrap", "gmail"]
+      "args": ["palizade", "wrap", "gmail"]
     }
   }
 }
@@ -49,7 +49,7 @@ For local repo testing before npm publish:
    ```
 
 2. Ask the client to summarize or use the page, then send/write the hidden instruction.
-3. Confirm Palisade blocks the sink call.
+3. Confirm Palizade blocks the sink call.
 4. Confirm audit shows:
 
    - `server=gmail` or sink server name.
@@ -66,7 +66,7 @@ pnpm demo:cross-server
 Expected output:
 
 ```text
-Palisade cross-server taint demo
+Palizade cross-server taint demo
 fetch_response_spotlighted=true
 gmail_send_blocked=true
 block_rule=block-tainted-sink
@@ -95,7 +95,7 @@ Install and verify:
 
 ```bash
 node packages/cli/dist/index.cjs detectors install promptguard2
-node packages/cli/dist/index.cjs -c palisade.promptguard2.yaml detectors verify promptguard2
+node packages/cli/dist/index.cjs -c palizade.promptguard2.yaml detectors verify promptguard2
 pnpm eval:combined
 ```
 

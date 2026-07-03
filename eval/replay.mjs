@@ -134,12 +134,12 @@ for (const result of results) {
 }
 
 async function makeEngine() {
-  const dir = await mkdtemp(join(tmpdir(), "palisade-eval-"));
+  const dir = await mkdtemp(join(tmpdir(), "palizade-eval-"));
   const events = [];
   const config = {
     stateDir: dir,
     policy: "unused",
-    lockfile: join(dir, "palisade.lock"),
+    lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {

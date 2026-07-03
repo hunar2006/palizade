@@ -1,6 +1,6 @@
-# Palisade
+# Palizade
 
-**iptables for AI agents.** Palisade is an MCP-native prompt-injection firewall and security proxy for agent/tool pipelines.
+**iptables for AI agents.** Palizade is an MCP-native prompt-injection firewall and security proxy for agent/tool pipelines.
 
 It wraps MCP servers, tracks suspicious/untrusted content across tool calls, and blocks tainted data when it flows into privileged sinks such as email, HTTP, shell, or file writes.
 
@@ -8,7 +8,7 @@ It wraps MCP servers, tracks suspicious/untrusted content across tool calls, and
 
 The key demo is cross-server taint: content enters through a fetch-like source and exits through a Gmail/write-like sink.
 
-Terminal transcript: a normal-looking page contains a hidden instruction to email SSH keys, and Palisade blocks the Gmail-style sink call after the fetch-style source taints it.
+Terminal transcript: a normal-looking page contains a hidden instruction to email SSH keys, and Palizade blocks the Gmail-style sink call after the fetch-style source taints it.
 
 ```text
 $ Get-Content examples\fixtures\malicious-web-content.html
@@ -26,7 +26,7 @@ $ Get-Content examples\fixtures\malicious-web-content.html
 </html>
 
 $ pnpm demo:cross-server
-Palisade cross-server taint demo
+Palizade cross-server taint demo
 fetch_response_spotlighted=true
 gmail_send_blocked=true
 block_rule=block-tainted-sink
@@ -57,7 +57,7 @@ Optional PromptGuard2 is verified as an additional ML signal:
 
 ```bash
 node packages/cli/dist/index.cjs detectors install promptguard2
-node packages/cli/dist/index.cjs -c palisade.promptguard2.yaml detectors verify promptguard2
+node packages/cli/dist/index.cjs -c palizade.promptguard2.yaml detectors verify promptguard2
 pnpm eval:combined
 ```
 
@@ -65,14 +65,14 @@ Standalone PromptGuard2 on the local corpus: 10/30 malicious detected, 0/22 beni
 
 Record the 20-second real-client GIF from `docs/client-validation.md` before public launch.
 
-Palisade sits between an MCP client and an upstream MCP server. It forwards JSON-RPC over stdio while enforcing controls around tool metadata, tool outputs, tainted data flows, and server-initiated model access.
+Palizade sits between an MCP client and an upstream MCP server. It forwards JSON-RPC over stdio while enforcing controls around tool metadata, tool outputs, tainted data flows, and server-initiated model access.
 
 ```text
 MCP client
    |
    | JSON-RPC over stdio
    v
-Palisade proxy
+Palizade proxy
    |  tools/list: hash + lock + scan descriptions
    |  tools/call request: classify tool + check taint into sinks
    |  tools/call response: scan + register provenance/taint + spotlight
@@ -84,13 +84,13 @@ Upstream MCP server
 ## What Works In This V1
 
 - Stdio MCP wrapper/proxy with bidirectional JSON-RPC forwarding.
-- `palisade.yaml` config, server trust levels, and tool-class overrides.
-- `palisade.lock` tool metadata hashing for rug-pull detection.
+- `palizade.yaml` config, server trust levels, and tool-class overrides.
+- `palizade.lock` tool metadata hashing for rug-pull detection.
 - Heuristic prompt-injection detector that works without model files.
 - Optional detector adapters that never break the default heuristic-only build.
 - Explicit detector states: `heuristic` works out of the box; external model detectors must be installed, configured, and verified by the user.
 - Provenance and taint store with HMAC-protected exact fragments/tokens, SimHash fuzzy comparison, TTL, and temporal taint checks.
-- Profile-scoped SQLite taint store for wrapped servers in the same Palisade profile, with optional `PALISADE_RUN_ID` correlation.
+- Profile-scoped SQLite taint store for wrapped servers in the same Palizade profile, with optional `PALIZADE_RUN_ID` correlation.
 - First-match-wins YAML policy engine.
 - Actions: `allow`, `block`, `sanitize`, `redact_spans`, `require_approval`, and `log_only`.
 - Terminal approval provider with secure non-interactive deny default.
@@ -133,7 +133,7 @@ Initialize a fresh project:
 node packages/cli/dist/index.cjs init
 ```
 
-Optional model setup is explicit. Palisade does not download model artifacts during `init`.
+Optional model setup is explicit. Palizade does not download model artifacts during `init`.
 
 ```bash
 node packages/cli/dist/index.cjs detectors install promptguard2
@@ -146,7 +146,7 @@ Approve current tool metadata for the toy server:
 node packages/cli/dist/index.cjs lock approve toy
 ```
 
-Run the toy server through Palisade:
+Run the toy server through Palizade:
 
 ```bash
 node packages/cli/dist/index.cjs wrap toy
@@ -174,7 +174,7 @@ After:
   "mcpServers": {
     "toy": {
       "command": "npx",
-      "args": ["palisade", "wrap", "toy"]
+      "args": ["palizade", "wrap", "toy"]
     }
   }
 }
@@ -200,7 +200,7 @@ After wrapping:
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["palisade", "wrap", "filesystem"]
+      "args": ["palizade", "wrap", "filesystem"]
     }
   }
 }
@@ -222,7 +222,7 @@ PASS  indirect injection in response
 BLOCK tainted URL flowing into sink
 PASS  base64 and invisible-char obfuscation
 BLOCK server-initiated sampling attempt
-Palisade protocol-security regression suite
+Palizade protocol-security regression suite
 ```
 
 The `PASS` cases are not ignored. They are allowed after policy-controlled transformation, such as spotlighting suspicious untrusted content before forwarding it to the client.
@@ -305,7 +305,7 @@ Policy can match on direction, method, server, tool, tool class, trust, taint pr
 
 ## Taint Model
 
-Palisade cannot inspect a model's hidden reasoning. Instead it uses containment-by-observables:
+Palizade cannot inspect a model's hidden reasoning. Instead it uses containment-by-observables:
 
 - HMAC-SHA-256 fingerprints of normalized exact fragments above a minimum length.
 - HMAC fingerprints of atomic tokens such as URLs, emails, long base64 blobs, and long hex blobs.
@@ -315,39 +315,39 @@ Palisade cannot inspect a model's hidden reasoning. Instead it uses containment-
 Scope is explicit:
 
 - `process`: only one wrapped server process.
-- `profile`: default; wrapped servers sharing the same Palisade profile and HMAC key can match observable taint until TTL expiry.
-- `external_run_id`: strongest correlation; set `PALISADE_RUN_ID` from a trusted host integration.
+- `profile`: default; wrapped servers sharing the same Palizade profile and HMAC key can match observable taint until TTL expiry.
+- `external_run_id`: strongest correlation; set `PALIZADE_RUN_ID` from a trusted host integration.
 
 Transparent wrapping cannot prove two separate server calls came from the same hidden model reasoning unless an external run ID is supplied. Temporal taint is a mitigation for paraphrase laundering, not proof that a later action is malicious.
 
 ## Why Detectors Are Signals
 
-Classifiers and heuristics can miss obfuscated attacks and can overfire on benign text. Palisade treats detector output as one signal in a policy decision. The stronger control is provenance-aware dataflow: suspicious or untrusted content is tagged, tracked, and prevented from silently driving privileged tools.
+Classifiers and heuristics can miss obfuscated attacks and can overfire on benign text. Palizade treats detector output as one signal in a policy decision. The stronger control is provenance-aware dataflow: suspicious or untrusted content is tagged, tracked, and prevented from silently driving privileged tools.
 
 ## Security And Privacy
 
 - Audit logs hash payloads by default.
 - Raw payload capture requires `audit.captureRawPayloads: true`.
-- SQLite taint fingerprints are HMAC-protected by `.palisade/taint.key`; the key is local and never printed.
+- SQLite taint fingerprints are HMAC-protected by `.palizade/taint.key`; the key is local and never printed.
 - Policy evaluation errors fail closed by default in shipped enforcement policies.
 - Localhost approval is tokenized, one-time, POST-only, loopback-bound, and expires with the approval timeout.
 - Non-interactive terminal approval defaults to deny.
 - Unknown tools on untrusted servers are blocked by the default policy; unknown tools on semi-trusted servers require approval; unknown tools on trusted servers are audit-logged.
-- Taint records are stored in `.palisade/taint.sqlite` with `profile` scope by default.
+- Taint records are stored in `.palizade/taint.sqlite` with `profile` scope by default.
 
 ## Commands
 
 ```bash
-palisade init
-palisade wrap <serverName>
-palisade lock approve <serverName>
-palisade detectors install promptguard2
-palisade detectors verify heuristic
-palisade audit --last 1h
-palisade audit verify
-palisade audit prune --older-than 30d
-palisade taint prune
-palisade doctor
+palizade init
+palizade wrap <serverName>
+palizade lock approve <serverName>
+palizade detectors install promptguard2
+palizade detectors verify heuristic
+palizade audit --last 1h
+palizade audit verify
+palizade audit prune --older-than 30d
+palizade taint prune
+palizade doctor
 ```
 
 During local development, use:
@@ -374,7 +374,7 @@ docs/               architecture notes
 
 ## Standards Mapping
 
-| Risk area | Palisade control |
+| Risk area | Palizade control |
 | --- | --- |
 | OWASP LLM01 Prompt Injection | Tool metadata and response scanning, spotlighting, taint registration |
 | OWASP LLM06 Sensitive Information Disclosure | Tainted atomic-token tracking, sink gating, hashed audit logs |
@@ -382,7 +382,7 @@ docs/               architecture notes
 
 ## Supported MCP Coverage
 
-Palisade forwards safe protocol plumbing and scans security-relevant content in:
+Palizade forwards safe protocol plumbing and scans security-relevant content in:
 
 - `initialize`, `notifications/initialized`, `ping`
 - `tools/list`, `tools/call`
@@ -400,4 +400,4 @@ Server-initiated requests outside the explicit safe allowlist are blocked by def
 - Run normal file reads/writes inside an allowed test directory.
 - Confirm the localhost approval URL is visible from the client logs or terminal wrapper.
 - Repeat with any fetch/GitHub/Gmail server you plan to demo and add explicit `toolClasses` for unknown tools.
-- Run `palisade detectors verify <name>` before claiming any optional model detector is active.
+- Run `palizade detectors verify <name>` before claiming any optional model detector is active.

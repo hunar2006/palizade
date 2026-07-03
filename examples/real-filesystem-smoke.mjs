@@ -6,13 +6,13 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const cwd = process.cwd();
-const smokeDir = join(cwd, ".palisade", "smoke");
+const smokeDir = join(cwd, ".palizade", "smoke");
 const largeFile = join(smokeDir, "large.txt");
 await mkdir(smokeDir, { recursive: true });
 await writeFile(largeFile, `${"large-payload-line\n".repeat(16_384)}`, "utf8");
 
 const client = new Client(
-  { name: "palisade-real-filesystem-smoke", version: "0.1.0" },
+  { name: "palizade-real-filesystem-smoke", version: "0.1.0" },
   { capabilities: { roots: { listChanged: true }, sampling: {} } }
 );
 client.setRequestHandler(ListRootsRequestSchema, async () => ({

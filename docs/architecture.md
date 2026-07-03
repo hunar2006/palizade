@@ -1,6 +1,6 @@
 # Architecture
 
-Palisade is deliberately small at the transport edge and strict at the policy edge.
+Palizade is deliberately small at the transport edge and strict at the policy edge.
 
 ## Runtime Flow
 
@@ -22,7 +22,7 @@ The current transport is strict newline-delimited JSON-RPC over stdio, matching 
 
 2. `tools/list`
    - Hashes security-relevant descriptor fields including schemas, annotations, icons, titles, descriptions, and metadata.
-   - Compares hashes against `palisade.lock`.
+   - Compares hashes against `palizade.lock`.
    - Scans tool descriptions.
    - Policy can block, log, require approval, or sanitize suspicious metadata.
 
@@ -54,7 +54,7 @@ The current transport is strict newline-delimited JSON-RPC over stdio, matching 
 
 Derivation order:
 
-1. `palisade.yaml` tool-class and capability overrides.
+1. `palizade.yaml` tool-class and capability overrides.
 2. MCP annotations.
 3. Built-in and name/argument heuristics.
 4. `unknown`.
@@ -63,7 +63,7 @@ The internal model uses capability flags such as `network_egress`, `sends_messag
 
 ## Shared Taint
 
-Runtime taint uses `.palisade/taint.sqlite` by default. The store scope defaults to `profile`, so separate wrapped processes using the same profile can match observable taint until TTL expiry. `PALISADE_RUN_ID` enables stronger host-provided run correlation. Raw exact fragments and tokens are HMAC-protected with `.palisade/taint.key`; SimHash is retained for fuzzy comparison.
+Runtime taint uses `.palizade/taint.sqlite` by default. The store scope defaults to `profile`, so separate wrapped processes using the same profile can match observable taint until TTL expiry. `PALIZADE_RUN_ID` enables stronger host-provided run correlation. Raw exact fragments and tokens are HMAC-protected with `.palizade/taint.key`; SimHash is retained for fuzzy comparison.
 
 ## Audit
 
@@ -72,6 +72,6 @@ Audit events include event ID, timestamp, session/profile/scope/run identifiers 
 ## Simplifications
 
 - Stdio is implemented first; streamable HTTP is left for a later transport.
-- Optional model support is externally configured and must pass `palisade detectors verify` before being described as active.
+- Optional model support is externally configured and must pass `palizade detectors verify` before being described as active.
 - Fuzzy matching is lightweight SimHash, not semantic equivalence.
 - Prompt Guard 2 is opt-in because downloading the model during every `init` would make the default DX heavy.

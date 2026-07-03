@@ -24,7 +24,7 @@ rules:
     reason: Cross-server tainted data entered Gmail send.
 `);
 
-const demoDir = await mkdtemp(join(tmpdir(), "palisade-cross-server-demo-"));
+const demoDir = await mkdtemp(join(tmpdir(), "palizade-cross-server-demo-"));
 const events = [];
 const config = makeConfig(demoDir);
 const maliciousContent = await readFile(new URL("./fixtures/malicious-web-content.html", import.meta.url), "utf8");
@@ -96,7 +96,7 @@ try {
   const blockEvent = events.find((event) => event.server === "gmail" && event.action === "block");
   const taintEvents = events.filter((event) => event.taint_ids.length > 0);
 
-  console.log("Palisade cross-server taint demo");
+  console.log("Palizade cross-server taint demo");
   console.log(`fetch_response_spotlighted=${JSON.stringify(poisoned.toClient[0]).includes("<untrusted-content")}`);
   console.log(`gmail_send_blocked=${blocked.toServer.length === 0 && "error" in blocked.toClient[0]}`);
   console.log(`block_rule=${blockEvent?.matched_rule?.id ?? "-"}`);
@@ -148,7 +148,7 @@ function makeConfig(dir) {
   return {
     stateDir: dir,
     policy: "unused",
-    lockfile: join(dir, "palisade.lock"),
+    lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {

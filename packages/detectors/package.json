@@ -1,5 +1,5 @@
 {
-  "name": "@palisade/detectors",
+  "name": "@palizade/detectors",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",

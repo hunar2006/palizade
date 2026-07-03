@@ -50,40 +50,40 @@ importers:
         specifier: ^2.8.2
         version: 2.9.0
     devDependencies:
-      '@palisade/approvals':
+      '@palizade/approvals':
         specifier: workspace:*
         version: link:../approvals
-      '@palisade/audit':
+      '@palizade/audit':
         specifier: workspace:*
         version: link:../audit
-      '@palisade/core':
+      '@palizade/core':
         specifier: workspace:*
         version: link:../core
-      '@palisade/detectors':
+      '@palizade/detectors':
         specifier: workspace:*
         version: link:../detectors
-      '@palisade/policy':
+      '@palizade/policy':
         specifier: workspace:*
         version: link:../policy
-      '@palisade/taint':
+      '@palizade/taint':
         specifier: workspace:*
         version: link:../taint
 
   packages/core:
     dependencies:
-      '@palisade/approvals':
+      '@palizade/approvals':
         specifier: workspace:*
         version: link:../approvals
-      '@palisade/audit':
+      '@palizade/audit':
         specifier: workspace:*
         version: link:../audit
-      '@palisade/detectors':
+      '@palizade/detectors':
         specifier: workspace:*
         version: link:../detectors
-      '@palisade/policy':
+      '@palizade/policy':
         specifier: workspace:*
         version: link:../policy
-      '@palisade/taint':
+      '@palizade/taint':
         specifier: workspace:*
         version: link:../taint
       yaml:

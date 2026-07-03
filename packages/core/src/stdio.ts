@@ -7,7 +7,7 @@ import type { Readable, Writable } from "node:stream";
 import type { InterceptionEngine } from "./interceptor.js";
 import type { JsonRpcEnvelope, JsonRpcMessage } from "./mcp.js";
 import type { ServerConfig } from "./config.js";
-import type { PalisadeConfig } from "./config.js";
+import type { PalizadeConfig } from "./config.js";
 
 export class LineJsonRpcPeer extends EventEmitter {
   private buffer = Buffer.alloc(0);
@@ -117,7 +117,7 @@ export class LineJsonRpcPeer extends EventEmitter {
 export interface StdioProxyOptions {
   serverName: string;
   server: ServerConfig;
-  transport?: PalisadeConfig["transport"];
+  transport?: PalizadeConfig["transport"];
   engine: InterceptionEngine;
 }
 
@@ -138,10 +138,10 @@ export class StdioMcpProxy {
     this.child = child;
 
     child.stderr.on("data", (chunk) => {
-      process.stderr.write(`[palisade:${this.options.serverName}:stderr] ${String(chunk)}`);
+      process.stderr.write(`[palizade:${this.options.serverName}:stderr] ${String(chunk)}`);
     });
     child.on("exit", (code, signal) => {
-      process.stderr.write(`[palisade:${this.options.serverName}] upstream exited code=${code ?? "null"} signal=${signal ?? "null"}\n`);
+      process.stderr.write(`[palizade:${this.options.serverName}] upstream exited code=${code ?? "null"} signal=${signal ?? "null"}\n`);
       process.exitCode = code ?? 1;
     });
 
@@ -162,7 +162,7 @@ export class StdioMcpProxy {
         if (output.toClient.length > 0) client.send(envelopeFor(output.toClient, Array.isArray(message)));
         if (output.toServer.length > 0) server.send(envelopeFor(output.toServer, Array.isArray(message)));
       }).catch((error: unknown) => {
-        process.stderr.write(`[palisade:${this.options.serverName}] client message error: ${formatError(error)}\n`);
+        process.stderr.write(`[palizade:${this.options.serverName}] client message error: ${formatError(error)}\n`);
       });
     });
     server.on("message", (message: JsonRpcEnvelope) => {
@@ -171,7 +171,7 @@ export class StdioMcpProxy {
         if (output.toClient.length > 0) client.send(envelopeFor(output.toClient, Array.isArray(message)));
         if (output.toServer.length > 0) server.send(envelopeFor(output.toServer, Array.isArray(message)));
       }).catch((error: unknown) => {
-        process.stderr.write(`[palisade:${this.options.serverName}] server message error: ${formatError(error)}\n`);
+        process.stderr.write(`[palizade:${this.options.serverName}] server message error: ${formatError(error)}\n`);
       });
     });
     client.on("end", () => {

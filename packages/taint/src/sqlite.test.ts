@@ -6,7 +6,7 @@ import { SqliteTaintStore } from "./sqlite.js";
 
 describe("SqliteTaintStore", () => {
   it("matches taint across separate store instances and sessions in profile scope", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "palisade-sqlite-taint-"));
+    const dir = await mkdtemp(join(tmpdir(), "palizade-sqlite-taint-"));
     const path = join(dir, "taint.sqlite");
     try {
       const keyPath = join(dir, "taint.key");

@@ -1,11 +1,11 @@
 {
-  "name": "palisade-monorepo",
+  "name": "palizade-monorepo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Palisade: an MCP-native prompt-injection firewall and security proxy.",
+  "description": "Palizade: an MCP-native prompt-injection firewall and security proxy.",
   "scripts": {
-    "build": "tsc -b && pnpm --filter palisade bundle",
+    "build": "tsc -b && pnpm --filter palizade bundle",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "node scripts/clean.mjs",
@@ -43,8 +43,8 @@
     "tsconfig.base.json",
     "tsconfig.json",
     "vitest.config.ts",
-    "palisade.yaml",
-    "palisade.promptguard2.yaml"
+    "palizade.yaml",
+    "palizade.promptguard2.yaml"
   ],
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

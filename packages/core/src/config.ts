@@ -31,15 +31,15 @@ export const serverConfigSchema = z.object({
   allowShell: z.boolean().default(false)
 }).strict();
 
-export const palisadeConfigSchema = z.object({
-  stateDir: z.string().default(".palisade"),
+export const palizadeConfigSchema = z.object({
+  stateDir: z.string().default(".palizade"),
   policy: z.string().default("policies/default.yaml"),
-  lockfile: z.string().default("palisade.lock"),
+  lockfile: z.string().default("palizade.lock"),
   audit: z.object({
-    jsonl: z.string().default(".palisade/audit.jsonl"),
-    sqlite: z.string().default(".palisade/audit.sqlite"),
+    jsonl: z.string().default(".palizade/audit.jsonl"),
+    sqlite: z.string().default(".palizade/audit.sqlite"),
     captureRawPayloads: z.boolean().default(false)
-  }).default({ jsonl: ".palisade/audit.jsonl", sqlite: ".palisade/audit.sqlite", captureRawPayloads: false }),
+  }).default({ jsonl: ".palizade/audit.jsonl", sqlite: ".palizade/audit.sqlite", captureRawPayloads: false }),
   approvals: z.object({
     mode: z.enum(["terminal", "localhost", "static-allow", "static-deny"]).default("terminal"),
     timeoutMs: z.number().int().positive().default(30_000),
@@ -70,8 +70,8 @@ export const palisadeConfigSchema = z.object({
     allowContentLength: false
   }),
   taint: z.object({
-    sqlite: z.string().default(".palisade/taint.sqlite"),
-    keyPath: z.string().default(".palisade/taint.key"),
+    sqlite: z.string().default(".palizade/taint.sqlite"),
+    keyPath: z.string().default(".palizade/taint.key"),
     scope: z.enum(["process", "profile", "external_run_id"]).default("profile"),
     profileId: z.string().default("default"),
     ttlMs: z.number().int().min(60_000).default(86_400_000),
@@ -84,8 +84,8 @@ export const palisadeConfigSchema = z.object({
       detectorScoreGte: z.number().min(0).max(1).default(0.55)
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
-    sqlite: ".palisade/taint.sqlite",
-    keyPath: ".palisade/taint.key",
+    sqlite: ".palizade/taint.sqlite",
+    keyPath: ".palizade/taint.key",
     scope: "profile",
     profileId: "default",
     ttlMs: 86_400_000,
@@ -97,20 +97,20 @@ export const palisadeConfigSchema = z.object({
 }).strict();
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
-export type PalisadeConfig = z.infer<typeof palisadeConfigSchema>;
+export type PalizadeConfig = z.infer<typeof palizadeConfigSchema>;
 
-export async function loadConfig(path = "palisade.yaml", cwd = process.cwd()): Promise<PalisadeConfig> {
+export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): Promise<PalizadeConfig> {
   const absolute = resolve(cwd, path);
   const raw = await readFile(absolute, "utf8");
-  const parsed = palisadeConfigSchema.parse(YAML.parse(raw));
+  const parsed = palizadeConfigSchema.parse(YAML.parse(raw));
   return resolveConfigPaths(parsed, cwd);
 }
 
-export function parseConfig(raw: string, cwd = process.cwd()): PalisadeConfig {
-  return resolveConfigPaths(palisadeConfigSchema.parse(YAML.parse(raw)), cwd);
+export function parseConfig(raw: string, cwd = process.cwd()): PalizadeConfig {
+  return resolveConfigPaths(palizadeConfigSchema.parse(YAML.parse(raw)), cwd);
 }
 
-export function resolveConfigPaths(config: PalisadeConfig, cwd = process.cwd()): PalisadeConfig {
+export function resolveConfigPaths(config: PalizadeConfig, cwd = process.cwd()): PalizadeConfig {
   return {
     ...config,
     stateDir: resolve(cwd, config.stateDir),
