@@ -14,6 +14,7 @@ import {
   isRequest,
   isSuccess,
   makeErrorResponse,
+  makeToolErrorResultResponse,
   type JsonRpcMessage,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -222,14 +223,11 @@ export class InterceptionEngine {
     this.options.taintStore.consumeTurn(this.options.sessionId);
 
     if (!approval.approved || decision.action === "block") {
-      const taintMatchCount = matches.length + fieldMatches.length;
       return {
         toClient: message.id === undefined ? [] : [
-          makeErrorResponse(
+          makeToolErrorResultResponse(
             message.id,
-            -32020,
-            formatBlockedToolCallMessage(decision),
-            makeBlockedToolCallData(decision, taintedArgumentRoles, taintMatchCount)
+            formatBlockedToolCallResultText(decision, tool, this.options.config.audit.errorVerbosity)
           )
         ],
         toServer: []
@@ -1031,23 +1029,17 @@ function descriptorName(item: unknown, fallback: string): string {
   return `${fallback}:${JSON.stringify(item).slice(0, 80)}`;
 }
 
-function formatBlockedToolCallMessage(decision: PolicyDecision): string {
-  const reason = trimTrailingPeriod(decision.reason);
-  const rule = decision.matchedRuleId ? ` (rule: ${decision.matchedRuleId})` : "";
-  return `Palizade blocked this call: ${reason}${rule}.`;
+function formatBlockedToolCallResultText(decision: PolicyDecision, tool: string, verbose: boolean): string {
+  if (!verbose) {
+    return "Palizade blocked this tool call. This action was prevented by your local Palizade security policy.";
+  }
+  const rule = decision.matchedRuleId ?? "policy-default";
+  const reason = scrubClientBlockText(trimTrailingPeriod(decision.reason));
+  return `Palizade blocked this tool call. Rule: ${rule}. Reason: ${reason}. Tool: ${tool}. This action was prevented by your local Palizade security policy.`;
 }
 
-function makeBlockedToolCallData(decision: PolicyDecision, taintedArgumentRoles: string[], taintMatchCount: number): Record<string, unknown> {
-  return {
-    action: decision.action,
-    rule: {
-      id: decision.matchedRuleId,
-      name: decision.matchedRuleName
-    },
-    reason: decision.reason,
-    taintedArgumentRoles,
-    taintMatchCount
-  };
+function scrubClientBlockText(text: string): string {
+  return text.replace(/\btaint_[A-Za-z0-9-]+\b/gu, "[taint-id]");
 }
 
 function trimTrailingPeriod(text: string): string {

@@ -1,6 +1,6 @@
 {
   "name": "palizade",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "MCP-native prompt-injection firewall and security proxy.",
   "license": "Apache-2.0",
   "type": "module",
@@ -37,7 +37,7 @@
   },
   "scripts": {
     "build": "tsc -b && pnpm run bundle",
-    "bundle": "esbuild src/index.ts --bundle --platform=node --format=cjs --external:@huggingface/transformers --outfile=dist/index.cjs",
+    "bundle": "node build.mjs",
     "test": "vitest run"
   },
   "dependencies": {

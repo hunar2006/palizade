@@ -98,13 +98,13 @@ try {
 
   console.log("Palizade cross-server taint demo");
   console.log(`fetch_response_spotlighted=${JSON.stringify(poisoned.toClient[0]).includes("<untrusted-content")}`);
-  console.log(`gmail_send_blocked=${blocked.toServer.length === 0 && "error" in blocked.toClient[0]}`);
+  console.log(`gmail_send_blocked=${blocked.toServer.length === 0 && blocked.toClient[0]?.result?.isError === true}`);
   console.log(`block_rule=${blockEvent?.matched_rule?.id ?? "-"}`);
   console.log(`block_reason=${blockEvent?.reason ?? "-"}`);
   console.log(`audit=${blockEvent ? `${blockEvent.server} ${blockEvent.action} ${blockEvent.matched_rule?.id ?? "-"} ${blockEvent.reason ?? "-"}` : "-"}`);
   console.log(`taint_ids=${[...new Set(taintEvents.flatMap((event) => event.taint_ids))].join(",") || "-"}`);
 
-  if (!blockEvent || blocked.toServer.length !== 0 || !("error" in blocked.toClient[0])) {
+  if (!blockEvent || blocked.toServer.length !== 0 || blocked.toClient[0]?.result?.isError !== true) {
     process.exitCode = 1;
   }
 } finally {
@@ -149,7 +149,7 @@ function makeConfig(dir) {
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,

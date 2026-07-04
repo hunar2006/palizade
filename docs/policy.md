@@ -32,12 +32,14 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 ## Actions
 
 - `allow`: forward unchanged.
-- `block`: return a JSON-RPC error instead of forwarding.
+- `block`: for `tools/call` requests, return a CallToolResult-style payload with `isError: true`; protocol-level blocks still return JSON-RPC errors.
 - `sanitize`: wrap untrusted content in spotlighting markers.
 - `redact_spans`: replace detector spans with `[REDACTED:<label>]`.
 - `redact_secrets`: replace detected secret/PII spans in outbound arguments with `[REDACTED:<label>]` and forward.
 - `require_approval`: ask the configured approval provider.
 - `log_only`: forward but emit an audit event.
+
+Set `audit.errorVerbosity: false` to make client-facing tool-call block messages opaque. The default `true` includes the matched rule id and human reason so MCP clients and models can tell that Palizade blocked the call, rather than guessing that the upstream tool failed.
 
 ## Egress Preset
 

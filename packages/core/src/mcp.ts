@@ -47,6 +47,11 @@ export interface ToolsCallParams {
   arguments?: unknown;
 }
 
+export interface CallToolErrorResult {
+  content: Array<{ type: "text"; text: string }>;
+  isError: true;
+}
+
 export function isRequest(message: JsonRpcMessage): message is JsonRpcRequest {
   return "method" in message;
 }
@@ -68,5 +73,16 @@ export function makeErrorResponse(id: JsonRpcId | undefined, code: number, messa
       message,
       ...(data === undefined ? {} : { data })
     }
+  };
+}
+
+export function makeToolErrorResultResponse(id: JsonRpcId, text: string): JsonRpcSuccess {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: {
+      content: [{ type: "text", text }],
+      isError: true
+    } satisfies CallToolErrorResult
   };
 }

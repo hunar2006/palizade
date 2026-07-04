@@ -94,14 +94,14 @@ try {
   const blockEvent = events.find((event) => event.server === "writer" && event.action === "block");
   const readEvent = events.find((event) => event.server === "reader" && event.method === "tools/call" && event.direction === "response");
   const outputExists = await exists(outputFile);
-  const blockedByProxy = blocked.toServer.length === 0 && "error" in blocked.toClient[0];
+  const blockedByProxy = blocked.toServer.length === 0 && blocked.toClient[0]?.result?.isError === true;
   const pass = Boolean(blockEvent) && blockedByProxy && !outputExists;
 
   console.log("Palizade benign provenance block demo");
   console.log(`read_detector_score=${readEvent?.detector.score ?? "-"}`);
   console.log(`write_blocked=${blockedByProxy}`);
   console.log(`block_rule=${blockEvent?.matched_rule?.id ?? "-"}`);
-  console.log(`block_message=${blocked.toClient[0]?.error?.message ?? "-"}`);
+  console.log(`block_message=${blocked.toClient[0]?.result?.content?.[0]?.text ?? "-"}`);
   console.log(`output_created=${outputExists}`);
   console.log(`PASS=${pass}`);
 
@@ -162,7 +162,7 @@ function makeConfig(dir) {
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,

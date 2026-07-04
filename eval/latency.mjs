@@ -59,7 +59,7 @@ function makeEngine(dir) {
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,

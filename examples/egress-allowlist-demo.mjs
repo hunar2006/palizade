@@ -83,7 +83,7 @@ try {
   });
 
   const blockEvent = events.find((event) => event.server === "http" && event.action === "block");
-  const evilBlocked = blocked.toServer.length === 0 && "error" in blocked.toClient[0];
+  const evilBlocked = blocked.toServer.length === 0 && blocked.toClient[0]?.result?.isError === true;
   const goodAllowed = allowed.toServer.length === 1 && allowed.toClient.length === 0;
   const pass = Boolean(blockEvent) && evilBlocked && goodAllowed;
 
@@ -92,7 +92,7 @@ try {
   console.log(`evil_blocked=${evilBlocked}`);
   console.log(`good_allowed=${goodAllowed}`);
   console.log(`block_rule=${blockEvent?.matched_rule?.id ?? "-"}`);
-  console.log(`block_message=${blocked.toClient[0]?.error?.message ?? "-"}`);
+  console.log(`block_message=${blocked.toClient[0]?.result?.content?.[0]?.text ?? "-"}`);
   console.log(`PASS=${pass}`);
 
   if (!pass) {
@@ -149,7 +149,7 @@ function makeConfig(dir) {
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,

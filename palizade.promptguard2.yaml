@@ -6,6 +6,7 @@ audit:
   jsonl: .palizade/audit.jsonl
   sqlite: .palizade/audit.sqlite
   captureRawPayloads: false
+  errorVerbosity: true
 
 approvals:
   mode: localhost

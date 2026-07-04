@@ -81,7 +81,7 @@ try {
   });
 
   const blockEvent = events.find((event) => event.server === "sender" && event.action === "block");
-  const blockedByProxy = blocked.toServer.length === 0 && "error" in blocked.toClient[0];
+  const blockedByProxy = blocked.toServer.length === 0 && blocked.toClient[0]?.result?.isError === true;
   const secretEgressed = JSON.stringify(blocked.toServer).includes("AKIAIOSFODNN7EXAMPLE");
   const pass = Boolean(blockEvent) && blockedByProxy && !secretEgressed;
 
@@ -89,7 +89,7 @@ try {
   console.log(`secret_detected=${events.some((event) => event.detector.labels.some((label) => label.startsWith("secret:")))}`);
   console.log(`send_blocked=${blockedByProxy}`);
   console.log(`block_rule=${blockEvent?.matched_rule?.id ?? "-"}`);
-  console.log(`block_message=${blocked.toClient[0]?.error?.message ?? "-"}`);
+  console.log(`block_message=${blocked.toClient[0]?.result?.content?.[0]?.text ?? "-"}`);
   console.log(`secret_egressed=${secretEgressed}`);
   console.log(`PASS=${pass}`);
 
@@ -150,7 +150,7 @@ function makeConfig(dir) {
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,

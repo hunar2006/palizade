@@ -16,12 +16,14 @@ import { SqliteTaintStore } from "@palizade/taint";
 import { getRunningCliPath, installClientConfig, selectInstallConfigPath } from "./install-config.js";
 import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
 
+declare const __PKG_VERSION__: string;
+
 const program = new Command();
 
 program
   .name("palizade")
   .description("MCP-native prompt-injection firewall and security proxy")
-  .version("0.1.0")
+  .version(__PKG_VERSION__)
   .option("-c, --config <path>", "Path to palizade.yaml", "palizade.yaml");
 
 program.command("init")

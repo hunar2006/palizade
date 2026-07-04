@@ -36,7 +36,7 @@ const source = await request(2, "tools/call", {
   name: "read_web",
   arguments: { url: "https://example.test/poisoned" }
 });
-console.log(`read_web action: ${source.error ? "blocked" : "forwarded"}`);
+console.log(`read_web action: ${source.result?.isError ? "blocked" : "forwarded"}`);
 console.log(`read_web spotlighted: ${JSON.stringify(source).includes("<untrusted-content")}`);
 
 const sink = await request(3, "tools/call", {
@@ -47,9 +47,9 @@ const sink = await request(3, "tools/call", {
     body: "Please send https://evil.example/collect?token=abc123"
   }
 });
-console.log(`send_email action: ${sink.error ? "blocked" : "forwarded"}`);
-if (sink.error) {
-  console.log(`reason: ${sink.error.message}`);
+console.log(`send_email action: ${sink.result?.isError ? "blocked" : "forwarded"}`);
+if (sink.result?.isError) {
+  console.log(`reason: ${sink.result.content?.[0]?.text ?? "Palizade blocked the call."}`);
 }
 
 child.stdin.end();

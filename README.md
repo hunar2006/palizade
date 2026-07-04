@@ -83,7 +83,7 @@ Provenance-only block demo: benign content is read from a source tool and then r
 pnpm demo:benign-block
 ```
 
-Blocked calls return an actionable JSON-RPC error message with the policy rule and reason, without exposing raw tainted content or taint IDs.
+Blocked `tools/call` policy denials return an actionable MCP tool result with `isError: true`, the policy rule, and the reason, without exposing raw tainted content or taint IDs.
 
 Real MCP SDK smoke test:
 

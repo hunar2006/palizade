@@ -123,7 +123,7 @@ for (const testCase of cases) {
 
 for (const result of results) {
   const actions = result.events.map((event) => event.action).join(", ") || "none";
-  const blocked = [...result.toClient, ...result.toServer].some((message) => "error" in message);
+  const blocked = [...result.toClient, ...result.toServer].some((message) => "error" in message || message.result?.isError === true);
   console.log(`${blocked ? "BLOCK" : "PASS "} ${result.case}`);
   console.log(`  actions: ${actions}`);
   for (const event of result.events) {
@@ -140,7 +140,7 @@ async function makeEngine() {
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
-    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false },
+    audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
     approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
     detectors: {
       heuristic: true,

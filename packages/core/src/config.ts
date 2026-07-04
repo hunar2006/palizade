@@ -80,8 +80,9 @@ export const palizadeConfigSchema = z.object({
   audit: z.object({
     jsonl: z.string().default(".palizade/audit.jsonl"),
     sqlite: z.string().default(".palizade/audit.sqlite"),
-    captureRawPayloads: z.boolean().default(false)
-  }).default({ jsonl: ".palizade/audit.jsonl", sqlite: ".palizade/audit.sqlite", captureRawPayloads: false }),
+    captureRawPayloads: z.boolean().default(false),
+    errorVerbosity: z.boolean().default(true)
+  }).default({ jsonl: ".palizade/audit.jsonl", sqlite: ".palizade/audit.sqlite", captureRawPayloads: false, errorVerbosity: true }),
   approvals: z.object({
     mode: z.enum(["terminal", "localhost", "static-allow", "static-deny"]).default("terminal"),
     timeoutMs: z.number().int().positive().default(30_000),
