@@ -121,4 +121,89 @@ describe("evaluatePolicy", () => {
       matchedRuleId: "allow-tainted-allowed-egress-destination"
     });
   });
+
+  it("applies the shipped coding-agent preset to common agent tool risks", async () => {
+    const codingAgent = await loadPolicyFile(join(process.cwd(), "policies", "coding-agent.yaml"));
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      tool_class: "source",
+      taint: false,
+      sensitive_taint: false
+    })).toMatchObject({
+      action: "allow"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      tool_class: "sink",
+      capabilities: ["file_write", "writes_local"],
+      taint: false,
+      sensitive_taint: false
+    })).toMatchObject({
+      action: "allow"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      argument_roles: ["shell_command"]
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-shell-command-role"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      argument_text: "{\"path\":\"/workspace/.ssh/id_rsa\"}",
+      argument_roles: ["file_path"]
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-credential-path-access"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      capabilities: ["sends_message"],
+      secret_detected: true
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-secret-detected-coding-agent"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      capabilities: ["file_write", "writes_local"],
+      sensitive_taint: true
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-sensitive-taint-coding-agent"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      capabilities: ["network_egress"],
+      tainted_argument_roles: ["url"]
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-tainted-network-or-message-egress"
+    });
+
+    expect(evaluatePolicy(codingAgent, {
+      direction: "request",
+      method: "tools/call",
+      tool_class: "sink",
+      capabilities: ["file_write", "writes_local"],
+      taint: true
+    })).toMatchObject({
+      action: "require_approval",
+      matchedRuleId: "require-approval-tainted-file-write"
+    });
+  });
 });

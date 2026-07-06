@@ -53,6 +53,20 @@ Set `audit.errorVerbosity: false` to make client-facing tool-call block messages
 
 The allowlist rule is structural: with an allowlist configured, tainted data must flow only to allowed hosts/domains/emails. Secret and PII detection is pattern-based and intentionally high precision; it can miss custom or obfuscated secrets.
 
+## Coding Agent Preset
+
+`policies/coding-agent.yaml` is opt-in. It is intended for coding-agent MCP setups where normal workspace reads and writes are expected, but higher-risk capabilities still need guardrails.
+
+The preset keeps `defaults.action: allow`, then adds rules that:
+
+- block arguments classified as `shell_command`;
+- block credential-like file paths such as `.env`, `.ssh`, private keys, credentials, secrets, and tokens;
+- block detected secrets or sensitive taint entering network, message, remote write, local write, or credential-capable tools;
+- block tainted URL, host, email recipient, or HTTP query arguments flowing to network/message/remote-write tools;
+- require approval before tainted content is written through local file-write tools.
+
+This preset does not prove that a path is inside a workspace. Workspace boundaries must still be enforced by the configured MCP filesystem server root or by the caller. It also does not replace the egress allowlist preset when a deployment needs destination-specific allow rules.
+
 ## Default Unknown Tool Behavior
 
 - Untrusted server plus unknown tool: block.
