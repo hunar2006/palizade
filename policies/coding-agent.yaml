@@ -1,0 +1,86 @@
+version: 1
+defaults:
+  action: allow
+  on_error: block
+
+rules:
+  - id: block-shell-command-role
+    name: Block shell command arguments
+    when:
+      direction: request
+      method: tools/call
+      argument_role_any:
+        - shell_command
+    action: block
+    reason: Coding-agent policy does not allow tools to receive shell commands.
+
+  - id: block-credential-path-access
+    name: Block credential-like file paths
+    when:
+      direction: request
+      method: tools/call
+      argument_regex: '(^|[\\/"''\s])(\.env([.\w-]*)?|\.ssh|id_rsa|id_ed25519|credentials?|secrets?|tokens?)([\\/"''\s:]|$)'
+    action: block
+    reason: Tool arguments reference credential or secret storage paths.
+
+  - id: block-secret-detected-coding-agent
+    name: Block detected secrets in coding-agent tools
+    when:
+      direction: request
+      method: tools/call
+      secret_detected: true
+      capabilities_any:
+        - network_egress
+        - sends_message
+        - writes_remote
+        - file_write
+        - writes_local
+        - accesses_credentials
+    action: block
+    reason: Secret-looking content should not enter coding-agent tool calls.
+
+  - id: block-sensitive-taint-coding-agent
+    name: Block sensitive taint in coding-agent tools
+    when:
+      direction: request
+      method: tools/call
+      sensitive_taint: true
+      capabilities_any:
+        - network_egress
+        - sends_message
+        - writes_remote
+        - file_write
+        - writes_local
+        - accesses_credentials
+    action: block
+    reason: Sensitive taint should not enter coding-agent tool calls.
+
+  - id: block-tainted-network-or-message-egress
+    name: Block tainted outbound destinations
+    when:
+      direction: request
+      method: tools/call
+      capabilities_any:
+        - network_egress
+        - sends_message
+        - writes_remote
+      tainted_argument_role_any:
+        - url
+        - hostname
+        - email_recipient
+        - http_query
+    action: block
+    reason: Tainted content is being used as an outbound destination or query parameter.
+
+  - id: require-approval-tainted-file-write
+    name: Require approval for tainted local file writes
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      taint: true
+      capabilities_any:
+        - file_write
+        - writes_local
+    action: require_approval
+    reason: Tainted content can be written to the workspace only with explicit approval.

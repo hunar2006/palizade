@@ -321,6 +321,7 @@ rules:
 Shipped presets:
 
 - `policies/audit-only.yaml`
+- `policies/coding-agent.yaml`
 - `policies/default.yaml`
 - `policies/egress.yaml`
 - `policies/strict.yaml`
