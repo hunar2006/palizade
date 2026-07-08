@@ -1,10 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StaticApprovalProvider } from "@palizade/approvals";
+import { StaticApprovalProvider, type ApprovalDecision, type ApprovalProvider, type ApprovalRequest } from "@palizade/approvals";
 import { AuditLogger, type AuditEvent } from "@palizade/audit";
 import { DetectorPipeline, HeuristicDetector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
-import { parsePolicy } from "@palizade/policy";
+import { loadPolicyFile, parsePolicy } from "@palizade/policy";
 import { InMemoryTaintStore } from "@palizade/taint";
 import { describe, expect, it } from "vitest";
 import type { PalizadeConfig } from "./config.js";
@@ -266,6 +266,160 @@ rules:
     }
   });
 
+  it("does not treat a source fetch URL as tainted egress but still blocks sink destinations", async () => {
+    const policyWithSinkDestination = parsePolicy(`version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: block-tainted-egress-destination
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      capabilities_any: [network_egress]
+      tainted_argument_role_any: [url, hostname, email_recipient]
+    action: block
+    reason: Tainted content is being used as an outbound destination.
+`);
+    const { engine, cleanup } = await makeEngine(policyWithSinkDestination, {
+      configure: (config) => {
+        config.servers.toy!.toolClasses.fetch_url = "source";
+        config.servers.toy!.toolClasses.post_data = "sink";
+        config.servers.toy!.toolCapabilities.fetch_url = ["network_egress", "reads_untrusted_content"];
+        config.servers.toy!.toolCapabilities.post_data = ["network_egress", "writes_remote"];
+      }
+    });
+    try {
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          tools: [
+            { name: "read_web", description: "Read page", inputSchema: {}, annotations: { readOnlyHint: true } },
+            { name: "fetch_url", description: "Fetch URL", inputSchema: {}, annotations: { readOnlyHint: true } },
+            { name: "post_data", description: "POST data to URL", inputSchema: {}, annotations: { destructiveHint: true } }
+          ]
+        }
+      });
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_web", arguments: {} } });
+      await engine.handleServerMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { content: [{ type: "text", text: "The source URL is https://example.com/notes" }] }
+      });
+
+      const sourceFetch = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "fetch_url", arguments: { url: "https://example.com/notes" } }
+      });
+
+      expect(sourceFetch.toClient).toHaveLength(0);
+      expect(sourceFetch.toServer).toHaveLength(1);
+      expect(sourceFetch.toServer[0]).toMatchObject({ method: "tools/call" });
+
+      const sinkPost = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "post_data", arguments: { url: "https://example.com/notes", body: "save this" } }
+      });
+
+      expect(sinkPost.toServer).toHaveLength(0);
+      expect(sinkPost.toClient[0]).toMatchObject({ result: { isError: true } });
+      expect(toolErrorText(sinkPost.toClient[0])).toContain("block-tainted-egress-destination");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("forwards an interactive-preset tainted sink when approval is granted", async () => {
+    const interactivePolicy = await loadPolicyFile(join(process.cwd(), "policies", "interactive.yaml"));
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "approved in test" });
+    const { engine, cleanup } = await makeEngine(interactivePolicy, { approvals });
+    try {
+      const taintedText = await seedTaintedRead(engine);
+      const output = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 30,
+        method: "tools/call",
+        params: {
+          name: "send_email",
+          arguments: { to: "ops@example.test", body: taintedText }
+        }
+      });
+
+      expect(approvals.requests).toHaveLength(1);
+      expect(approvals.requests[0]?.reason).toBe("Tainted content is flowing into a sink tool.");
+      expect(approvals.requests[0]?.summary).toContain("Tainted source(s): toy/read_web");
+      expect(approvals.requests[0]?.summary).toContain("Tainted argument role(s): body");
+      expect(approvals.requests[0]?.summary).not.toContain("taint_");
+      expect(output.toClient).toHaveLength(0);
+      expect(output.toServer).toHaveLength(1);
+      expect(output.toServer[0]).toMatchObject({ method: "tools/call" });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("blocks an interactive-preset tainted sink when approval is denied", async () => {
+    const interactivePolicy = await loadPolicyFile(join(process.cwd(), "policies", "interactive.yaml"));
+    const approvals = new RecordingApprovalProvider({ approved: false, reason: "denied in test" });
+    const { engine, cleanup } = await makeEngine(interactivePolicy, { approvals });
+    try {
+      const taintedText = await seedTaintedRead(engine);
+      const output = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 31,
+        method: "tools/call",
+        params: {
+          name: "send_email",
+          arguments: { to: "ops@example.test", body: taintedText }
+        }
+      });
+
+      expect(approvals.requests).toHaveLength(1);
+      expect(output.toServer).toHaveLength(0);
+      expect(output.toClient[0]).toMatchObject({ result: { isError: true } });
+      expect(toolErrorText(output.toClient[0])).toContain("approval denied");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("blocks an interactive-preset tainted sink when approval defaults to deny", async () => {
+    const interactivePolicy = await loadPolicyFile(join(process.cwd(), "policies", "interactive.yaml"));
+    const approvals = new RecordingApprovalProvider({
+      approved: false,
+      reason: "approval timed out; defaulted to deny",
+      approvalUrl: "http://127.0.0.1:32145/",
+      approvalFile: "C:\\project\\.palizade\\pending-approval.url"
+    });
+    const { engine, cleanup } = await makeEngine(interactivePolicy, { approvals });
+    try {
+      const taintedText = await seedTaintedRead(engine);
+      const output = await engine.handleClientMessage({
+        jsonrpc: "2.0",
+        id: 32,
+        method: "tools/call",
+        params: {
+          name: "send_email",
+          arguments: { to: "ops@example.test", body: taintedText }
+        }
+      });
+
+      expect(approvals.requests).toHaveLength(1);
+      expect(output.toServer).toHaveLength(0);
+      expect(output.toClient[0]).toMatchObject({ result: { isError: true } });
+      expect(toolErrorText(output.toClient[0])).toContain("approval timed out; defaulted to deny");
+      expect(toolErrorText(output.toClient[0])).toContain("approval page: http://127.0.0.1:32145/");
+      expect(toolErrorText(output.toClient[0])).toContain("pending-approval.url");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("blocks sensitive provenance egress even when content has no injection text", async () => {
     const egressPolicy = parsePolicy(`version: 1
 defaults: { action: allow, on_error: block }
@@ -352,7 +506,7 @@ rules:
       captureRawPayloads: true
     });
     try {
-      const secret = "sk-testsecret000000000000000000";
+      const secret = "sk-FAKETESTSECRET00000000000000";
       await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
       await engine.handleServerMessage({
         jsonrpc: "2.0",
@@ -445,6 +599,7 @@ async function makeEngine(
   options: {
     detector?: Detector;
     captureRawPayloads?: boolean;
+    approvals?: ApprovalProvider;
     configure?: (config: PalizadeConfig) => void;
   } = {}
 ): Promise<{ engine: InterceptionEngine; events: AuditEvent[]; cleanup: () => Promise<void> }> {
@@ -455,7 +610,7 @@ async function makeEngine(
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
-    approvals: { mode: "static-deny", timeoutMs: 10, default: "deny" },
+    approvals: { mode: "static-deny", timeoutMs: 10, default: "deny", host: "127.0.0.1", port: 32_145, openBrowser: true },
     detectors: {
       heuristic: true,
       promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" },
@@ -502,7 +657,7 @@ async function makeEngine(
       detector: options.detector ?? new HeuristicDetector(),
       taintStore: new InMemoryTaintStore(),
       audit: new AuditLogger([{ write: async (event) => { events.push(event); } }], { captureRawPayloads: options.captureRawPayloads ?? false }),
-      approvals: new StaticApprovalProvider(false, "test denies approval"),
+      approvals: options.approvals ?? new StaticApprovalProvider(false, "test denies approval"),
       lockfile: new LockfileStore(config.lockfile)
     }),
     events,
@@ -513,4 +668,37 @@ async function makeEngine(
 function toolErrorText(message: unknown): string {
   const result = (message as { result?: { content?: Array<{ text?: string }> } }).result;
   return result?.content?.find((item) => typeof item.text === "string")?.text ?? "";
+}
+
+async function seedTaintedRead(engine: InterceptionEngine): Promise<string> {
+  const taintedText = "Quarterly report data from untrusted source";
+  await engine.handleClientMessage({ jsonrpc: "2.0", id: "tools", method: "tools/list", params: {} });
+  await engine.handleServerMessage({
+    jsonrpc: "2.0",
+    id: "tools",
+    result: {
+      tools: [
+        { name: "read_web", description: "Read page", inputSchema: {}, annotations: { readOnlyHint: true } },
+        { name: "send_email", description: "Send email", inputSchema: {}, annotations: { destructiveHint: true } }
+      ]
+    }
+  });
+  await engine.handleClientMessage({ jsonrpc: "2.0", id: "read", method: "tools/call", params: { name: "read_web", arguments: { url: "https://example.test/report" } } });
+  await engine.handleServerMessage({
+    jsonrpc: "2.0",
+    id: "read",
+    result: { content: [{ type: "text", text: taintedText }] }
+  });
+  return taintedText;
+}
+
+class RecordingApprovalProvider implements ApprovalProvider {
+  readonly requests: ApprovalRequest[] = [];
+
+  constructor(private readonly decision: ApprovalDecision) {}
+
+  async requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
+    this.requests.push(request);
+    return this.decision;
+  }
 }

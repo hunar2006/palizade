@@ -10,8 +10,11 @@ audit:
 
 approvals:
   mode: localhost
-  timeoutMs: 30000
+  timeoutMs: 120000
   default: deny
+  host: 127.0.0.1
+  port: 32145
+  openBrowser: true
 
 detectors:
   heuristic: true
@@ -60,6 +63,23 @@ servers:
       read_web: source
       send_email: sink
       echo: pure
+    sensitive: false
+    sensitiveTools: {}
+    sensitivePathPatterns: []
+  claude_fetch_demo:
+    command: node
+    args:
+      - examples/claude-code-fetch-server/server.mjs
+    trust: untrusted
+    toolClasses:
+      fetch_url: source
+      post_data: sink
+    toolCapabilities:
+      fetch_url:
+        - reads_untrusted_content
+      post_data:
+        - network_egress
+        - writes_remote
     sensitive: false
     sensitiveTools: {}
     sensitivePathPatterns: []

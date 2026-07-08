@@ -1,4 +1,4 @@
-import type { ApprovalProvider } from "@palizade/approvals";
+import type { ApprovalDecision, ApprovalProvider } from "@palizade/approvals";
 import { createApprovalRequest } from "@palizade/approvals";
 import type { AuditLogger } from "@palizade/audit";
 import type { DetectionResult, Detector } from "@palizade/detectors";
@@ -200,7 +200,15 @@ export class InterceptionEngine {
       toolClass,
       classification,
       taintMatches: allTaintMatches,
-      summary: `${tool} (${toolClass}; ${classification.capabilities.join(",") || "no capabilities"}) wants to run with ${matches.length + fieldMatches.length} taint match(es).`
+      summary: formatToolCallApprovalSummary({
+        tool,
+        toolClass,
+        capabilities: classification.capabilities,
+        taintMatches: allTaintMatches,
+        taintedArgumentRoles,
+        destination,
+        taintStore: this.options.taintStore
+      })
     });
 
     await this.auditDecision(message, "request", approval.decision, startedAt, {
@@ -227,7 +235,7 @@ export class InterceptionEngine {
         toClient: message.id === undefined ? [] : [
           makeToolErrorResultResponse(
             message.id,
-            formatBlockedToolCallResultText(decision, tool, this.options.config.audit.errorVerbosity)
+            formatBlockedToolCallResultText(approval.decision, tool, this.options.config.audit.errorVerbosity)
           )
         ],
         toServer: []
@@ -777,7 +785,7 @@ export class InterceptionEngine {
       approved: approval.approved,
       decision: {
         ...decision,
-        reason: `${decision.reason}; approval ${approval.approved ? "granted" : "denied"} (${approval.reason})`
+        reason: `${decision.reason}; approval ${approval.approved ? "granted" : "denied"} (${formatApprovalDecisionReason(approval)})`
       }
     };
   }
@@ -914,6 +922,48 @@ function classesFromMatches(matches: Array<TaintMatch | { taintId: string; reaso
   return dedupePreservingOrder(matches.flatMap((match) => match.classes ?? []));
 }
 
+function formatToolCallApprovalSummary(input: {
+  tool: string;
+  toolClass: ToolClass;
+  capabilities: string[];
+  taintMatches: Array<TaintMatch | { taintId: string; reason: string; classes?: TaintClass[] | undefined }>;
+  taintedArgumentRoles: string[];
+  destination: DestinationSummary;
+  taintStore: TaintStore;
+}): string {
+  const taintIds = dedupePreservingOrder(input.taintMatches.map((match) => match.taintId));
+  const capabilities = input.capabilities.join(",") || "no capabilities";
+  const roles = input.taintedArgumentRoles.length > 0 ? input.taintedArgumentRoles.join(",") : "none detected";
+  const sources = summarizeTaintSources(taintIds, input.taintStore);
+  const destination = summarizeApprovalDestination(input.destination);
+  return [
+    `${input.tool} (${input.toolClass}; ${capabilities}) wants to run with ${taintIds.length} taint match(es).`,
+    `Tainted argument role(s): ${roles}.`,
+    sources.length > 0 ? `Tainted source(s): ${sources.join("; ")}.` : undefined,
+    destination ? `Destination: ${destination}.` : undefined
+  ].filter(Boolean).join(" ");
+}
+
+function summarizeTaintSources(taintIds: string[], taintStore: TaintStore): string[] {
+  return dedupePreservingOrder(taintIds.flatMap((taintId) => {
+    const record = taintStore.get(taintId);
+    if (!record) {
+      return [];
+    }
+    const classes = record.classes.length > 0 ? record.classes.join("+") : "unclassified";
+    return [`${record.sourceServer}/${record.sourceTool} (${record.trust}, ${classes})`];
+  }));
+}
+
+function summarizeApprovalDestination(destination: DestinationSummary): string | undefined {
+  const parts = [
+    destination.hosts.length > 0 ? `hosts=${destination.hosts.join(",")}` : undefined,
+    destination.emailRecipients.length > 0 ? `emails=${destination.emailRecipients.join(",")}` : undefined,
+    destination.allowlistConfigured ? `allowlist=${destination.allowed ? "matched" : "not matched"}` : undefined
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join("; ") : undefined;
+}
+
 function summarizeDestinations(argumentFields: ArgumentField[], allowlist: PalizadeConfig["egress"]["allowlist"]): DestinationSummary {
   const hosts = dedupePreservingOrder(argumentFields.flatMap((field) => hostsFromField(field)));
   const emails = dedupePreservingOrder(argumentFields
@@ -1036,6 +1086,15 @@ function formatBlockedToolCallResultText(decision: PolicyDecision, tool: string,
   const rule = decision.matchedRuleId ?? "policy-default";
   const reason = scrubClientBlockText(trimTrailingPeriod(decision.reason));
   return `Palizade blocked this tool call. Rule: ${rule}. Reason: ${reason}. Tool: ${tool}. This action was prevented by your local Palizade security policy.`;
+}
+
+function formatApprovalDecisionReason(approval: ApprovalDecision): string {
+  const details = [
+    approval.reason,
+    approval.approvalUrl ? `approval page: ${approval.approvalUrl}` : undefined,
+    approval.approvalFile ? `approval URL file: ${approval.approvalFile}` : undefined
+  ].filter(Boolean);
+  return details.join("; ");
 }
 
 function scrubClientBlockText(text: string): string {

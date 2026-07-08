@@ -69,7 +69,7 @@ function formatApprovalPrompt(request: ApprovalRequest): string {
     request.tool ? `Tool: ${request.tool}` : undefined,
     request.method ? `Method: ${request.method}` : undefined,
     `Reason: ${request.reason}`,
-    request.taintIds.length > 0 ? `Taint: ${request.taintIds.join(", ")}` : undefined,
+    request.taintIds.length > 0 ? `Taint matches: ${request.taintIds.length}` : undefined,
     `Summary: ${request.summary}`,
     "Allow this operation? [y/N] "
   ].filter(Boolean);

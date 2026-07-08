@@ -15,6 +15,8 @@ export interface ApprovalDecision {
   approved: boolean;
   reason: string;
   approver?: string | undefined;
+  approvalUrl?: string | undefined;
+  approvalFile?: string | undefined;
 }
 
 export interface ApprovalProvider {

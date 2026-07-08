@@ -62,14 +62,14 @@ describe("InMemoryTaintStore", () => {
       sourceServer: "vault",
       sourceTool: "read_secret",
       trust: "trusted",
-      text: "secret token sk-testsecret000000000000000000",
+      text: "secret token sk-FAKETESTSECRET00000000000000",
       detectorScore: 0.9,
       labels: ["secret:openai"],
       classes: ["sensitive"]
     });
 
     expect(store.match("s1", "public tainted text").map((match) => match.taintId)).toContain(untrusted.id);
-    expect(store.match("s1", "secret token sk-testsecret000000000000000000", { classes: ["sensitive"] }).map((match) => match.taintId)).toContain(sensitive.id);
+    expect(store.match("s1", "secret token sk-FAKETESTSECRET00000000000000", { classes: ["sensitive"] }).map((match) => match.taintId)).toContain(sensitive.id);
     expect(store.match("s1", "public tainted text", { classes: ["sensitive"] })).toEqual([]);
   });
 });

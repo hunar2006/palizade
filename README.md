@@ -164,6 +164,7 @@ What this does not protect against in v1:
 - Compromised host OS.
 - Generic direct user jailbreaks.
 - Complete semantic paraphrase-laundering prevention.
+- Complete secret/PII discovery. Pattern detector coverage and misses are documented in `docs/detector-coverage.md`; run `pnpm eval:detectors` to reproduce the local corpus report.
 - Long-term vector-store or memory defenses.
 - Streamable HTTP transport.
 
@@ -174,6 +175,7 @@ pnpm install
 pnpm build
 pnpm test
 pnpm eval
+pnpm eval:detectors
 pnpm bench:latency
 ```
 
@@ -321,9 +323,18 @@ rules:
 Shipped presets:
 
 - `policies/audit-only.yaml`
+- `policies/interactive.yaml`
 - `policies/default.yaml`
 - `policies/egress.yaml`
 - `policies/strict.yaml`
+
+Preset guidance:
+
+- Use `audit-only` to observe what Palizade would flag without blocking.
+- Use `interactive` when you want tainted sink calls to require user confirmation, useful for legitimate user-authorized writes of tainted content.
+- Use `default` for unattended hard blocking of tainted content entering sinks.
+- Use `egress` when you also want opt-in secret/PII outbound controls.
+- Use `strict` for the tightest posture: hard blocks plus stricter metadata and suspicious-output handling.
 
 Policy can match on direction, method, server, tool, tool class, capabilities, trust, taint presence, sensitive taint, secret/PII detection, destination allowlist status, detector score, labels, lock status, temporal taint, argument roles, tainted argument roles, and argument regex.
 
@@ -354,7 +365,7 @@ Classifiers and heuristics can miss obfuscated attacks and can overfire on benig
 - Raw payload capture requires `audit.captureRawPayloads: true`; detected sensitive strings are masked before capture.
 - SQLite taint fingerprints are HMAC-protected by `.palizade/taint.key`; the key is local and never printed.
 - Policy evaluation errors fail closed by default in shipped enforcement policies.
-- Localhost approval is tokenized, one-time, POST-only, loopback-bound, and expires with the approval timeout.
+- Localhost approval is tokenized, one-time, POST-only, loopback-bound, and served from a persistent inbox at `http://127.0.0.1:32145/` by default, with ephemeral-port fallback if that port is busy. Headless clients also get `.palizade/pending-approval.url`, stderr logging, and a client-facing timeout/deny message that points back to the active inbox.
 - Non-interactive terminal approval defaults to deny.
 - Unknown tools on untrusted servers are blocked by the default policy; unknown tools on semi-trusted servers require approval; unknown tools on trusted servers are audit-logged.
 - Taint records are stored in `.palizade/taint.sqlite` with `profile` scope by default.
@@ -389,7 +400,7 @@ packages/taint      provenance records, fingerprints, matching, temporal taint
 packages/policy     YAML policy parser and evaluator
 packages/detectors  heuristic detector and optional ONNX adapter
 packages/audit      JSONL and SQLite audit sinks
-packages/approvals  terminal and test approval providers
+packages/approvals  terminal, localhost, and test approval providers
 packages/cli        init, wrap, lock, audit, doctor
 eval/               replay harness
 examples/           toy MCP server and transcripts
@@ -423,6 +434,6 @@ Server-initiated requests outside the explicit safe allowlist are blocked by def
 
 - Add the wrapped `filesystem` config to Claude Desktop or Claude Code.
 - Run normal file reads/writes inside an allowed test directory.
-- Confirm the localhost approval URL is visible from the client logs or terminal wrapper.
+- For `policies/interactive.yaml`, keep `http://127.0.0.1:32145/` open or check `.palizade/pending-approval.url`; then confirm a tainted sink approval can be approved and denied from a headless Claude Desktop run.
 - Repeat with any fetch/GitHub/Gmail server you plan to demo and add explicit `toolClasses` for unknown tools.
 - Run `palizade detectors verify <name>` before claiming any optional model detector is active.

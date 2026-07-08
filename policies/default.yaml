@@ -107,6 +107,7 @@ rules:
     when:
       direction: request
       method: tools/call
+      tool_class: sink
       capabilities_any:
         - network_egress
         - sends_message

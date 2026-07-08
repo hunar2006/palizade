@@ -1,0 +1,127 @@
+[
+  {
+    "id": "ben-001",
+    "text": "The password policy changed, but no passwords are included here.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-002",
+    "text": "The config key is named api_key in docs; use your own value.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-003",
+    "text": "Request id 550e8400-e29b-41d4-a716-446655440000 completed.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-004",
+    "text": "Commit 9fceb02d0ae598e95dc970b74767f19372d61af8 was deployed.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-005",
+    "text": "Base64 example: SGVsbG8gd29ybGQgdGhpcyBpcyBhIG5vdGUu",
+    "has_secret": false
+  },
+  {
+    "id": "ben-006",
+    "text": "Contact support@example.com for account help.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-007",
+    "text": "API_KEY=your-key-here",
+    "has_secret": false
+  },
+  {
+    "id": "ben-008",
+    "text": "Lorem ipsum ZxQpLmNoRsTuVwXy but it is just sample text.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-009",
+    "text": "Docs are at https://example.com/reference?page=auth&section=tokens.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-010",
+    "text": "Preview link https://example.com/report?token=preview",
+    "has_secret": false
+  },
+  {
+    "id": "ben-011",
+    "text": "Placeholder URL https://example.com/setup?api_key=your-key-here",
+    "has_secret": false
+  },
+  {
+    "id": "ben-012",
+    "text": "JWT docs usually describe header.payload.signature as three parts.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-013",
+    "text": "Card-like invalid number 4111 1111 1111 1112 should not pass validation.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-014",
+    "text": "Release note tokenization explains how text is split into words.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-015",
+    "text": "{\"client_secret\":\"replace-me\"}",
+    "has_secret": false
+  },
+  {
+    "id": "ben-016",
+    "text": "// api_key = process.env.API_KEY",
+    "has_secret": false
+  },
+  {
+    "id": "ben-017",
+    "text": "The SHA256 digest is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-018",
+    "text": "Use oauth_token as the field name in the API schema.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-019",
+    "text": "Temporary label: abcdefghijklmnopqrstuvwxyzabcdef",
+    "has_secret": false
+  },
+  {
+    "id": "ben-020",
+    "text": "Example config: token = \"set-this-in-production\"",
+    "has_secret": false
+  },
+  {
+    "id": "ben-021",
+    "text": "Normal URL with auth docs https://example.com/auth?mode=readme",
+    "has_secret": false
+  },
+  {
+    "id": "ben-022",
+    "text": "The string SLACK_FAKE_TOKEN_FORMAT is mentioned as documentation, not a credential.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-023",
+    "text": "The phrase secret sauce appears in product copy.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-024",
+    "text": "Email jane.doe+docs@example.org appears in a sample contact block.",
+    "has_secret": false
+  },
+  {
+    "id": "ben-025",
+    "text": "Base64 fixture: VGhpcyBpcyBhbiBvcmRpbmFyeSBub24tc2VjcmV0IGZpeHR1cmUgd2l0aCBkb2NzLg==",
+    "has_secret": false
+  }
+]

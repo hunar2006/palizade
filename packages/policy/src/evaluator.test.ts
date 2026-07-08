@@ -60,7 +60,19 @@ describe("evaluatePolicy", () => {
   });
 
   it("keeps strict tainted-sink blocking trust-agnostic and sanitizes strong response signals", async () => {
+    const shippedDefault = await loadPolicyFile(join(process.cwd(), "policies", "default.yaml"));
     const shippedStrict = await loadPolicyFile(join(process.cwd(), "policies", "strict.yaml"));
+
+    expect(evaluatePolicy(shippedDefault, {
+      direction: "request",
+      method: "tools/call",
+      trust: "trusted",
+      tool_class: "sink",
+      taint: true
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-tainted-sink"
+    });
 
     expect(evaluatePolicy(shippedStrict, {
       direction: "response",
@@ -80,6 +92,21 @@ describe("evaluatePolicy", () => {
       taint: true
     })).toMatchObject({
       action: "block",
+      matchedRuleId: "block-tainted-sink"
+    });
+  });
+
+  it("uses approval for tainted sinks in the shipped interactive preset only", async () => {
+    const interactive = await loadPolicyFile(join(process.cwd(), "policies", "interactive.yaml"));
+
+    expect(evaluatePolicy(interactive, {
+      direction: "request",
+      method: "tools/call",
+      trust: "trusted",
+      tool_class: "sink",
+      taint: true
+    })).toMatchObject({
+      action: "require_approval",
       matchedRuleId: "block-tainted-sink"
     });
   });

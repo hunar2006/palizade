@@ -41,6 +41,16 @@ rules:
     action: require_approval
     reason: Unknown tools on semi-trusted servers require approval.
 
+  - id: log-trusted-unknown-tool
+    name: Audit unknown tools on trusted servers
+    when:
+      direction: request
+      method: tools/call
+      trust: trusted
+      tool_class: unknown
+    action: log_only
+    reason: Unknown tool on trusted server allowed with audit logging.
+
   - id: log-unapproved-tool-metadata
     name: Surface tool lock drift
     when:
@@ -52,63 +62,6 @@ rules:
         - changed
     action: log_only
     reason: Tool metadata is not approved in palizade.lock.
-
-  - id: block-secret-egress
-    name: Block sensitive taint entering egress tools
-    when:
-      direction: request
-      method: tools/call
-      sensitive_taint: true
-      capabilities_any:
-        - network_egress
-        - sends_message
-        - writes_remote
-        - file_write
-        - writes_local
-    action: block
-    reason: Secret/credential is being sent to an external destination.
-
-  - id: block-secret-detected-egress
-    name: Block directly detected secrets entering egress tools
-    when:
-      direction: request
-      method: tools/call
-      secret_detected: true
-      capabilities_any:
-        - network_egress
-        - sends_message
-        - writes_remote
-        - file_write
-        - writes_local
-    action: block
-    reason: Secret-looking content is being sent to an egress-capable tool.
-
-  - id: block-sensitive-into-untrusted-destination
-    name: Block sensitive data to destinations outside the allowlist
-    when:
-      direction: request
-      method: tools/call
-      tool_class: sink
-      taint: true
-      destination_allowed: false
-      capabilities_any:
-        - network_egress
-        - sends_message
-        - writes_remote
-    action: block
-    reason: Tainted content is flowing to a destination outside the egress allowlist.
-
-  - id: redact-pii-egress
-    name: Redact detected PII before message egress
-    when:
-      direction: request
-      method: tools/call
-      pii_detected: true
-      capabilities_any:
-        - sends_message
-        - network_egress
-    action: redact_secrets
-    reason: PII-like content should be redacted before egress.
 
   - id: sanitize-suspicious-untrusted-output
     name: Spotlight suspicious untrusted output
@@ -139,30 +92,14 @@ rules:
     action: sanitize
     reason: Strong injection signal in tool output.
 
-  - id: allow-tainted-allowed-egress-destination
-    name: Allow tainted data only to explicitly allowlisted egress destinations
-    when:
-      direction: request
-      method: tools/call
-      tool_class: sink
-      taint: true
-      destination_allowed: true
-      destination_allowlist_configured: true
-      capabilities_any:
-        - network_egress
-        - sends_message
-        - writes_remote
-    action: allow
-    reason: Tainted egress destination is explicitly allowlisted.
-
   - id: block-tainted-sink
-    name: Block tainted content entering sinks
+    name: Require approval for tainted content entering sinks
     when:
       direction: request
       method: tools/call
       tool_class: sink
       taint: true
-    action: block
+    action: require_approval
     reason: Tainted content is flowing into a sink tool.
 
   - id: block-tainted-egress-destination
@@ -170,7 +107,6 @@ rules:
     when:
       direction: request
       method: tools/call
-      tool_class: sink
       capabilities_any:
         - network_egress
         - sends_message

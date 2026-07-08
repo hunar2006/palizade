@@ -13,6 +13,7 @@
     "eval:asr": "node eval/asr-table.mjs",
     "eval:promptguard2": "node eval/protocol-regression.mjs --detector promptguard2",
     "eval:combined": "node eval/protocol-regression.mjs --detector combined",
+    "eval:detectors": "node eval/detector-report.mjs",
     "bench:latency": "node eval/latency.mjs",
     "example:server": "node examples/toy-mcp-server/server.mjs",
     "example:flow": "node examples/run-toy-flow.mjs",

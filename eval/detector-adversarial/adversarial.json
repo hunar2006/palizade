@@ -1,0 +1,212 @@
+[
+  {
+    "id": "adv-001",
+    "text": "Deploy key: AKIAIOSFODNN7EXAMPLE",
+    "has_secret": true,
+    "obfuscation": "plaintext-aws",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-002",
+    "text": "Encoded credential: QUtJQUlPU0ZPRE5ON0VYQU1QTEU=",
+    "has_secret": true,
+    "obfuscation": "base64",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-003",
+    "text": "Split key placeholder:\nAWS_ACCESS_KEY_EXAMPLE",
+    "has_secret": true,
+    "obfuscation": "split-line",
+    "expected_detected": false
+  },
+  {
+    "id": "adv-004",
+    "text": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    "has_secret": true,
+    "obfuscation": "plaintext-jwt",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-005",
+    "text": "JWT with invisible separators: eyJhbGciOiJIUzI1NiJ9.\u200beyJzdWIiOiIxMjM0NTY3ODkwIn0.\u200bSflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    "has_secret": true,
+    "obfuscation": "zero-width",
+    "expected_detected": false
+  },
+  {
+    "id": "adv-006",
+    "text": "Homoglyph API key: sk-\u0410BCDEF1234567890abcdef123456",
+    "has_secret": true,
+    "obfuscation": "homoglyph",
+    "expected_detected": false
+  },
+  {
+    "id": "adv-007",
+    "text": "Callback: https://example.com/save?api_key=sk-FAKETESTSECRET1234567890abcdef",
+    "has_secret": true,
+    "obfuscation": "url-query-param",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-008",
+    "text": "{\"api_key\":\"sk-FAKEJSONSECRET00000000000000\"}",
+    "has_secret": true,
+    "obfuscation": "json-string",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-009",
+    "text": "// api_key = \"sk-FAKECOMMENTSECRET00000000000\"",
+    "has_secret": true,
+    "obfuscation": "code-comment",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-010",
+    "text": "Standalone high entropy value: Z9xQw7ErT5YuIoPaSdFgHjKl12345678",
+    "has_secret": true,
+    "obfuscation": "high-entropy-no-prefix",
+    "expected_detected": false
+  },
+  {
+    "id": "adv-011",
+    "text": "My api key is sk-FAKENATURALKEY000000000000",
+    "has_secret": true,
+    "obfuscation": "natural-language",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-012",
+    "text": "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "has_secret": true,
+    "obfuscation": "assignment",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-013",
+    "text": "Private key fixture redacted; replacement detector token sk-FAKEPRIVATEKEYCASE000000000000",
+    "has_secret": true,
+    "obfuscation": "redacted-private-key",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-014",
+    "text": "Google key AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKETES",
+    "has_secret": true,
+    "obfuscation": "plaintext-google",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-015",
+    "text": "Stripe fixture redacted; replacement detector token sk-FAKESTRIPECASE00000000000000",
+    "has_secret": true,
+    "obfuscation": "redacted-stripe",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-016",
+    "text": "Slack token fixture redacted; replacement detector token sk-FAKESLACKCASE00000000000000",
+    "has_secret": true,
+    "obfuscation": "redacted-slack",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-017",
+    "text": "GitHub token ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+    "has_secret": true,
+    "obfuscation": "plaintext-github",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-018",
+    "text": "OpenAI token sk-FAKEOPENAITOKEN000000000000",
+    "has_secret": true,
+    "obfuscation": "plaintext-openai",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-019",
+    "text": "Webhook URL https://example.com/hook?token=aB93Klm27PqRsT45UvWxYz890MnOpQ12",
+    "has_secret": true,
+    "obfuscation": "url-query-param",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-020",
+    "text": "Auth URL https://example.com/callback?auth=Zx81QpLmN0rStUvWxYzAbCdEfGhIjK9",
+    "has_secret": true,
+    "obfuscation": "url-query-param",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-021",
+    "text": "Encoded assignment: YXdzX3NlY3JldF9hY2Nlc3Nfa2V5PXdKYWxyWFV0bkZFTUkvSzdNREVORy9iUHhSZmlDWUVYQU1QTEVLRVk=",
+    "has_secret": true,
+    "obfuscation": "base64",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-022",
+    "text": "Bearer token: Bearer eyJraWQiOiJrZXkxMjM0In0.eyJpc3MiOiJwYWxpemFkZSJ9.XYzabcDEF1234567890",
+    "has_secret": true,
+    "obfuscation": "bearer-jwt",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-023",
+    "text": "secret : \"nV4xZ8mQ2pL7rT0yS3dF6gH9jK1aB5cD\"",
+    "has_secret": true,
+    "obfuscation": "assignment",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-024",
+    "text": "client_secret = \"Cs9vLmNoPqRsTuvWxYz0123456789AbC\"",
+    "has_secret": true,
+    "obfuscation": "assignment",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-025",
+    "text": "Spaced token: sk-FAKE TEST TOKEN VALUE 1234",
+    "has_secret": true,
+    "obfuscation": "split-token",
+    "expected_detected": false
+  },
+  {
+    "id": "adv-026",
+    "text": "Encoded query value https://example.com/save?api_key=sk%2DFAKEURLENCODEDSECRET1234567890",
+    "has_secret": true,
+    "obfuscation": "url-query-param",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-027",
+    "text": "[save](https://example.com/save?access_token=AKIAIOSFODNN7EXAMPLE)",
+    "has_secret": true,
+    "obfuscation": "url-query-param",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-028",
+    "text": "token=0123456789abcdef0123456789abcdef",
+    "has_secret": true,
+    "obfuscation": "assignment",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-029",
+    "text": "api_key=Qw7eRt9yUi2oPa5sDf8gHj1kLz4xCv6b",
+    "has_secret": true,
+    "obfuscation": "assignment",
+    "expected_detected": true
+  },
+  {
+    "id": "adv-030",
+    "text": "Homoglyph OpenAI token: sk-\u0430bcdefghijklmnopqrstuvwxyz1234",
+    "has_secret": true,
+    "obfuscation": "homoglyph",
+    "expected_detected": false
+  }
+]

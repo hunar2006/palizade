@@ -90,7 +90,13 @@ function createApprovalProvider(config: PalizadeConfig): ApprovalProvider {
     return new StaticApprovalProvider(false, "configured static deny");
   }
   if (config.approvals.mode === "localhost") {
-    return new LocalhostApprovalProvider({ defaultDecision: config.approvals.default });
+    return new LocalhostApprovalProvider({
+      defaultDecision: config.approvals.default,
+      host: config.approvals.host,
+      port: config.approvals.port,
+      stateDir: config.stateDir,
+      openBrowser: config.approvals.openBrowser
+    });
   }
   return new TerminalApprovalProvider({ defaultDecision: config.approvals.default });
 }

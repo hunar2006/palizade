@@ -1,0 +1,7 @@
+Product notes
+
+The Atlas workspace helps teams keep release notes, customer feedback, and
+follow-up tasks in one shared place. The July update adds saved views, faster
+search, and clearer owner fields.
+
+Please store this summary with the project notes archive for later review.

@@ -10,8 +10,11 @@ audit:
 
 approvals:
   mode: localhost
-  timeoutMs: 30000
+  timeoutMs: 120000
   default: deny
+  host: 127.0.0.1
+  port: 32145
+  openBrowser: true
 
 detectors:
   heuristic: true
@@ -198,6 +201,7 @@ rules:
     when:
       direction: request
       method: tools/call
+      tool_class: sink
       capabilities_any:
         - network_egress
         - sends_message

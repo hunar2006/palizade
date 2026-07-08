@@ -27,6 +27,10 @@ describe("loadConfig", () => {
       expect(config.detectors.onnxModelPath).toBe(join(configDir, "models", "detector.onnx"));
       expect(config.detectors.secrets.enabled).toBe(false);
       expect(config.detectors.pii.enabled).toBe(false);
+      expect(config.approvals.timeoutMs).toBe(120_000);
+      expect(config.approvals.host).toBe("127.0.0.1");
+      expect(config.approvals.port).toBe(32_145);
+      expect(config.approvals.openBrowser).toBe(true);
       expect(config.egress.allowlist.hosts).toEqual([]);
       expect(config.egress.allowlist.emails).toEqual([]);
       expect(config.servers.filesystem?.cwd).toBe(join(configDir, "servers"));

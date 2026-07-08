@@ -85,9 +85,12 @@ export const palizadeConfigSchema = z.object({
   }).default({ jsonl: ".palizade/audit.jsonl", sqlite: ".palizade/audit.sqlite", captureRawPayloads: false, errorVerbosity: true }),
   approvals: z.object({
     mode: z.enum(["terminal", "localhost", "static-allow", "static-deny"]).default("terminal"),
-    timeoutMs: z.number().int().positive().default(30_000),
-    default: z.enum(["allow", "deny"]).default("deny")
-  }).default({ mode: "terminal", timeoutMs: 30_000, default: "deny" }),
+    timeoutMs: z.number().int().positive().default(120_000),
+    default: z.enum(["allow", "deny"]).default("deny"),
+    host: z.string().default("127.0.0.1"),
+    port: z.number().int().min(0).max(65_535).default(32_145),
+    openBrowser: z.boolean().default(true)
+  }).default({ mode: "terminal", timeoutMs: 120_000, default: "deny", host: "127.0.0.1", port: 32_145, openBrowser: true }),
   detectors: z.object({
     heuristic: z.boolean().default(true),
     onnxModelPath: z.string().optional(),

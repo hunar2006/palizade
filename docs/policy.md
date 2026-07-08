@@ -41,6 +41,18 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 
 Set `audit.errorVerbosity: false` to make client-facing tool-call block messages opaque. The default `true` includes the matched rule id and human reason so MCP clients and models can tell that Palizade blocked the call, rather than guessing that the upstream tool failed.
 
+For headless desktop clients, prefer `approvals.mode: localhost`. It serves a persistent loopback approval inbox at `http://127.0.0.1:32145/` by default, attempts to open the one-time approval page in the default browser, writes the current approval URL to `.palizade/pending-approval.url`, and includes that inbox/file hint in the client-facing tool error if the request times out or is denied. If the fixed port is already occupied by another Palizade process, localhost mode falls back to an ephemeral port and writes the actual URL to the same file and client-facing hint. `approvals.openBrowser: false` disables browser launch while keeping the inbox and URL file.
+
+## Preset Spectrum
+
+- `policies/audit-only.yaml`: log suspicious metadata, tainted sinks, resource/prompt injection, and sampling without enforcement.
+- `policies/interactive.yaml`: same posture as `default`, except `block-tainted-sink` uses `require_approval`. Choose this when legitimate user-authorized writes of tainted content should be possible after confirmation.
+- `policies/default.yaml`: hard-blocks tainted content entering sink tools while keeping suspicious output sanitized.
+- `policies/egress.yaml`: opt-in preset that adds secret/PII outbound controls and destination allowlists.
+- `policies/strict.yaml`: strictest preset; blocks lock drift, suspicious output, unknown tools, tainted sinks, and secret egress.
+
+Which preset should I use? Start with `audit-only` to learn your traffic. Use `interactive` for desktop/operator workflows where a human can confirm risky writes. Use `default` for unattended agents where tainted sink calls should not have an escape hatch. Use `egress` or `strict` when protecting secrets and destinations is part of the goal.
+
 ## Egress Preset
 
 `policies/egress.yaml` is opt-in. It keeps the default prompt-injection and taint protections, then adds:
