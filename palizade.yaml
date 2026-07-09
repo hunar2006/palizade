@@ -83,6 +83,23 @@ servers:
     sensitive: false
     sensitiveTools: {}
     sensitivePathPatterns: []
+  mock_email:
+    command: node
+    args:
+      - examples/mock-email-server/server.mjs
+    trust: untrusted
+    toolClasses:
+      read_message: source
+      send_email: sink
+    toolCapabilities:
+      read_message:
+        - reads_untrusted_content
+      send_email:
+        - sends_message
+        - network_egress
+    sensitive: false
+    sensitiveTools: {}
+    sensitivePathPatterns: []
   filesystem:
     command: node
     args:
