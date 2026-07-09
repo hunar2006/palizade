@@ -1,6 +1,6 @@
 {
   "name": "palizade",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP-native prompt-injection firewall and security proxy.",
   "license": "Apache-2.0",
   "type": "module",
