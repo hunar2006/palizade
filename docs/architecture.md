@@ -20,7 +20,7 @@ The current transport is strict newline-delimited JSON-RPC over stdio, matching 
 
 ## Client Config Installation
 
-`palizade install-config <serverName>` writes a Claude Desktop `mcpServers` entry for the wrapper. The generated entry uses `process.execPath` and an absolute path to the running Palizade CLI instead of a shell shim, which avoids Windows `.cmd` and `.ps1` resolution pitfalls. Existing client config files are parsed, merged, backed up to `.bak`, and never overwritten if the JSON is malformed.
+`palizade install-config <serverName>` writes a Claude Desktop `mcpServers` entry for the wrapper. The generated entry uses `process.execPath` and an absolute path to the running Palizade CLI instead of a shell shim, which avoids Windows `.cmd` and `.ps1` resolution pitfalls. Existing client config files are parsed, merged, backed up to `.bak`, and never overwritten if the JSON is malformed. Use `--client-config` for non-standard client config locations.
 
 `palizade install-config --all` is the bulk protection path. It reads the target client config, skips entries already routed through Palizade, rewrites each remaining `mcpServers` entry in place, and stores the original upstream `command`, `args`, optional `cwd`, and optional `env` in `palizade.yaml` under `servers`. Auto-added servers default to `trust: untrusted` with empty `toolClasses`, which keeps the first run conservative while relying on built-in name and annotation heuristics until the operator tightens the config.
 
@@ -30,7 +30,7 @@ Bulk install prints lock-approval commands for newly added servers instead of st
 palizade lock approve <serverName>
 ```
 
-`palizade doctor` reports client config coverage by listing every configured MCP server and whether it is routed through Palizade. This coverage is limited to MCP servers. Native client tools, including Claude Code's built-in file and shell tools, bypass MCP and are not protected by Palizade.
+`palizade doctor` reports client config coverage by listing every configured MCP server and whether it is routed through Palizade. This coverage is limited to configured MCP servers. Native client tools, including Claude Code's built-in file and shell tools, bypass MCP and are not protected by Palizade.
 
 ## Interception Points
 
@@ -97,6 +97,6 @@ Audit events include event ID, timestamp, session/profile/scope/run identifiers 
 
 - Stdio is implemented first; streamable HTTP is left for a later transport.
 - Optional model support is externally configured and must pass `palizade detectors verify` before being described as active.
-- Secret and PII detection is pattern-based and high-precision by design; custom, transformed, or obfuscated secrets can be missed.
+- Secret and PII detection is pattern-based and high-precision by design; custom, transformed, split, or obfuscated secrets can be missed. Egress allowlists and taint/provenance rules are the structural controls.
 - Fuzzy matching is lightweight SimHash, not semantic equivalence.
 - Prompt Guard 2 is opt-in because downloading the model during every `init` would make the default DX heavy.

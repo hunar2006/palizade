@@ -48,10 +48,10 @@ For headless desktop clients, prefer `approvals.mode: localhost`. It serves a pe
 - `policies/audit-only.yaml`: log suspicious metadata, tainted sinks, resource/prompt injection, and sampling without enforcement.
 - `policies/interactive.yaml`: same posture as `default`, except `block-tainted-sink` uses `require_approval`. Choose this when legitimate user-authorized writes of tainted content should be possible after confirmation.
 - `policies/default.yaml`: hard-blocks tainted content entering sink tools while keeping suspicious output sanitized.
-- `policies/egress.yaml`: opt-in preset that adds secret/PII outbound controls and destination allowlists.
 - `policies/strict.yaml`: strictest preset; blocks lock drift, suspicious output, unknown tools, tainted sinks, and secret egress.
+- `policies/egress.yaml`: opt-in preset that keeps the default prompt-injection and taint posture, then adds secret/PII outbound controls and destination allowlists.
 
-Which preset should I use? Start with `audit-only` to learn your traffic. Use `interactive` for desktop/operator workflows where a human can confirm risky writes. Use `default` for unattended agents where tainted sink calls should not have an escape hatch. Use `egress` or `strict` when protecting secrets and destinations is part of the goal.
+Which preset should I use? Start with `audit-only` to learn your traffic. Use `interactive` for desktop/operator workflows where a human can confirm risky writes. Use `default` for unattended agents where tainted sink calls should not have an escape hatch. Use `strict` for the tightest core posture. Use `egress` when protecting secrets, PII, or outbound destinations is part of the goal.
 
 ## Egress Preset
 
@@ -63,7 +63,7 @@ Which preset should I use? Start with `audit-only` to learn your traffic. Use `i
 - `allow-tainted-allowed-egress-destination`: lets tainted network/message egress proceed only when an allowlist is configured and the destination matches it.
 - `redact-pii-egress`: detected PII in message/network egress is redacted before forwarding.
 
-The allowlist rule is structural: with an allowlist configured, tainted data must flow only to allowed hosts/domains/emails. Secret and PII detection is pattern-based and intentionally high precision; it can miss custom or obfuscated secrets.
+The allowlist rule is structural: with an allowlist configured, tainted data must flow only to allowed hosts/domains/emails. Secret and PII detection is pattern-based and intentionally high precision; it can miss custom, transformed, split, or obfuscated secrets.
 
 ## Default Unknown Tool Behavior
 
