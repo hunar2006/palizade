@@ -1,0 +1,6 @@
+Category,N,ASR (off),ASR (default),ASR (strict)
+"Direct injection","15","100%","7%","0%"
+"Indirect/tool injection","25","100%","4%","4%"
+"Encoded/obfuscated","10","100%","0%","0%"
+"Total attacks","50","100%","4%","2%"
+"Benign FP rate","25","0%","0%","0%"
