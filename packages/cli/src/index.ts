@@ -13,7 +13,13 @@ import {
 import { JsonlAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
 import { SqliteTaintStore } from "@palizade/taint";
-import { getRunningCliPath, installClientConfig, selectInstallConfigPath } from "./install-config.js";
+import {
+  getRunningCliPath,
+  inspectClientCoverage,
+  installAllClientConfigs,
+  installClientConfig,
+  selectInstallConfigPath
+} from "./install-config.js";
 import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
 
 declare const __PKG_VERSION__: string;
@@ -39,21 +45,78 @@ program.command("init")
 
 program.command("install-config")
   .description("Install a Palizade wrapper entry into an MCP client config")
-  .argument("<serverName>", "Server name from palizade.yaml")
+  .argument("[serverName]", "Server name from palizade.yaml")
   .option("--client <name>", "Target client", "claude-desktop")
   .option("--config <path>", "Path to this project's palizade.yaml")
   .option("--client-config <path>", "Override the client config file location")
   .option("--name <entryName>", "Name for the mcpServers entry")
+  .option("--all", "Wrap every unprotected MCP server in the client config", false)
+  .option("--lock", "Print lock approve commands for newly auto-added servers", false)
   .option("--dry-run", "Print the resulting config to stdout without writing", false)
   .option("--force", "Overwrite an existing mcpServers entry", false)
-  .action(async (serverName: string, options: {
+  .action(async (serverName: string | undefined, options: {
     client: string;
     config?: string;
     clientConfig?: string;
     name?: string;
+    all: boolean;
+    lock: boolean;
     dryRun: boolean;
     force: boolean;
   }, command: Command) => {
+    if (options.all) {
+      if (serverName) {
+        throw new Error("install-config --all does not take a serverName argument.");
+      }
+      if (options.name) {
+        throw new Error("install-config --all cannot be combined with --name.");
+      }
+      const result = await installAllClientConfigs({
+        client: options.client,
+        configPath: selectInstallConfigPath(command, program),
+        clientConfigPath: options.clientConfig,
+        dryRun: options.dryRun,
+        cliPath: getRunningCliPath()
+      });
+      for (const warning of result.warnings) {
+        console.warn(warning);
+      }
+      for (const skipped of result.skipped) {
+        console.log(`Skipped ${skipped.name}: ${skipped.reason}`);
+      }
+      for (const wrapped of result.wrapped) {
+        const configAction = wrapped.addedToPalizadeConfig ? "added to palizade.yaml with trust=untrusted" : "using existing palizade.yaml server";
+        console.log(`Wrapped ${wrapped.name}: ${configAction}`);
+      }
+      if (options.dryRun) {
+        console.log("Client config after --all:");
+        console.log(result.configJson);
+        console.log("Palizade config after --all:");
+        console.log(result.palizadeConfigJson);
+      } else if (result.wrapped.length > 0) {
+        console.log(`Updated ${result.clientConfigPath}`);
+        console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new config file)");
+        if (result.palizadeConfigWritten) {
+          console.log(`Updated ${result.palizadeConfigPath}`);
+        }
+        console.log("Auto-added servers default to trust=untrusted. Review palizade.yaml and tighten toolClasses/toolCapabilities where needed.");
+        console.log("Fully quit and reopen Claude Desktop for the change to take effect.");
+      } else {
+        console.log("No unprotected MCP server entries found.");
+      }
+      if (result.lockCommands.length > 0) {
+        console.log(options.lock
+          ? "Lock approval is not run automatically because it starts upstream MCP servers. Run these commands after reviewing the auto-added servers:"
+          : "Next, approve current tool metadata for newly auto-added servers:");
+        for (const lockCommand of result.lockCommands) {
+          console.log(`  ${lockCommand}`);
+        }
+      }
+      return;
+    }
+    if (!serverName) {
+      throw new Error("install-config requires a serverName unless --all is used.");
+    }
     const result = await installClientConfig({
       serverName,
       client: options.client,
@@ -121,7 +184,7 @@ detectors.command("verify")
     }
     if (name === "promptguard2") {
       const configPath = program.opts<{ config: string }>().config;
-      const config = await loadConfig(configPath);
+      const config = await loadConfigForCli(configPath);
       if (!config.detectors.promptGuard2.enabled) {
         throw new Error("promptguard2 is not enabled in palizade.yaml; inference was not performed");
       }
@@ -155,7 +218,7 @@ program.command("wrap")
   .argument("<serverName>", "Server name from palizade.yaml")
   .action(async (serverName: string) => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     const server = config.servers[serverName];
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
@@ -174,7 +237,7 @@ lock.command("approve")
   .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
   .action(async (serverName: string, options: { timeout: string }) => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     const server = config.servers[serverName];
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
@@ -197,7 +260,7 @@ const audit = program.command("audit")
   .option("--limit <n>", "Maximum events", "50")
   .action(async (options: { last: string; action?: string; session?: string; server?: string; tool?: string; limit: string }) => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     const sink = new JsonlAuditSink(config.audit.jsonl);
     const query: {
       since: Date;
@@ -235,7 +298,7 @@ audit.command("verify")
   .description("Verify the audit JSONL hash chain")
   .action(async () => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     const events = await new JsonlAuditSink(config.audit.jsonl).query({ limit: Number.MAX_SAFE_INTEGER });
     const result = verifyAuditChain(events);
     if (result.ok) {
@@ -252,7 +315,7 @@ audit.command("prune")
   .option("--older-than <duration>", "Duration such as 30d", "30d")
   .action(async (options: { olderThan: string }) => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     const pruned = await new JsonlAuditSink(config.audit.jsonl).prune(new Date(Date.now() - parseDuration(options.olderThan)));
     console.log(`Pruned ${pruned} audit event(s).`);
   });
@@ -264,7 +327,7 @@ taint.command("prune")
   .description("Prune expired taint records")
   .action(async () => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     const store = new SqliteTaintStore(config.taint.sqlite, {
       scope: config.taint.scope,
       profileId: config.taint.profileId,
@@ -279,15 +342,40 @@ taint.command("prune")
 
 program.command("doctor")
   .description("Validate local Palizade configuration")
-  .action(async () => {
+  .option("--client <name>", "Target client for MCP coverage", "claude-desktop")
+  .option("--client-config <path>", "Override the client config file location for coverage")
+  .action(async (options: { client: string; clientConfig?: string }) => {
     const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfig(configPath);
+    const config = await loadConfigForCli(configPath);
     console.log(`Config: ${resolve(configPath)}`);
     console.log(`Policy: ${config.policy}`);
     console.log(`Lockfile: ${config.lockfile}`);
     console.log(`Audit JSONL: ${config.audit.jsonl}`);
     for (const [name, server] of Object.entries(config.servers)) {
       console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+    }
+    const coverage = await inspectClientCoverage({
+      client: options.client,
+      clientConfigPath: options.clientConfig
+    });
+    console.log(`Client config: ${coverage.clientConfigPath}`);
+    if (!coverage.existed) {
+      for (const warning of coverage.warnings) {
+        console.log(warning);
+      }
+    } else if (coverage.rows.length === 0) {
+      console.log("MCP coverage: no mcpServers entries found.");
+    } else {
+      console.log("MCP coverage:");
+      for (const row of coverage.rows) {
+        console.log(`  ${row.wrapped ? "protected" : "UNPROTECTED"} ${row.name}: ${row.command}`);
+        if (row.advice) {
+          console.log(`    ${row.advice}`);
+        }
+      }
+    }
+    if (coverage.nativeToolsNote) {
+      console.log(coverage.nativeToolsNote);
     }
   });
 
@@ -304,6 +392,31 @@ async function writeIfMissing(path: string, content: string, force: boolean): Pr
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf8");
   console.log(`Wrote ${path}`);
+}
+
+async function loadConfigForCli(configPath: string): ReturnType<typeof loadConfig> {
+  try {
+    return await loadConfig(configPath);
+  } catch (error) {
+    if (isMissingConfigError(error)) {
+      throw new Error(missingConfigMessage(configPath));
+    }
+    throw error;
+  }
+}
+
+function isMissingConfigError(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function missingConfigMessage(configPath: string): string {
+  if (configPath === "palizade.yaml" || resolve(configPath) === resolve("palizade.yaml")) {
+    return "No palizade.yaml found in current directory. Run 'palizade init' first, or pass -c <path>.";
+  }
+  return `No Palizade config found at ${resolve(configPath)}. Run 'palizade init' first, or pass -c <path> to an existing config.`;
 }
 
 async function exists(path: string): Promise<boolean> {

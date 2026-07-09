@@ -22,6 +22,16 @@ The current transport is strict newline-delimited JSON-RPC over stdio, matching 
 
 `palizade install-config <serverName>` writes a Claude Desktop `mcpServers` entry for the wrapper. The generated entry uses `process.execPath` and an absolute path to the running Palizade CLI instead of a shell shim, which avoids Windows `.cmd` and `.ps1` resolution pitfalls. Existing client config files are parsed, merged, backed up to `.bak`, and never overwritten if the JSON is malformed.
 
+`palizade install-config --all` is the bulk protection path. It reads the target client config, skips entries already routed through Palizade, rewrites each remaining `mcpServers` entry in place, and stores the original upstream `command`, `args`, optional `cwd`, and optional `env` in `palizade.yaml` under `servers`. Auto-added servers default to `trust: untrusted` with empty `toolClasses`, which keeps the first run conservative while relying on built-in name and annotation heuristics until the operator tightens the config.
+
+Bulk install prints lock-approval commands for newly added servers instead of starting them automatically. Starting arbitrary MCP servers during config installation can have side effects, so the explicit follow-up is:
+
+```bash
+palizade lock approve <serverName>
+```
+
+`palizade doctor` reports client config coverage by listing every configured MCP server and whether it is routed through Palizade. This coverage is limited to MCP servers. Native client tools, including Claude Code's built-in file and shell tools, bypass MCP and are not protected by Palizade.
+
 ## Interception Points
 
 1. `initialize`

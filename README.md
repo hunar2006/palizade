@@ -214,6 +214,22 @@ palizade install-config filesystem
 
 By default this edits Claude Desktop's config and adds an entry named `palizade-filesystem`. It writes an absolute `node` command plus an absolute path to the Palizade CLI, which avoids Windows `.cmd` and `.ps1` shim issues. Use `--dry-run` to preview the full JSON first, `--client-config <path>` for non-standard installs, and `--force` to replace an existing entry.
 
+To protect every configured MCP server in one pass:
+
+```bash
+palizade install-config --all --dry-run
+palizade install-config --all
+palizade doctor
+```
+
+`--all` reads the client config, skips entries already routed through Palizade, rewrites each remaining `mcpServers` entry in place, and adds the original upstream `command`/`args` to `palizade.yaml`. Auto-added servers default to `trust: untrusted` and empty `toolClasses`, so Palizade uses its built-in name/annotation heuristics until you review and tighten the config. Existing Palizade server definitions are not overwritten.
+
+`install-config --all` backs up the client config before writing. It does not automatically start each upstream server for lock approval, because that can execute arbitrary local commands; instead it prints exact `palizade lock approve <server>` commands for newly added servers.
+
+`palizade doctor` now includes MCP coverage for the target client config and warns about any configured server that is not protected. Use `--client-config <path>` when your client config is in a non-standard location.
+
+Palizade wraps configured MCP servers only. It does not intercept native client tools such as Claude Code's built-in Read, Write, or Bash tools.
+
 Real filesystem server before:
 
 ```json
@@ -375,6 +391,7 @@ Classifiers and heuristics can miss obfuscated attacks and can overfire on benig
 ```bash
 palizade init
 palizade install-config <serverName>
+palizade install-config --all
 palizade wrap <serverName>
 palizade lock approve <serverName>
 palizade detectors install promptguard2
