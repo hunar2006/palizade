@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "clean": "node scripts/clean.mjs",
     "eval": "node eval/replay.mjs && node eval/protocol-regression.mjs",
+    "eval:fixtures": "node eval/generate-injecagent-fixtures.mjs",
     "eval:asr": "node eval/asr-table.mjs",
     "eval:promptguard2": "node eval/protocol-regression.mjs --detector promptguard2",
     "eval:combined": "node eval/protocol-regression.mjs --detector combined",

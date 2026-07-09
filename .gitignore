@@ -3,6 +3,7 @@ node_modules/
 .palizade/
 dist/
 packages/*/dist/
+eval/.tmp-injecagent/
 *.tgz
 *.tsbuildinfo
 .env
