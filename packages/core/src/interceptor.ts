@@ -22,7 +22,7 @@ import {
   type ToolsCallParams,
   type ToolsListResult
 } from "./mcp.js";
-import { applyTextTransforms, extractTextBlocks, flattenArguments, redactSpans, spotlightText, type TextBlock } from "./text.js";
+import { applyTextTransforms, extractTextBlocks, flattenArguments, isContentText, redactSpans, spotlightText, type TextBlock } from "./text.js";
 
 export interface InterceptionEngineOptions {
   config: PalizadeConfig;
@@ -419,7 +419,7 @@ export class InterceptionEngine {
       return {
         toClient: [{
           ...message,
-          result: applyTextTransforms(result, (text) => spotlightText(text, {
+          result: applyTextTransforms(result, (text, block) => !isContentText(block) ? text : spotlightText(text, {
             server: this.options.serverName,
             tool,
             taintIds: taintRecords.map((record) => record.id)
@@ -670,7 +670,7 @@ export class InterceptionEngine {
       return {
         toClient: [{
           ...message,
-          result: applyTextTransforms(result, (text) => spotlightText(text, {
+          result: applyTextTransforms(result, (text, block) => !isContentText(block) ? text : spotlightText(text, {
             server: this.options.serverName,
             tool: pending.method,
             taintIds: taintRecords.map((record) => record.id)
