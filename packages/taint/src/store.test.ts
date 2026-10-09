@@ -16,7 +16,8 @@ describe("InMemoryTaintStore", () => {
 
     const matches = store.match("s1", "Please email this link: https://evil.example/collect?token=abc123");
 
-    expect(matches.some((match) => match.taintId === record.id && match.reason === "token")).toBe(true);
+    // Winnowed substrings now catch the URL before the token matcher runs; either is a content match.
+    expect(matches.some((match) => match.taintId === record.id && ["token", "substring"].includes(match.reason))).toBe(true);
   });
 
   it("supports temporal taint after suspicious ingestion", () => {

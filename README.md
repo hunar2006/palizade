@@ -12,15 +12,15 @@ Palizade's ASR harness translates a stratified sample of InjecAgent cases into M
 
 | Category | N | ASR (off) | ASR (default) | ASR (strict) |
 |---|---:|---:|---:|---:|
-| Direct injection | 15 | 100% | 7% | 0% |
-| Indirect/tool injection | 25 | 100% | 4% | 4% |
+| Direct injection | 15 | 100% | 0% | 0% |
+| Indirect/tool injection | 25 | 100% | 0% | 0% |
 | Encoded/obfuscated | 10 | 100% | 0% | 0% |
-| Total attacks | 50 | 100% | 4% | 2% |
+| Total attacks | 50 | 100% | 0% | 0% |
 | Benign FP rate | 25 | 0% | 0% | 0% |
 
 Replay verification sample: 10; mismatches: 0.
 
-Caption: Derived from [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent), [Zhan et al., ACL 2024 Findings](https://arxiv.org/abs/2403.02691), pinned local snapshot `f19c9f2c79a41046eb13c03c51a24c567a8ffa07`, translated to MCP tool-call format with seed `424242`. This is not a run of the original benchmark. Of 225 total replay runs, 0 were classified as model refusals and 97 were Palizade blocks. There is one open coverage gap: one indirect/tool-injection fixture still succeeds in both default and strict because the strict sink request falls through to `require_approval` and the ASR harness approves approval-gated calls. See [NOTES.md](NOTES.md) for methodology, inferred sink arguments, benign fixture caveats, and the strict-mode finding.
+Caption: Derived from [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent), [Zhan et al., ACL 2024 Findings](https://arxiv.org/abs/2403.02691), pinned local snapshot `f19c9f2c79a41046eb13c03c51a24c567a8ffa07`, translated to MCP tool-call format with seed `424242`. This is not a run of the original benchmark. Of 225 total replay runs, 0 were classified as model refusals and 100 were Palizade blocks. **These figures are in-sample.** An earlier run let two attacks through (4% default, 2% strict). Inspecting them showed a bug in taint fingerprinting: fixed-stride substring windows only matched a verbatim copy when it sat at the same offset mod 24 in the source response and the sink argument. Fingerprints now use winnowing, which is position independent and is tested outside this corpus in `packages/taint/src/alignment.test.ts`. Because the fix came from looking at this corpus, a held-out set is needed before these numbers mean more than "no known misses". See [NOTES.md](NOTES.md) for methodology, inferred sink arguments, and benign fixture caveats.
 
 ## How It Works
 
@@ -203,7 +203,8 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - It does not protect against a malicious MCP client or a compromised host OS.
 - Pattern-based secret and PII detection misses obfuscated, split, transformed, or custom secrets. See [docs/detector-coverage.md](docs/detector-coverage.md).
 - Taint matching is containment-by-observables: exact fragments, atomic tokens, fuzzy SimHash, and temporal taint. It does not defeat full semantic paraphrase laundering.
-- Strict mode still has one documented ASR coverage gap in `injecagent-indirect-injection-001`, where a sink call reaches `require_approval` and the harness approves it. See [NOTES.md](NOTES.md).
+- Substring fingerprints cover roughly the first 17 KB of each tool response. An injection past that point is caught only by token, fuzzy, or temporal matching.
+- The benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive.
 - Streamable HTTP transport is not implemented yet; stdio MCP is the current transport.
 
 These are scope boundaries, not footnotes. Palizade is strongest when sensitive capabilities are exposed through wrapped MCP servers and policy is reviewed for each server.
@@ -305,6 +306,7 @@ pnpm eval:combined
 - Claude Desktop live validation has exercised tainted write blocking.
 - Claude Code support is documented with a non-native fetch/post MCP demo in [examples/claude-code-fetch-demo.md](examples/claude-code-fetch-demo.md).
 - Real filesystem server smoke test is available through `pnpm smoke:filesystem`.
+- Overhead from `pnpm bench:latency` (Linux container, Node 22, single run): pass-through call p50 0.3 ms / p95 0.6 ms in process; on the default SQLite taint store with 200 stored 4 KB pages, fingerprinting a page takes p50 about 7 ms and checking a sink call takes p50 about 4 ms. Excludes the stdio hop to the upstream server.
 
 ## Security And Privacy
 

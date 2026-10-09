@@ -35,15 +35,39 @@ export function makeFingerprint(input: string): TaintFingerprint {
   };
 }
 
-export function makeSubstrings(normalized: string, size = 48, stride = 24, max = 160): string[] {
-  if (normalized.length < size) {
+// Winnowing (Schleimer et al. 2003): keep the min-hash k-gram in every window of w k-grams.
+// Selection depends only on content, so copied text matches at any offset; any shared run of
+// at least k + w - 1 (47) chars is guaranteed to share a fragment. Fixed-stride windows were not.
+// shortcut: stops after `max` fragments (~17 KB of text); injections past that rely on token,
+// fuzzy and temporal matching. Raise max or switch to sampled coverage if long pages matter.
+export function makeSubstrings(normalized: string, k = 32, w = 16, max = 2048): string[] {
+  if (normalized.length < k) {
     return normalized.length >= 16 ? [normalized] : [];
   }
-  const chunks: string[] = [];
-  for (let index = 0; index <= normalized.length - size && chunks.length < max; index += stride) {
-    chunks.push(normalized.slice(index, index + size));
+  // At most one new pick per window, so max * w k-grams always suffices; bounds work on huge pages.
+  const grams = Math.min(normalized.length - k + 1, max * w);
+  const hashes = new Array<number>(grams);
+  for (let index = 0; index < grams; index += 1) {
+    hashes[index] = fnv1a(normalized, index, index + k);
   }
-  return chunks;
+  const picked: number[] = [];
+  for (let start = 0; start + Math.min(w, grams) <= grams && picked.length < max; start += 1) {
+    let best = start;
+    for (let index = start + 1; index < Math.min(start + w, grams); index += 1) {
+      // Rightmost minimum, so ties pick the same k-gram across overlapping windows.
+      if (hashes[index]! <= hashes[best]!) best = index;
+    }
+    if (picked.at(-1) !== best) picked.push(best);
+  }
+  return [...new Set(picked.map((index) => normalized.slice(index, index + k)))];
+}
+
+function fnv1a(text: string, from: number, to: number): number {
+  let hash = 0x811c9dc5;
+  for (let index = from; index < to; index += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  }
+  return hash >>> 0;
 }
 
 export function simhash(normalized: string): string {

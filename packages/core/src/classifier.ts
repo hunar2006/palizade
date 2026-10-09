@@ -9,6 +9,8 @@ const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
   [/\b(email|mail|send|sms|slack|discord|message|publish)\b/iu, ["sends_message", "writes_remote", "network_egress"]],
   [/\b(write|save|edit|create|move|append)\b/iu, ["file_write", "writes_local"]],
   [/\b(delete|remove|rm|destroy)\b/iu, ["deletes_data"]],
+  // shortcut: verb match only, so read tools like get_transfer_history also become sinks (over-block, fails closed).
+  [/\b(buy|sell|trade|transfer|withdraw|deposit|pay|payment|purchase|refund|place order)\b/iu, ["writes_remote"]],
   [/\b(exec|shell|run|spawn|command|script|terminal)\b/iu, ["executes_code"]],
   [/\b(secret|credential|token|key|env|password)\b/iu, ["accesses_credentials", "reads_sensitive_data"]],
   [/\b(model|sample|llm|completion|chat)\b/iu, ["invokes_model"]],
@@ -33,7 +35,9 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
     capabilities.add(capability);
   }
 
-  const searchable = `${toolName} ${tool?.title ?? ""} ${tool?.description ?? ""}`.replace(/[_-]+/gu, " ");
+  // Split snake, kebab and camelCase so GmailSendEmail reads as "Gmail Send Email" for the \b rules.
+  const words = (text: string) => text.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").replace(/[_-]+/gu, " ");
+  const searchable = words(`${toolName} ${tool?.title ?? ""} ${tool?.description ?? ""}`);
   for (const [regex, matched] of CAPABILITY_RULES) {
     if (regex.test(searchable)) {
       matched.forEach((capability) => capabilities.add(capability));
@@ -41,7 +45,7 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
   }
 
   return {
-    toolClass: configured ?? annotationClass ?? deriveClass(toolName, capabilities),
+    toolClass: configured ?? annotationClass ?? deriveClass(words(toolName), capabilities),
     capabilities: [...capabilities]
   };
 }

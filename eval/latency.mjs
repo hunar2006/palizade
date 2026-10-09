@@ -7,7 +7,7 @@ import { AuditLogger } from "../packages/audit/dist/index.js";
 import { HeuristicDetector } from "../packages/detectors/dist/index.js";
 import { parsePolicy } from "../packages/policy/dist/index.js";
 import { StaticApprovalProvider } from "../packages/approvals/dist/index.js";
-import { InMemoryTaintStore } from "../packages/taint/dist/index.js";
+import { InMemoryTaintStore, SqliteTaintStore } from "../packages/taint/dist/index.js";
 
 const iterations = Number(process.argv[2] ?? 500);
 const dir = await mkdtemp(join(tmpdir(), "palizade-latency-"));
@@ -42,6 +42,29 @@ samples.sort((a, b) => a - b);
 const p50 = percentile(samples, 0.5);
 const p95 = percentile(samples, 0.95);
 console.log(`latency iterations=${iterations} p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms`);
+
+// Store-level cost on the default SQLite store: fingerprint a 4 KB page in, then check a
+// sink argument against every stored record (no match, so the full scan runs).
+const store = new SqliteTaintStore(join(dir, "bench-taint.sqlite"), { keyPath: join(dir, "bench.key") });
+const page = (i) => `Page ${i}. ${"Quarterly vendor report with ordinary prose and reconciled totals. ".repeat(60)}`;
+const ingest = [];
+for (let i = 0; i < 200; i += 1) {
+  const start = performance.now();
+  store.add({ sessionId: "bench", sourceServer: "fetch", sourceTool: "fetch_url", trust: "untrusted", text: page(i), detectorScore: 0, labels: [] });
+  ingest.push(performance.now() - start);
+}
+const sinkArg = "Hi team, summary attached. Totals reconcile and nothing needs action this week. ".repeat(4);
+const check = [];
+for (let i = 0; i < 200; i += 1) {
+  const start = performance.now();
+  store.match("bench", sinkArg);
+  check.push(performance.now() - start);
+}
+store.close();
+for (const [label, values] of [["ingest 4KB page", ingest], [`sink check vs ${ingest.length} records`, check]]) {
+  values.sort((a, b) => a - b);
+  console.log(`sqlite ${label}: p50=${percentile(values, 0.5).toFixed(2)}ms p95=${percentile(values, 0.95).toFixed(2)}ms`);
+}
 
 await rm(dir, { recursive: true, force: true });
 

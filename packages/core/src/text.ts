@@ -29,6 +29,12 @@ export function applyTextTransforms(value: unknown, transform: (text: string, bl
   return clone;
 }
 
+// Only MCP "text" fields carry readable content; wrapping type, mimeType, uri or base64 data
+// breaks schema validation in clients. shortcut: structuredContent strings are not spotlighted.
+export function isContentText(block: TextBlock): boolean {
+  return block.path.at(-1) === "text";
+}
+
 export function spotlightText(text: string, source: { server: string; tool?: string; taintIds: string[] }): string {
   const attrs = [
     `source="${escapeAttr(source.server)}"`,
