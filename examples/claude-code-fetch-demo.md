@@ -21,7 +21,7 @@ natively: fetching controlled content and posting data to a URL.
 Run this once from any terminal if it has not already been registered:
 
 ```powershell
-claude mcp add -s user palizade-fetch -- "C:\Users\hunar\Downloads\Palisade\examples\palizade-fetch.cmd"
+claude mcp add -s user palizade-fetch -- "C:\path\to\palizade\examples\palizade-fetch.cmd"
 ```
 
 Then fully restart Claude Code so the user-scoped MCP server is loaded.
@@ -51,7 +51,7 @@ Expected behavior:
 Check the audit trail after the session:
 
 ```powershell
-node "C:\Users\hunar\Downloads\Palisade\packages\cli\dist\index.cjs" -c "C:\Users\hunar\Downloads\Palisade\palizade.yaml" audit --last 15m --server claude_fetch_demo --tool post_data
+node "C:\path\to\palizade\packages\cli\dist\index.cjs" -c "C:\path\to\palizade\palizade.yaml" audit --last 15m --server claude_fetch_demo --tool post_data
 ```
 
 Expected audit shape:

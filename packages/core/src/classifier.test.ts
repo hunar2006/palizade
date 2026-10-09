@@ -24,4 +24,13 @@ describe("classifyToolDetailed", () => {
     expect(classifyToolDetailed("custom", server, { name: "custom", inputSchema: {}, annotations: { destructiveHint: true } }).capabilities)
       .toEqual(expect.arrayContaining(["file_write", "writes_local", "writes_remote"]));
   });
+
+  it("classifies camelCase and money-moving tool names", () => {
+    for (const name of ["GmailSendEmail", "GitHubDeleteRepository", "BinancePlaceOrder", "BinanceWithdraw", "BankTransferFunds"]) {
+      expect(classifyToolDetailed(name, server).toolClass, name).toBe("sink");
+    }
+    for (const name of ["GitHubGetUserDetails", "EvernoteManagerSearchNotes"]) {
+      expect(classifyToolDetailed(name, server).toolClass, name).toBe("source");
+    }
+  });
 });
