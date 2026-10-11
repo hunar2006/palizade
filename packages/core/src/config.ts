@@ -110,12 +110,16 @@ export const palizadeConfigSchema = z.object({
     pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
   }),
   egress: z.object({
+    mode: z.enum(["allowlist_only", "approve_new", "open"]).default("open"),
+    learnedFile: z.string().default("palizade.allow.yaml"),
     allowlist: z.object({
       hosts: z.array(z.string()).default([]),
-      emails: z.array(z.string()).default([])
-    }).default({ hosts: [], emails: [] })
+      emails: z.array(z.string()).default([]),
+      destinations: z.array(z.string()).default([])
+    }).default({ hosts: [], emails: [], destinations: [] })
   }).default({
-    allowlist: { hosts: [], emails: [] }
+    mode: "open", learnedFile: "palizade.allow.yaml",
+    allowlist: { hosts: [], emails: [], destinations: [] }
   }),
   transport: z.object({
     maxMessageBytes: z.number().int().min(1024).default(64 * 1024 * 1024),
@@ -178,6 +182,7 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
   return {
     ...config,
     stateDir: resolvePath(baseDir, config.stateDir),
+    egress: { ...config.egress, learnedFile: resolvePath(baseDir, config.egress.learnedFile) },
     policy: resolvePath(baseDir, config.policy),
     lockfile: resolvePath(baseDir, config.lockfile),
     audit: {

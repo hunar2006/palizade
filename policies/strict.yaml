@@ -4,6 +4,12 @@ defaults:
   on_error: block
 
 rules:
+  # --- M1: strict default deny egress ---
+  - id: block-new-destination
+    when: { direction: request, tool_class: sink, new_destination: true }
+    action: block
+    reason: Strict mode allows only allowlisted egress destinations.
+
   # --- M1: destination provenance ---
   - id: block-tainted-destination
     when: { direction: request, tool_class: sink, tainted_destination: true }

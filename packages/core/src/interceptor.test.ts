@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StaticApprovalProvider, type ApprovalDecision, type ApprovalProvider, type ApprovalRequest } from "@palizade/approvals";
@@ -27,6 +27,28 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("asks once for a new host then honors an explicit allow-always grant", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "remember", remember: "always" });
+    let learned = "";
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, configure: (config) => { config.egress.mode = "approve_new"; learned = config.egress.learnedFile; } });
+    try {
+      const send = () => engine.handleClientMessage({ jsonrpc: "2.0", id: 40, method: "tools/call", params: { name: "send_email", arguments: { url: "https://new.example.test/" } } });
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+      expect(approvals.requests[0]?.details?.allowAlways).toBe(true);
+      expect(await readFile(learned, "utf8")).toContain("new.example.test");
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("blocks a new host in allowlist-only mode and permits a configured host", async () => {
+    const { engine, cleanup } = await makeEngine(policy, { configure: (config) => { config.egress.mode = "allowlist_only"; config.egress.allowlist.hosts = ["known.test"]; } });
+    try {
+      const send = (url: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 40, method: "tools/call", params: { name: "send_email", arguments: { url } } });
+      expect((await send("https://new.test")).toServer).toHaveLength(0);
+      expect((await send("https://known.test")).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
   it("blocks a copied recipient or Slack channel before generic sink rules", async () => {
     const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"));
     try {
@@ -660,7 +682,7 @@ async function makeEngine(
       secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
       pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
     },
-    egress: { allowlist: { hosts: [], emails: [] } },
+    egress: { mode: "open", learnedFile: join(dir, "palizade.allow.yaml"), allowlist: { hosts: [], emails: [], destinations: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     taint: {
       decode: { maxDepth: 2, maxBytes: 256 * 1024 },

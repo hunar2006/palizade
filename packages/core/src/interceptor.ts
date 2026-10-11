@@ -11,6 +11,7 @@ import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
+import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
 import {
   isRequest,
   isSuccess,
@@ -60,8 +61,11 @@ interface PendingClientRequest {
 export class InterceptionEngine {
   private readonly pendingClient = new Map<string, PendingClientRequest>();
   private readonly knownTools = new Map<string, McpTool>();
+  private readonly learnedEgress: LearnedEgress;
 
-  constructor(private readonly options: InterceptionEngineOptions) {}
+  constructor(private readonly options: InterceptionEngineOptions) {
+    this.learnedEgress = new LearnedEgress(options.config.egress.learnedFile);
+  }
 
   async handleClientMessage(message: JsonRpcMessage): Promise<EngineOutput> {
     if (!isRequest(message)) {
@@ -170,10 +174,13 @@ export class InterceptionEngine {
     const secretDetected = hasSecretLabel(argumentDetection.labels);
     const piiDetected = hasPiiLabel(argumentDetection.labels);
     const sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
-    const destination = summarizeDestinations(argumentFields, this.options.config.egress.allowlist);
+    const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
+    const entries = destinationEntries(argumentFields);
+    const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
+    const destination = summarizeDestinations(argumentFields, allowlist);
     const lookalikeDestination = destination.hosts.some((host) => {
       const skeleton = hostSkeleton(host);
-      return skeleton !== canonicalHost(host) && (this.options.config.egress.allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
+      return skeleton !== canonicalHost(host) && (allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
     });
     const allTaintMatches = [
       ...matches,
@@ -182,7 +189,7 @@ export class InterceptionEngine {
       ...sensitiveFieldMatches.map(({ match }) => match)
     ];
 
-    const decision = evaluatePolicy(this.options.policy, {
+    const policyDecision = evaluatePolicy(this.options.policy, {
       direction: "request",
       method: message.method,
       server: this.options.serverName,
@@ -198,6 +205,7 @@ export class InterceptionEngine {
       destination_allowed: destination.allowed,
       tainted_destination: taintedDestination,
       lookalike_destination: lookalikeDestination,
+      new_destination: newDestination,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,
@@ -206,12 +214,20 @@ export class InterceptionEngine {
       tainted_argument_roles: taintedArgumentRoles
     });
 
+    const egressGate = toolClass === "sink" && newDestination && this.options.config.egress.mode !== "open";
+    const decision: PolicyDecision = policyDecision.action === "block" || !egressGate ? policyDecision : {
+      action: this.options.config.egress.mode === "allowlist_only" ? "block" : "require_approval",
+      matchedRuleId: "egress-new-destination",
+      reason: "Destination is not in the egress allowlist."
+    };
+
     const approval = await this.maybeApprove(decision, {
       method: message.method,
       tool,
       toolClass,
       classification,
       taintMatches: allTaintMatches,
+      rememberDestinations: egressGate && decision.action === "require_approval" ? entries : [],
       summary: formatToolCallApprovalSummary({
         tool,
         toolClass,
@@ -237,7 +253,7 @@ export class InterceptionEngine {
       secretDetected,
       piiDetected,
       taintClasses: classesFromMatches(allTaintMatches),
-      redacted: decision.action === "redact_secrets"
+      redacted: policyDecision.action === "redact_secrets"
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);
@@ -254,7 +270,7 @@ export class InterceptionEngine {
       };
     }
 
-    if (decision.action === "redact_secrets") {
+    if (policyDecision.action === "redact_secrets") {
       const redactedArguments = applyTextTransforms(params.arguments, (text, block) => maskSensitiveText(text, argumentDetectionsByPath.get(pathKey(block))?.spans));
       this.recordPending(message, tool);
       return {
@@ -773,6 +789,7 @@ export class InterceptionEngine {
       classification?: ToolClassification;
       taintMatches: Array<TaintMatch | { taintId: string; reason: string }>;
       summary: string;
+      rememberDestinations?: string[];
     }
   ): Promise<{ approved: boolean; decision: PolicyDecision }> {
     if (decision.action !== "require_approval") {
@@ -790,9 +807,11 @@ export class InterceptionEngine {
       details: {
         toolClass: input.toolClass,
         capabilities: input.classification?.capabilities,
-        matchedRuleId: decision.matchedRuleId
+        matchedRuleId: decision.matchedRuleId,
+        allowAlways: Boolean(input.rememberDestinations?.length)
       }
     }));
+    if (approval.approved && approval.remember === "always" && input.rememberDestinations?.length) this.learnedEgress.remember(input.rememberDestinations);
     return {
       approved: approval.approved,
       decision: {

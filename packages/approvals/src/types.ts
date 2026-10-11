@@ -12,6 +12,7 @@ export interface ApprovalRequest {
 }
 
 export interface ApprovalDecision {
+  remember?: "once" | "always" | "session" | undefined;
   approved: boolean;
   reason: string;
   approver?: string | undefined;

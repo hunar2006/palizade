@@ -24,8 +24,10 @@ export class TerminalApprovalProvider implements ApprovalProvider {
     try {
       const answer = await withTimeout(rl.question(prompt), request.timeoutMs);
       const normalized = answer.trim().toLowerCase();
-      const approved = normalized === "y" || normalized === "yes";
+      const remember = request.details?.allowAlways === true && normalized === "always" ? "always" : "once";
+      const approved = normalized === "y" || normalized === "yes" || remember === "always";
       return {
+        remember,
         approved,
         reason: approved ? "approved in terminal" : "denied in terminal",
         approver: "terminal"
@@ -71,7 +73,7 @@ function formatApprovalPrompt(request: ApprovalRequest): string {
     `Reason: ${request.reason}`,
     request.taintIds.length > 0 ? `Taint matches: ${request.taintIds.length}` : undefined,
     `Summary: ${request.summary}`,
-    "Allow this operation? [y/N] "
+    request.details?.allowAlways === true ? "Allow once [y], allow always [always], or deny [N]? " : "Allow this operation? [y/N] "
   ].filter(Boolean);
   return `${lines.join("\n")}`;
 }

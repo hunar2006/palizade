@@ -85,6 +85,8 @@ The internal model uses capability flags such as `network_egress`, `sends_messag
 
 ## Shared Taint
 
+Learned egress grants live in the separate `egress.learnedFile` (default `palizade.allow.yaml`, relative to config). It is validated at startup and before each sink call. Remember writes use an exclusive lock and atomic replacement; lock contention fails closed. Hard policy blocks always win over egress approvals. Source-call destinations are not egress-gated.
+
 Sink fields and the flattened argument text are expanded into bounded decoded candidates before matching both taint classes. Original payloads are retained, and ingestion never decodes. `taint.decode.maxDepth` defaults to 2 and `maxBytes` to 262144 total decoded bytes; exceeding the budget follows policy `on_error`. Supported views include base64/base64url, hex, percent encoding, common HTML entities, JS escapes, UTF-8 RFC 2047 B/Q and punycode. Audit `matchReasons` records `decoded:<kind>` without payloads.
 
 Matching strips TAG characters, variation selectors, soft hyphens and invisible operators in a separate view. Display content stays unchanged unless policy sanitizes it. Common Cyrillic/Greek lookalikes and fullwidth forms are folded only for domain and identifier tokens; prose is not folded. Host tokens include ASCII and skeleton views. The heuristic detector scans the stripped view with original span offsets and reports `hidden_unicode` counts and escaped code points.

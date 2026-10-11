@@ -1,0 +1,69 @@
+import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { canonicalHost } from "@palizade/taint";
+import YAML from "yaml";
+import { z } from "zod";
+import type { ArgumentField } from "./arguments.js";
+import type { PalizadeConfig } from "./config.js";
+
+const learnedSchema = z.object({ hosts: z.array(z.string()).default([]), emails: z.array(z.string()).default([]), destinations: z.array(z.string()).default([]) }).strict();
+
+export function destinationEntries(fields: ArgumentField[]): string[] {
+  return [...new Set(fields.flatMap((field) => {
+    if (field.role === "url") {
+      try { return [`host:${canonicalHost(new URL(field.text).hostname)}`]; }
+      catch { return [`invalid:${field.text}`]; }
+    }
+    if (field.role === "hostname") return [`host:${canonicalHost(field.text)}`];
+    if (field.role === "email_recipient") return [`email:${field.text.trim().toLowerCase()}`];
+    if (["repository_destination", "account_id", "channel_id"].includes(field.role)) return [`${field.role}:${field.text}`];
+    return [];
+  }))];
+}
+
+export class LearnedEgress {
+  constructor(private readonly path: string) { this.read(); }
+
+  allowlist(configured: PalizadeConfig["egress"]["allowlist"]): PalizadeConfig["egress"]["allowlist"] {
+    const learned = this.read();
+    return { hosts: [...configured.hosts, ...learned.hosts], emails: [...configured.emails, ...learned.emails], destinations: [...configured.destinations, ...learned.destinations] };
+  }
+
+  remember(destinations: string[]): void {
+    const lock = `${this.path}.lock`;
+    const fd = openSync(lock, "wx", 0o600);
+    const temporary = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      const learned = this.read();
+      for (const entry of destinations) {
+        if (entry.startsWith("invalid:")) throw new Error("Invalid egress destination");
+        const key = entry.startsWith("host:") ? "hosts" : entry.startsWith("email:") ? "emails" : "destinations";
+        const value = key === "destinations" ? entry : entry.slice(entry.indexOf(":") + 1);
+        if (!learned[key].includes(value)) learned[key].push(value);
+      }
+      writeFileSync(temporary, YAML.stringify(learned), { mode: 0o600 });
+      renameSync(temporary, this.path);
+    } finally {
+      closeSync(fd);
+      unlinkSync(lock);
+      if (existsSync(temporary)) unlinkSync(temporary);
+    }
+  }
+
+  private read(): z.infer<typeof learnedSchema> {
+    if (!existsSync(this.path)) return learnedSchema.parse({});
+    if (statSync(this.path).size > 1024 * 1024) throw new Error("Learned allowlist exceeds size limit");
+    return learnedSchema.parse(YAML.parse(readFileSync(this.path, "utf8")));
+  }
+}
+
+export function destinationsAllowed(entries: string[], allowlist: PalizadeConfig["egress"]["allowlist"]): boolean {
+  return entries.every((entry) => {
+    if (entry.startsWith("host:")) {
+      const host = entry.slice(5);
+      return allowlist.hosts.some((value) => value === "*" || (value.startsWith("*.") ? host.endsWith(`.${canonicalHost(value.slice(2))}`) : canonicalHost(value) === host));
+    }
+    if (entry.startsWith("email:")) return allowlist.emails.some((value) => value === "*" || value.toLowerCase() === entry.slice(6) || (value.startsWith("*@") && entry.slice(6).endsWith(value.slice(1).toLowerCase())));
+    return allowlist.destinations.includes(entry);
+  });
+}
