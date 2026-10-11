@@ -2,7 +2,7 @@ import type { ApprovalDecision, ApprovalProvider } from "@palizade/approvals";
 import { createApprovalRequest } from "@palizade/approvals";
 import type { AuditLogger } from "@palizade/audit";
 import type { DetectionResult, Detector } from "@palizade/detectors";
-import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText } from "@palizade/detectors";
+import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText, stripHiddenUnicode } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
 import { expandCandidates, canonicalHost, hostSkeleton, OutboundWindow } from "@palizade/taint";
@@ -15,6 +15,7 @@ import { contentText, extractContent, type ContentOrigin, type ExtractedContent 
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
 import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
 import { trackSinkAttempt } from "./session-gates.js";
+import { DEFAULT_METADATA_GUARD_CONFIG, InMemoryToolRegistry, reviewMetadata, stripHiddenUnicodeDeep, type MetadataItem, type MetadataReview, type ToolRegistry } from "./metadata-guard.js";
 import {
   isRequest,
   isSuccess,
@@ -40,6 +41,7 @@ export interface InterceptionEngineOptions {
   audit: AuditLogger;
   approvals: ApprovalProvider;
   lockfile: LockfileStore;
+  toolRegistry?: ToolRegistry | undefined;
 }
 
 export interface EngineOutput {
@@ -67,12 +69,15 @@ export class InterceptionEngine {
   private readonly knownTools = new Map<string, McpTool>();
   private readonly learnedEgress: LearnedEgress;
   private readonly outboundWindow = new OutboundWindow();
+  private readonly metadataBlockedTools = new Map<string, PolicyDecision>();
+  private readonly toolRegistry: ToolRegistry;
 
   constructor(private readonly options: InterceptionEngineOptions) {
     const config = palizadeConfigSchema.parse(options.config);
     if (!options.config.egress.learnedFile) config.egress.learnedFile = resolve(dirname(config.lockfile), "palizade.allow.yaml");
     this.options = { ...options, config, server: serverConfigSchema.parse(options.server) };
     this.learnedEgress = new LearnedEgress(config.egress.learnedFile);
+    this.toolRegistry = options.toolRegistry ?? new InMemoryToolRegistry();
   }
 
   async handleClientMessage(message: JsonRpcMessage): Promise<EngineOutput> {
@@ -152,6 +157,9 @@ export class InterceptionEngine {
     if (pending.method === "initialize") {
       return this.handleInitializeResponse(message);
     }
+    if (pending.method === "server/discover") {
+      return this.handleDiscoverMetadataResponse(message);
+    }
 
     return { toClient: [message], toServer: [] };
   }
@@ -160,6 +168,10 @@ export class InterceptionEngine {
     const startedAt = Date.now();
     const params = (message.params ?? {}) as ToolsCallParams;
     const tool = params.name ?? "unknown";
+    const metadataBlocked = this.metadataBlockedTools.get(tool);
+    if (metadataBlocked) {
+      return this.blockToolCallForMetadata(message, tool, metadataBlocked, startedAt);
+    }
     const knownTool = this.knownTools.get(tool);
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
@@ -350,8 +362,19 @@ export class InterceptionEngine {
       sourceToolOrResource: tool.name,
       trust: this.options.server.trust
     }));
-    const { fused, detections } = await this.detectContents(contents);
+    const { fused: contentFused, detections } = await this.detectContents(visibleMetadataContents(contents));
     const lockStatus = worstLockStatus(lockChecks);
+    const review = await this.reviewMetadataSafely(message, tools.map((tool) => ({ name: tool.name, value: tool })), true, startedAt);
+    if ("blocked" in review) {
+      return review.blocked;
+    }
+    for (const item of review.items.filter((entry) => entry.detection.score > 0 || entry.detection.labels.length > 0)) {
+      detections.push({
+        content: { path: `$tool:${item.name}`, kind: "metadata", origin: "tool_metadata", sourceServer: this.options.serverName, sourceMethod: "tools/list", sourceToolOrResource: item.name, trust: this.options.server.trust },
+        detection: item.detection
+      });
+    }
+    const fused = review.labels.length > 0 ? fuseDetections(detections.map((entry) => entry.detection)) : contentFused;
 
     const decision = evaluatePolicy(this.options.policy, {
       direction: "response",
@@ -392,12 +415,14 @@ export class InterceptionEngine {
       };
     }
 
-    for (const tool of tools) {
+    const perTool = await this.applyPerToolMetadataDecisions(message, tools, review, startedAt);
+    const keptTools = perTool.tools;
+    for (const tool of keptTools) {
       this.knownTools.set(tool.name, tool);
     }
 
     if (decision.action === "sanitize" || fused.score >= 0.35) {
-      const sanitizedTools = tools.map((tool) => {
+      const sanitizedTools = keptTools.map((tool) => {
         const toolScore = detections
           .filter(({ content }) => content.sourceToolOrResource === tool.name)
           .reduce((score, item) => Math.max(score, item.detection.score), 0);
@@ -416,6 +441,154 @@ export class InterceptionEngine {
       return { toClient: [{ ...message, result: { ...result, tools: sanitizedTools } }], toServer: [] };
     }
 
+    if (perTool.changed) {
+      return { toClient: [{ ...message, result: { ...result, tools: keptTools } }], toServer: [] };
+    }
+    return { toClient: [message], toServer: [] };
+  }
+
+  private async reviewMetadataSafely(
+    message: JsonRpcResponse,
+    items: MetadataItem[],
+    tools: boolean,
+    startedAt: number
+  ): Promise<MetadataReview | { blocked: EngineOutput }> {
+    try {
+      return await reviewMetadata(items, {
+        serverName: this.options.serverName,
+        configuredServers: Object.keys(this.options.config.servers),
+        registry: this.toolRegistry,
+        config: { ...DEFAULT_METADATA_GUARD_CONFIG, ...this.options.config.metadata },
+        tools,
+        detect: (text, itemName) => this.options.detector.detect(text, {
+          server: this.options.serverName,
+          tool: itemName,
+          trust: this.options.server.trust,
+          surface: "tool_description"
+        })
+      });
+    } catch (error) {
+      const decision: PolicyDecision = {
+        action: this.options.policy.defaults.on_error,
+        reason: `metadata review error: ${error instanceof Error ? error.message : String(error)}`,
+        failClosed: true
+      };
+      await this.auditDecision(message, "response", decision, startedAt, tools ? { method: "tools/list" } : {});
+      if (decision.action === "block" || decision.action === "require_approval") {
+        return { blocked: { toClient: [makeErrorResponse(message.id, -32028, "Palizade could not verify MCP metadata", { decision })], toServer: [] } };
+      }
+      return { items: [], labels: [], hiddenUnicode: false, shadowing: false, collision: false };
+    }
+  }
+
+  private async applyPerToolMetadataDecisions(
+    message: JsonRpcResponse,
+    tools: McpTool[],
+    review: MetadataReview,
+    startedAt: number
+  ): Promise<{ tools: McpTool[]; changed: boolean }> {
+    const reviews = new Map(review.items.map((item) => [item.name, item]));
+    const kept: McpTool[] = [];
+    let changed = false;
+    for (const tool of tools) {
+      const item = reviews.get(tool.name);
+      if (!item?.flagged) {
+        this.metadataBlockedTools.delete(tool.name);
+        kept.push(tool);
+        continue;
+      }
+      const decision = evaluatePolicy(this.options.policy, {
+        direction: "response",
+        method: "tools/list",
+        server: this.options.serverName,
+        tool: tool.name,
+        trust: this.options.server.trust,
+        detector_score: item.detection.score,
+        labels: item.detection.labels,
+        tool_shadowing_detected: item.shadows.length > 0,
+        name_collision_detected: item.collidesWith.length > 0,
+        hidden_unicode_detected: item.hiddenUnicode.count > 0
+      });
+      const approval = await this.maybeApprove(decision, {
+        method: "tools/list",
+        tool: tool.name,
+        toolClass: "unknown",
+        taintMatches: [],
+        summary: formatMetadataApprovalSummary(tool.name, item)
+      });
+      await this.auditDecision(message, "response", approval.decision, startedAt, {
+        method: "tools/list",
+        tool: tool.name,
+        detector: item.detection,
+        approved: approval.approved,
+        metadataReview: item.detection.metadata
+      });
+      if (!approval.approved || decision.action === "block") {
+        this.metadataBlockedTools.set(tool.name, approval.decision);
+        changed = true;
+        continue;
+      }
+      this.metadataBlockedTools.delete(tool.name);
+      if (decision.action === "sanitize" && item.hiddenUnicode.count > 0) {
+        kept.push(stripHiddenUnicodeDeep(tool));
+        changed = true;
+        continue;
+      }
+      kept.push(tool);
+    }
+    return { tools: kept, changed };
+  }
+
+  private async blockToolCallForMetadata(message: JsonRpcRequest, tool: string, decision: PolicyDecision, startedAt: number): Promise<EngineOutput> {
+    const blocked: PolicyDecision = { ...decision, action: "block", reason: `tool withheld after metadata review: ${decision.reason}` };
+    await this.auditDecision(message, "request", blocked, startedAt, { tool });
+    return {
+      toClient: message.id === undefined ? [] : [
+        makeToolErrorResultResponse(message.id, formatBlockedToolCallResultText(blocked, tool, this.options.config.audit.errorVerbosity))
+      ],
+      toServer: []
+    };
+  }
+
+  private async handleDiscoverMetadataResponse(message: JsonRpcResponse): Promise<EngineOutput> {
+    const startedAt = Date.now();
+    const result = (message as { result: unknown }).result;
+    const contents = extractContent(result, {
+      origin: "resource_metadata",
+      sourceServer: this.options.serverName,
+      sourceMethod: "server/discover",
+      sourceToolOrResource: "server/discover",
+      trust: this.options.server.trust
+    });
+    const { fused: contentFused } = await this.detectContents(visibleMetadataContents(contents));
+    // shortcut: server/discover output is scanned but not locked here; M5 adds lockfile coverage for it.
+    const review = await this.reviewMetadataSafely(message, [{ name: "server/discover", value: result }], false, startedAt);
+    if ("blocked" in review) {
+      return review.blocked;
+    }
+    const fused = fuseDetections([contentFused, ...review.items.map((item) => item.detection)]);
+    const decision = evaluatePolicy(this.options.policy, {
+      direction: "response",
+      method: "server/discover",
+      server: this.options.serverName,
+      trust: this.options.server.trust,
+      detector_score: fused.score,
+      labels: fused.labels,
+      tool_shadowing_detected: review.shadowing,
+      hidden_unicode_detected: review.hiddenUnicode
+    });
+    await this.auditDecision(message, "response", decision, startedAt, {
+      method: "server/discover",
+      detector: fused,
+      payload: result,
+      metadataReview: review.items[0]?.detection.metadata
+    });
+    if (decision.action === "block") {
+      return { toClient: [makeErrorResponse(message.id, -32029, "Palizade blocked server/discover metadata", { decision, detector: fused })], toServer: [] };
+    }
+    if (decision.action === "sanitize" && review.hiddenUnicode) {
+      return { toClient: [{ ...message, result: stripHiddenUnicodeDeep(result) }], toServer: [] };
+    }
     return { toClient: [message], toServer: [] };
   }
 
@@ -659,7 +832,12 @@ export class InterceptionEngine {
       sourceToolOrResource: nameOf(descriptor),
       trust: this.options.server.trust
     }));
-    const { fused } = await this.detectContents(contents);
+    const { fused: contentFused } = await this.detectContents(visibleMetadataContents(contents));
+    const review = await this.reviewMetadataSafely(message, descriptors.map((descriptor) => ({ name: nameOf(descriptor), value: descriptor })), false, startedAt);
+    if ("blocked" in review) {
+      return review.blocked;
+    }
+    const fused = review.labels.length > 0 ? fuseDetections([contentFused, ...review.items.map((item) => item.detection)]) : contentFused;
     const lockStatus = worstLockStatus(lockChecks);
     const decision = evaluatePolicy(this.options.policy, {
       direction: "response",
@@ -668,7 +846,9 @@ export class InterceptionEngine {
       trust: this.options.server.trust,
       detector_score: fused.score,
       labels: fused.labels,
-      lock_status: lockStatus
+      lock_status: lockStatus,
+      tool_shadowing_detected: review.shadowing,
+      hidden_unicode_detected: review.hiddenUnicode
     });
     const approval = await this.maybeApprove(decision, {
       method: bucket,
@@ -690,6 +870,9 @@ export class InterceptionEngine {
         toClient: [makeErrorResponse(message.id, -32025, `Palizade blocked ${bucket} metadata`, { decision, detector: fused, lockChecks })],
         toServer: []
       };
+    }
+    if (decision.action === "sanitize" && review.hiddenUnicode) {
+      return { toClient: [{ ...message, result: { ...result, [resultKey]: stripHiddenUnicodeDeep(descriptors) } }], toServer: [] };
     }
     return { toClient: [message], toServer: [] };
   }
@@ -939,6 +1122,7 @@ export class InterceptionEngine {
       secretDetected?: boolean;
       piiDetected?: boolean;
       redacted?: boolean;
+      metadataReview?: unknown;
     } = {}
   ): Promise<void> {
     await this.options.audit.write({
@@ -977,7 +1161,8 @@ export class InterceptionEngine {
         secretDetected: extra.secretDetected,
         piiDetected: extra.piiDetected,
         redacted: extra.redacted,
-        matchReasons: dedupePreservingOrder(extra.taintMatches?.map((match) => match.reason) ?? [])
+        matchReasons: dedupePreservingOrder(extra.taintMatches?.map((match) => match.reason) ?? []),
+        metadataReview: extra.metadataReview
       }
     });
   }
@@ -1048,6 +1233,21 @@ function formatToolCallApprovalSummary(input: {
     `Tainted argument role(s): ${roles}.`,
     sources.length > 0 ? `Tainted source(s): ${sources.join("; ")}.` : undefined,
     destination ? `Destination: ${destination}.` : undefined
+  ].filter(Boolean).join(" ");
+}
+
+/** Hidden characters in metadata are judged by the metadata review, which also decodes TAG payloads. */
+function visibleMetadataContents(contents: ExtractedContent[]): ExtractedContent[] {
+  return contents.map((content) => content.text ? { ...content, text: stripHiddenUnicode(content.text) } : content);
+}
+
+function formatMetadataApprovalSummary(tool: string, item: MetadataReview["items"][number]): string {
+  return [
+    `Tool metadata for ${tool} was flagged.`,
+    item.hiddenUnicode.count > 0 ? `Hidden characters: ${item.hiddenUnicode.count} (${item.hiddenUnicode.codePoints.join(", ")}).` : undefined,
+    item.shadows.length > 0 ? `Mentions tools of other servers: ${item.shadows.map((entry) => `${entry.server}/${entry.tool}`).join(", ")}.` : undefined,
+    item.collidesWith.length > 0 ? `Name also exposed by: ${item.collidesWith.join(", ")}.` : undefined,
+    item.dangerousDefaults.length > 0 ? `Dangerous defaults at: ${item.dangerousDefaults.map((entry) => entry.path).join(", ")}.` : undefined
   ].filter(Boolean).join(" ");
 }
 

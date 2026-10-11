@@ -58,6 +58,9 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (condition.destination_session_trusted !== undefined && Boolean(ctx.destination_session_trusted) !== condition.destination_session_trusted) return false;
   if (condition.destination_allowlist_configured !== undefined && Boolean(ctx.destination_allowlist_configured) !== condition.destination_allowlist_configured) return false;
   if (condition.session_quarantined !== undefined && Boolean(ctx.session_quarantined) !== condition.session_quarantined) return false;
+  if (condition.tool_shadowing_detected !== undefined && Boolean(ctx.tool_shadowing_detected) !== condition.tool_shadowing_detected) return false;
+  if (condition.name_collision_detected !== undefined && Boolean(ctx.name_collision_detected) !== condition.name_collision_detected) return false;
+  if (condition.hidden_unicode_detected !== undefined && Boolean(ctx.hidden_unicode_detected) !== condition.hidden_unicode_detected) return false;
   if (condition.detector_score_gte !== undefined && (ctx.detector_score ?? 0) < condition.detector_score_gte) return false;
   if (condition.detector_score_lt !== undefined && (ctx.detector_score ?? 0) >= condition.detector_score_lt) return false;
   if (condition.labels_any && !condition.labels_any.some((label) => ctx.labels?.includes(label))) return false;

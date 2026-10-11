@@ -3,10 +3,12 @@ import { AuditLogger, JsonlAuditSink, SqliteAuditSink } from "@palizade/audit";
 import { DetectorPipeline, HeuristicDetector, OptionalOnnxDetector, PromptGuard2Detector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
 import { SqliteTaintStore } from "@palizade/taint";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { loadPolicyFile } from "@palizade/policy";
 import type { PalizadeConfig } from "./config.js";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
+import { SqliteToolRegistry } from "./metadata-guard.js";
 
 export interface RuntimeComponents {
   engine: InterceptionEngine;
@@ -42,6 +44,7 @@ export async function createRuntime(config: PalizadeConfig, serverName: string):
   const lockfile = new LockfileStore(config.lockfile);
   const approvals = createApprovalProvider(config);
   const sessionId = `session_${randomUUID()}`;
+  const toolRegistry = new SqliteToolRegistry(join(config.stateDir, "tool-registry.sqlite"));
   const engine = new InterceptionEngine({
     config,
     serverName,
@@ -52,7 +55,8 @@ export async function createRuntime(config: PalizadeConfig, serverName: string):
     taintStore,
     audit,
     approvals,
-    lockfile
+    lockfile,
+    toolRegistry
   });
 
   return { engine, audit, detector, taintStore, lockfile, approvals, sessionId };
