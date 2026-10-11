@@ -248,6 +248,10 @@ export const palizadeConfigSchema = z.object({
     enabled: z.boolean().default(true),
     intervalMs: z.number().int().min(100).max(60_000).default(1000)
   }).strict().optional(),
+  metrics: z.object({
+    jsonl: z.string().min(1),
+    maxBytes: z.number().int().min(1024).default(64 * 1024 * 1024)
+  }).strict().optional(),
   servers: z.record(z.string(), serverConfigSchema).default({})
 }).strict();
 
@@ -296,6 +300,7 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
       ...config.listener,
       tokenPath: resolvePath(baseDir, config.listener.tokenPath)
     },
+    ...(config.metrics ? { metrics: { ...config.metrics, jsonl: resolvePath(baseDir, config.metrics.jsonl) } } : {}),
     servers: Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [
       name,
       {

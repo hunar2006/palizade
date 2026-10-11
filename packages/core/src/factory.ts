@@ -1,5 +1,5 @@
 import { LocalhostApprovalProvider, StaticApprovalProvider, TerminalApprovalProvider, type ApprovalProvider } from "@palizade/approvals";
-import { AuditLogger, JsonlAuditSink, SqliteAuditSink } from "@palizade/audit";
+import { AuditLogger, JsonlAuditSink, MetricsJsonlSink, SqliteAuditSink } from "@palizade/audit";
 import { DetectorPipeline, HeuristicDetector, OptionalOnnxDetector, PromptGuard2Detector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
 import { SqliteTaintStore } from "@palizade/taint";
 import { randomUUID } from "node:crypto";
@@ -36,7 +36,8 @@ export async function createRuntime(config: PalizadeConfig, serverName: string, 
   const policy = await loadPolicyFile(config.policy);
   const audit = new AuditLogger([
     new JsonlAuditSink(config.audit.jsonl),
-    new SqliteAuditSink(config.audit.sqlite)
+    new SqliteAuditSink(config.audit.sqlite),
+    ...(config.metrics ? [new MetricsJsonlSink(config.metrics.jsonl, { maxBytes: config.metrics.maxBytes })] : [])
   ], {
     captureRawPayloads: config.audit.captureRawPayloads
   });

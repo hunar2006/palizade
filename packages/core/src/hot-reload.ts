@@ -184,6 +184,7 @@ export function restartOnlyChanges(previous: PalizadeConfig, next: PalizadeConfi
     ["approvals", (config) => config.approvals],
     ["taint.sqlite", (config) => [config.taint.sqlite, config.taint.keyPath, config.taint.scope, config.taint.profileId, config.taint.ttlMs]],
     ["reload", (config) => config.reload],
+    ["metrics", (config) => config.metrics],
     [`servers.${serverName} launch`, (config) => {
       const server = config.servers[serverName];
       return server ? [server.command, server.args, server.cwd, server.env, server.url, server.headers, server.sandbox, server.protocolVersion] : undefined;
