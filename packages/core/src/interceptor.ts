@@ -306,7 +306,7 @@ export class InterceptionEngine {
     });
     const splitMatch = splitMatches.some((match) => !matches.some((current) => current.reason !== "temporal" && current.taintId === match.taintId));
     sensitiveTaint ||= splitMatches.some((match) => match.classes?.includes("sensitive"));
-    const destination = summarizeDestinations(argumentFields, allowlist);
+    const destination = summarizeDestinations(argumentFields, allowlist, (value) => matchText(value).some((match) => match.reason !== "temporal"));
     const lookalikeDestination = destination.hosts.some((host) => {
       const skeleton = hostSkeleton(host);
       return skeleton !== canonicalHost(host) && (allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
@@ -1643,21 +1643,19 @@ function summarizeApprovalDestination(destination: DestinationSummary): string |
   return parts.length > 0 ? parts.join("; ") : undefined;
 }
 
-function summarizeDestinations(argumentFields: ArgumentField[], allowlist: PalizadeConfig["egress"]["allowlist"]): DestinationSummary {
+function summarizeDestinations(argumentFields: ArgumentField[], allowlist: PalizadeConfig["egress"]["allowlist"], tainted: (value: string) => boolean): DestinationSummary {
   const hosts = dedupePreservingOrder(argumentFields.flatMap((field) => hostsFromField(field)));
   const emails = dedupePreservingOrder(argumentFields
     .filter((field) => field.role === "email_recipient")
     .map((field) => field.text.toLowerCase()));
-  const allowlistConfigured = allowlist.hosts.length > 0 || allowlist.emails.length > 0;
-  const hostsAllowed = hosts.every((host) => allowlist.hosts.some((entry) => matchesHost(entry, host)));
-  const emailsAllowed = emails.every((email) => allowlist.emails.some((entry) => matchesEmail(entry, email)));
-  const hasDestinations = hosts.length > 0 || emails.length > 0;
+  const entries = destinationEntries(argumentFields);
+  const allowlistConfigured = allowlist.hosts.length > 0 || allowlist.emails.length > 0 || allowlist.destinations.length > 0;
   return {
-    allowed: !allowlistConfigured || !hasDestinations || (hostsAllowed && emailsAllowed),
+    allowed: !allowlistConfigured || destinationsAllowed(entries, allowlist),
     allowlistConfigured,
     hosts,
-    emailRecipients: emails.map(maskSensitiveValueForMetadata),
-    destinationCount: hosts.length + emails.length
+    emailRecipients: emails.map((email) => tainted(email) ? "[REDACTED:tainted-recipient]" : maskSensitiveValueForMetadata(email)),
+    destinationCount: entries.length
   };
 }
 
@@ -1673,40 +1671,6 @@ function hostsFromField(field: ArgumentField): string[] {
   } catch {
     return [];
   }
-}
-
-function matchesHost(pattern: string, host: string): boolean {
-  const normalizedPattern = normalizeHost(pattern);
-  const normalizedHost = normalizeHost(host);
-  if (!normalizedPattern || !normalizedHost) {
-    return false;
-  }
-  if (normalizedPattern === "*") {
-    return true;
-  }
-  if (normalizedPattern.startsWith("*.")) {
-    const suffix = normalizedPattern.slice(1);
-    return normalizedHost.endsWith(suffix);
-  }
-  return normalizedPattern === normalizedHost;
-}
-
-function matchesEmail(pattern: string, email: string): boolean {
-  const normalizedPattern = pattern.trim().toLowerCase();
-  const normalizedEmail = email.trim().toLowerCase();
-  if (!normalizedPattern || !normalizedEmail) {
-    return false;
-  }
-  if (normalizedPattern === "*") {
-    return true;
-  }
-  if (normalizedPattern.startsWith("*@")) {
-    return normalizedEmail.endsWith(normalizedPattern.slice(1));
-  }
-  if (normalizedPattern.startsWith("@")) {
-    return normalizedEmail.endsWith(normalizedPattern);
-  }
-  return normalizedPattern === normalizedEmail;
 }
 
 function normalizeHost(value: string): string {
