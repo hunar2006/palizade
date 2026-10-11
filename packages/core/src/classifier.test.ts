@@ -7,6 +7,8 @@ describe("classifyToolDetailed", () => {
     command: "node",
     args: [],
     env: {},
+    headers: {},
+    protocolVersion: "auto",
     trust: "semi",
     toolClasses: {},
     toolCapabilities: {}, argumentRoles: {},

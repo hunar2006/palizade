@@ -698,6 +698,15 @@ async function makeEngine(
     },
     egress: { mode: "open", learnedFile: join(dir, "palizade.allow.yaml"), allowlist: { hosts: [], emails: [], destinations: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
+    http: {
+      requestTimeoutMs: 30_000,
+      maxBodyBytes: 67108864,
+      maxSseLineBytes: 1048576,
+      maxSseEventBytes: 16777216,
+      maxConcurrentStreams: 8,
+      maxRedirects: 5
+    },
+    listener: { host: "127.0.0.1", port: 32_146, tokenPath: join(dir, "listener.token"), allowRemote: false },
     taint: {
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 256 * 1024 },
@@ -716,6 +725,8 @@ async function makeEngine(
         args: [],
         cwd: dir,
         env: {},
+        headers: {},
+        protocolVersion: "auto",
         trust: "untrusted",
         toolClasses: { read_web: "source", send_email: "sink" },
         toolCapabilities: {},
