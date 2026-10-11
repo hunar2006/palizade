@@ -661,6 +661,7 @@ async function makeEngine(
         trust: "untrusted",
         toolClasses: { read_web: "source", send_email: "sink" },
         toolCapabilities: {},
+        argumentRoles: {},
         sensitive: false,
         sensitiveTools: {},
         sensitivePathPatterns: [],

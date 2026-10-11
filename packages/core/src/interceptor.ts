@@ -147,7 +147,7 @@ export class InterceptionEngine {
           .map((match): TaintMatch => ({ ...match, reason: candidate.kind === "original" || match.reason === "temporal" ? match.reason : `decoded:${candidate.kind}` }))));
       return matchCache.get(text)!;
     };
-    const argumentFields = extractArgumentFields(params.arguments);
+    const argumentFields = extractArgumentFields(params.arguments, tool, this.options.server.argumentRoles?.[tool]);
     const argumentBlocks = extractTextBlocks(params.arguments);
     const argumentDetections = await Promise.all(argumentBlocks.map(async (block) => ({
       block,

@@ -72,6 +72,8 @@ palizade lock approve <serverName>
 
 ## Tool Classification
 
+Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.
+
 Derivation order:
 
 1. `palizade.yaml` tool-class and capability overrides.

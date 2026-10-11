@@ -28,6 +28,7 @@ export const serverConfigSchema = z.object({
   trust: trustSchema.default("untrusted"),
   toolClasses: z.record(z.string(), toolClassSchema).default({}),
   toolCapabilities: z.record(z.string(), z.array(capabilitySchema)).default({}),
+  argumentRoles: z.record(z.string(), z.record(z.string(), z.enum(["url", "hostname", "email_recipient", "file_path", "shell_command", "repository_destination", "channel_id", "account_id", "http_header", "http_query", "body", "unknown"]))).default({}),
   sensitive: z.boolean().default(false),
   sensitiveTools: z.record(z.string(), z.boolean()).default({}),
   sensitivePathPatterns: z.array(z.string()).default([]),

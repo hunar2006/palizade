@@ -9,7 +9,7 @@ describe("classifyToolDetailed", () => {
     env: {},
     trust: "semi",
     toolClasses: {},
-    toolCapabilities: {},
+    toolCapabilities: {}, argumentRoles: {},
     sensitive: false,
     sensitiveTools: {},
     sensitivePathPatterns: [],
