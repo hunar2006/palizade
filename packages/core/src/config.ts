@@ -244,6 +244,10 @@ export const palizadeConfigSchema = z.object({
     dangerousDefaults: z.array(z.string()).default([]),
     maxScanBytes: z.number().int().min(1024).max(16 * 1024 * 1024).default(256 * 1024)
   }).strict().optional(),
+  reload: z.object({
+    enabled: z.boolean().default(true),
+    intervalMs: z.number().int().min(100).max(60_000).default(1000)
+  }).strict().optional(),
   servers: z.record(z.string(), serverConfigSchema).default({})
 }).strict();
 

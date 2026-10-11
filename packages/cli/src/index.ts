@@ -266,7 +266,7 @@ program.command("wrap")
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
     }
-    const runtime = await createRuntime(config, serverName);
+    const runtime = await createRuntime(config, serverName, { configPath });
     if (server.url) {
       const proxy = new HttpBridgeProxy({
         serverName,
@@ -310,7 +310,7 @@ program.command("serve")
       ...(options.port ? { port: Number(options.port) } : {}),
       ...(options.allowRemote ? { allowRemote: true } : {}),
       onSecurityEvent: (event) => console.warn(`[palizade] ${event.message}`),
-      createRuntime: async (serverName) => createRuntime(config, serverName)
+      createRuntime: async (serverName) => createRuntime(config, serverName, { configPath })
     });
     const bound = await listener.start();
     console.log(`Palizade listener bound to http://${bound.host}:${bound.port}/mcp/<serverName>`);

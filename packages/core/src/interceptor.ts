@@ -71,7 +71,8 @@ interface PendingClientRequest {
 export class InterceptionEngine {
   private readonly pendingClient = new Map<string, PendingClientRequest>();
   private readonly knownTools = new Map<string, McpTool>();
-  private readonly learnedEgress: LearnedEgress;
+  private learnedEgress: LearnedEgress;
+  private lastReloadFailure: string | undefined;
   private readonly outboundWindow = new OutboundWindow();
   private clientEra: McpEra | undefined;
   private serverEra: McpEra | undefined;
@@ -79,12 +80,58 @@ export class InterceptionEngine {
   private readonly metadataBlockedTools = new Map<string, PolicyDecision>();
   private readonly toolRegistry: ToolRegistry;
 
-  constructor(private readonly options: InterceptionEngineOptions) {
+  constructor(private options: InterceptionEngineOptions) {
     const config = palizadeConfigSchema.parse(options.config);
     if (!options.config.egress.learnedFile) config.egress.learnedFile = resolve(dirname(config.lockfile), "palizade.allow.yaml");
     this.options = { ...options, config, server: serverConfigSchema.parse(options.server) };
-    this.learnedEgress = new LearnedEgress(config.egress.learnedFile);
+    this.learnedEgress = this.createLearnedEgress(config);
     this.toolRegistry = options.toolRegistry ?? new InMemoryToolRegistry();
+  }
+
+  get currentPolicy(): PolicyDocument {
+    return this.options.policy;
+  }
+
+  get currentConfig(): PalizadeConfig {
+    return this.options.config;
+  }
+
+  /** Swaps in an already validated policy and/or config. Throws, leaving the engine unchanged, if the new config no longer defines this server. */
+  reload(update: { policy?: PolicyDocument | undefined; config?: PalizadeConfig | undefined }): void {
+    const config = update.config ? palizadeConfigSchema.parse(update.config) : this.options.config;
+    const server = update.config ? config.servers[this.options.serverName] : this.options.server;
+    if (!server) throw new Error(`Server '${this.options.serverName}' is no longer defined in palizade.yaml.`);
+    const learnedEgress = config.egress.learnedFile !== this.learnedEgress.path ? this.createLearnedEgress(config) : this.learnedEgress;
+    // shortcut: a message already being processed may evaluate later rules against the new document; snapshot options per message if mid-message consistency is ever required.
+    this.options = { ...this.options, policy: update.policy ?? this.options.policy, config, server: serverConfigSchema.parse(server) };
+    this.learnedEgress = learnedEgress;
+  }
+
+  /** Re-validates the learned allowlist file now; with hot reload on, a bad file keeps the previous version. */
+  validateLearnedEgress(): void {
+    this.learnedEgress.validate();
+  }
+
+  private createLearnedEgress(config: PalizadeConfig): LearnedEgress {
+    if (config.reload?.enabled === false) return new LearnedEgress(config.egress.learnedFile);
+    return new LearnedEgress(config.egress.learnedFile, (error) => this.reportReloadFailure("allowlist", config.egress.learnedFile, error));
+  }
+
+  private reportReloadFailure(kind: string, file: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${kind}:${file}:${message}`;
+    if (this.lastReloadFailure === key) return;
+    this.lastReloadFailure = key;
+    console.warn(`[palizade] ${file} is invalid; keeping the previous ${kind}.\n${message}`);
+    void this.options.audit.write({
+      session: this.options.sessionId,
+      server: this.options.serverName,
+      direction: "internal",
+      method: "config/reload",
+      action: "log_only",
+      reason: `Rejected invalid ${kind} ${file}; kept the previous version.`,
+      metadata: { reload: { kind, file, ok: false, error: message.slice(0, 2000) } }
+    }).catch(() => undefined);
   }
 
   async handleClientMessage(message: JsonRpcMessage): Promise<EngineOutput> {

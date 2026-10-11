@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { parseYamlWithSchema } from "@palizade/policy";
 import { canonicalHost } from "@palizade/taint";
 import YAML from "yaml";
 import { z } from "zod";
@@ -22,11 +23,29 @@ export function destinationEntries(fields: ArgumentField[]): string[] {
 }
 
 export class LearnedEgress {
-  constructor(private readonly path: string) { this.read(); }
+  private lastGood: z.infer<typeof learnedSchema>;
+
+  /** With `onInvalid`, a file that stops validating keeps the last valid version and reports the error; without it, an invalid file throws (fail closed). */
+  constructor(readonly path: string, private readonly onInvalid?: (error: unknown) => void) { this.lastGood = this.read(); }
 
   allowlist(configured: PalizadeConfig["egress"]["allowlist"]): PalizadeConfig["egress"]["allowlist"] {
-    const learned = this.read();
+    const learned = this.current();
     return { hosts: [...configured.hosts, ...learned.hosts], emails: [...configured.emails, ...learned.emails], destinations: [...configured.destinations, ...learned.destinations] };
+  }
+
+  /** Re-reads the file now, so a bad edit is reported when it happens rather than on the next sink call. */
+  validate(): void {
+    this.current();
+  }
+
+  private current(): z.infer<typeof learnedSchema> {
+    try {
+      this.lastGood = this.read();
+    } catch (error) {
+      if (!this.onInvalid) throw error;
+      this.onInvalid(error);
+    }
+    return this.lastGood;
   }
 
   remember(destinations: string[]): void {
@@ -53,7 +72,7 @@ export class LearnedEgress {
   private read(): z.infer<typeof learnedSchema> {
     if (!existsSync(this.path)) return learnedSchema.parse({});
     if (statSync(this.path).size > 1024 * 1024) throw new Error("Learned allowlist exceeds size limit");
-    return learnedSchema.parse(YAML.parse(readFileSync(this.path, "utf8")));
+    return parseYamlWithSchema(learnedSchema, readFileSync(this.path, "utf8"), this.path);
   }
 }
 

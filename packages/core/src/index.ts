@@ -12,6 +12,7 @@ export * from "./lock-diff.js";
 export * from "./sandbox.js";
 export * from "./egress-proxy.js";
 export * from "./launch.js";
+export * from "./hot-reload.js";
 export * from "./interceptor.js";
 export * from "./stdio.js";
 export * from "./http.js";

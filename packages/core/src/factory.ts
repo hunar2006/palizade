@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { loadPolicyFile } from "@palizade/policy";
 import type { PalizadeConfig } from "./config.js";
+import { HotReloader } from "./hot-reload.js";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
 import { SqliteToolRegistry } from "./metadata-guard.js";
@@ -18,9 +19,15 @@ export interface RuntimeComponents {
   lockfile: LockfileStore;
   approvals: ApprovalProvider;
   sessionId: string;
+  reloader?: HotReloader | undefined;
 }
 
-export async function createRuntime(config: PalizadeConfig, serverName: string): Promise<RuntimeComponents> {
+export interface RuntimeOptions {
+  /** palizade.yaml path; when set and `reload.enabled` is not false, policy, config and allowlist edits are hot reloaded. */
+  configPath?: string | undefined;
+}
+
+export async function createRuntime(config: PalizadeConfig, serverName: string, options: RuntimeOptions = {}): Promise<RuntimeComponents> {
   const server = config.servers[serverName];
   if (!server) {
     throw new Error(`Server not found in palizade config: ${serverName}`);
@@ -59,7 +66,13 @@ export async function createRuntime(config: PalizadeConfig, serverName: string):
     toolRegistry
   });
 
-  return { engine, audit, detector, taintStore, lockfile, approvals, sessionId };
+  let reloader: HotReloader | undefined;
+  if (options.configPath && config.reload?.enabled !== false) {
+    reloader = new HotReloader({ configPath: options.configPath, serverName, sessionId, engine, audit, intervalMs: config.reload?.intervalMs });
+    await reloader.start();
+  }
+
+  return { engine, audit, detector, taintStore, lockfile, approvals, sessionId, reloader };
 }
 
 export function createDetector(config: PalizadeConfig): Detector {
