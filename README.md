@@ -219,6 +219,7 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - The benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive.
 - Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
 - The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
+- Tool name collision and shadowing checks only compare servers wrapped by Palizade that share one state directory, and only from the moment each server has answered `tools/list`. The server that lists a shared name first keeps it until that server restarts; after that both copies are withheld until one is renamed or removed from `palizade.yaml`.
 
 These are scope boundaries, not footnotes. Palizade is strongest when sensitive capabilities are exposed through wrapped MCP servers and policy is reviewed for each server.
 
@@ -274,6 +275,8 @@ Preset guidance:
 
 Full reference: [docs/policy.md](docs/policy.md).
 
+v0.4 preset changes (tool metadata hardening): `default`, `strict`, `egress`, `interactive` and the `init` template now withhold a tool whose name another wrapped server already exposes (`block-tool-name-collision`), withhold tools whose metadata references another server's tool (`block-tool-shadowing`), and strip hidden Unicode from metadata (`sanitize-hidden-unicode-metadata`). `audit-only` logs the same findings. `palizade lock approve` now prints a field by field diff first and asks for confirmation in an interactive terminal (`--yes` skips the prompt; scripts without a TTY keep working).
+
 ## Commands
 
 ```bash
@@ -284,6 +287,7 @@ palizade wrap <serverName>
 palizade serve
 palizade status [--json]
 palizade lock approve <serverName>
+palizade lock diff <serverName>
 palizade detectors install promptguard2
 palizade detectors verify heuristic
 palizade audit --last 1h
