@@ -202,6 +202,14 @@ palizade -c /absolute/path/to/palizade.yaml audit --last 15m
 palizade -c /absolute/path/to/palizade.yaml audit --last 1h --action block
 ```
 
+Operate a running setup:
+
+- `palizade status [--json]` shows each server's transport, configured and last seen protocol era, lock state and sandbox; the policy file and hash; taint record counts (normal and persistent); quarantined sessions; sessions where the Rule of Two is armed (untrusted and sensitive content both seen); and the last 10 blocks.
+- `palizade policy check [file]` validates a policy before you deploy it: schema and unknown keys (with a "did you mean" hint), rules that can never run because an earlier rule matches everything, conditions that can never be true (`labels_any: []`, `detector_score_gte` above `detector_score_lt`, an invalid `argument_regex`), and `server` or `tool` names that are not in `palizade.yaml` or `palizade.lock`. It exits 1 on errors, and on warnings too with `--strict`.
+- `palizade learn --from-audit --since 7d` prints a draft YAML of tool classes and allowlist entries observed in audit. It never writes a file, and it does not suggest destinations that were only seen in blocked calls or with tainted data.
+- Edits to `palizade.yaml`, the policy file and `palizade.allow.yaml` are picked up by running `wrap` and `serve` processes within about a second. An invalid edit is rejected: the previous version keeps running, the failure is audited and printed on stderr with the YAML path and a fix hint. Turn this off with `reload: { enabled: false }`; change the poll interval with `reload.intervalMs`.
+- For SIEM ingestion, `metrics: { jsonl: .palizade/metrics.jsonl }` writes one line per decision with counters only (no payloads), rotating at `metrics.maxBytes` (default 64 MiB).
+
 Common Windows and client gotchas:
 
 - Desktop clients may spawn MCP servers without inheriting your shell `PATH`. `install-config` writes an absolute Node path and an absolute Palizade CLI path to avoid `.cmd` and `.ps1` shim issues.
@@ -229,6 +237,7 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
 - Tool name collision and shadowing checks only compare servers wrapped by Palizade that share one state directory, and only from the moment each server has answered `tools/list`. The server that lists a shared name first keeps it until that server restarts; after that both copies are withheld until one is renamed or removed from `palizade.yaml`.
 - Sandboxing is opt-in and limited by its backend. The docker `allowlist` mode relies on the server honoring `HTTPS_PROXY` unless `sandbox.dockerNetwork` names an internal network; seatbelt restricts writes and network but not reads; Palizade does not sandbox `url` servers or the client itself, and it does not harden the docker daemon or the image you choose.
+- Hot reload only applies settings the interception engine reads per message (policy, egress allowlist and mode, limits, trust, tool classes and other per-server classification). Changes to stores, sinks, detectors, transport or the upstream launch are reported and need a restart. A message already being processed when a reload lands may evaluate its later rules against the new policy. `palizade learn` output is a starting point built from what was observed, not a reviewed policy.
 
 These are scope boundaries, not footnotes. Palizade is strongest when sensitive capabilities are exposed through wrapped MCP servers and policy is reviewed for each server.
 
@@ -297,6 +306,8 @@ palizade serve
 palizade status [--json]
 palizade hook <client> [event]
 palizade install-hooks <client>
+palizade policy check [file] [--json] [--strict]
+palizade learn --from-audit --since 7d [--server <name>]
 palizade lock approve <serverName>
 palizade lock diff <serverName>
 palizade detectors install promptguard2
