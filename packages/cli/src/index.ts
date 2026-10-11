@@ -31,6 +31,7 @@ import {
   selectInstallConfigPath
 } from "./install-config.js";
 import { installHooks, type InstallHooksResult } from "./install-hooks.js";
+import { formatLearnDraft, learnFromAudit } from "./learn.js";
 import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
@@ -538,6 +539,20 @@ program.command("doctor")
     if (coverage.nativeToolsNote) {
       console.log(coverage.nativeToolsNote);
     }
+  });
+
+program.command("learn")
+  .description("Print a draft palizade.yaml snippet of observed tool classes and destinations; never writes config")
+  .option("--from-audit", "Learn from the JSONL audit log", false)
+  .option("--since <duration>", "Only events within a duration such as 7d", "7d")
+  .option("--server <server>", "Only this server")
+  .action(async (options: { fromAudit: boolean; since: string; server?: string }) => {
+    if (!options.fromAudit) throw new Error("palizade learn needs a source; use --from-audit.");
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const since = new Date(Date.now() - parseDuration(options.since));
+    const events = await new JsonlAuditSink(config.audit.jsonl).query({ since, ...(options.server ? { server: options.server } : {}), limit: Number.MAX_SAFE_INTEGER });
+    const existingToolClasses = Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [name, server.toolClasses]));
+    process.stdout.write(formatLearnDraft(learnFromAudit(events, { since, existingToolClasses }), since));
   });
 
 program.command("status")
