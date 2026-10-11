@@ -6,6 +6,10 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 
 ## Match Fields
 
+- `critical_path`: a logical or symlink-resolved file argument matches a built-in/configured protected target or cannot be resolved safely. Enforcing presets require approval for writes; strict blocks tainted critical writes.
+- `argument_path_glob`: any configured glob matches a normalized logical/canonical argument path. Relative patterns match at any directory depth; `~` expands to the current user's home.
+- `output_path_allowed`: every file argument resolves within `protectedTargets.outputDirectory`; used by the research preset. Symlink/traversal escapes are excluded.
+
 - `rate_limited`: per-minute sink attempts exceed `limits.sinkCallsPerMinute` (60), session destinations exceed `distinctDestinations` (20), or bounded history overflows.
 - `loop_detected`: an identical tool/argument HMAC repeats more than `limits.repeatThreshold` (5) times in the session. Enforcing presets require approval for these gates.
 

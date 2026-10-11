@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StaticApprovalProvider, type ApprovalDecision, type ApprovalProvider, type ApprovalRequest } from "@palizade/approvals";
@@ -27,6 +27,20 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("asks for an untainted critical write with a diff and passes a normal source write", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "reviewed" });
+    let cwd = "";
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, configure: (config) => { cwd = config.servers.toy!.cwd!; } });
+    try {
+      await mkdir(join(cwd, ".vscode"));
+      await writeFile(join(cwd, ".vscode", "settings.json"), '{"enabled":false}');
+      const write = (path: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 90, method: "tools/call", params: { name: "write_file", arguments: { path, content: '{"enabled":true}' } } });
+      expect((await write(".vscode/settings.json")).toServer).toHaveLength(1);
+      expect(approvals.requests.at(-1)?.details?.diff).toContain('+{"enabled":true}');
+      expect((await write("src/app.ts")).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
   it.each([
     { key: "sinkCallsPerMinute", rule: "approve-rate-limited-sink", varied: false },
     { key: "distinctDestinations", rule: "approve-rate-limited-sink", varied: true },
@@ -740,6 +754,7 @@ async function makeEngine(
   const dir = await mkdtemp(join(tmpdir(), "palizade-engine-"));
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
+    protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 },
     limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
     stateDir: dir,
     policy: "unused",

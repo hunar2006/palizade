@@ -16,6 +16,7 @@ import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
 import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
 import { trackSinkAttempt } from "./session-gates.js";
 import { DEFAULT_METADATA_GUARD_CONFIG, InMemoryToolRegistry, reviewMetadata, stripHiddenUnicodeDeep, type MetadataItem, type MetadataReview, type ToolRegistry } from "./metadata-guard.js";
+import { checkProtectedPaths, protectedWriteDiff } from "./protected-paths.js";
 import {
   isRequest,
   isSuccess,
@@ -212,6 +213,8 @@ export class InterceptionEngine {
       return matchCache.get(text)!;
     };
     const argumentFields = extractArgumentFields(params.arguments, tool, this.options.server.argumentRoles?.[tool]);
+    const protectedPaths = checkProtectedPaths(argumentFields, this.options.server.cwd ?? process.cwd(), this.options.config);
+    const writesFile = classification.capabilities.some((capability) => ["file_write", "writes_local", "deletes_data"].includes(capability));
     const argumentBlocks = extractTextBlocks(params.arguments);
     const argumentDetections = await Promise.all(argumentBlocks.map(async (block) => ({
       block,
@@ -228,12 +231,12 @@ export class InterceptionEngine {
     const fieldMatches = argumentFields.flatMap((field) => matchText(field.text).map((match) => ({ field, match })));
     const sensitiveMatches = matches.filter((match) => match.classes?.includes("sensitive"));
     const sensitiveFieldMatches = fieldMatches.filter(({ match }) => match.classes?.includes("sensitive"));
-    const taintedArgumentRoles = [...new Set(fieldMatches.map(({ field }) => field.role))];
+    const taintedArgumentRoles = [...new Set(fieldMatches.filter(({ match }) => match.reason !== "temporal").map(({ field }) => field.role))];
     const taintedDestination = fieldMatches.some(({ field, match }) => ["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id"].includes(field.role) && match.reason !== "temporal" && match.classes?.includes("untrusted"));
     const temporal = matches.some((match) => match.reason === "temporal") || this.options.taintStore.hasTemporal(this.options.sessionId);
     const secretDetected = hasSecretLabel(argumentDetection.labels);
     const piiDetected = hasPiiLabel(argumentDetection.labels);
-    let sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
+    let sensitiveTaint = sensitiveMatches.some((match) => match.reason !== "temporal") || sensitiveFieldMatches.some(({ match }) => match.reason !== "temporal");
     const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
     const entries = destinationEntries(argumentFields);
     const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
@@ -289,7 +292,7 @@ export class InterceptionEngine {
       tool_class: toolClass,
       capabilities: classification.capabilities,
       trust: this.options.server.trust,
-      taint: matches.length > 0 || fieldMatches.length > 0 || inputResponseTaint,
+      taint: matches.some((match) => match.reason !== "temporal") || fieldMatches.some(({ match }) => match.reason !== "temporal") || inputResponseTaint,
       sensitive_taint: sensitiveTaint || inputResponseSensitive,
       temporal_taint: temporal,
       secret_detected: secretDetected,
@@ -304,6 +307,9 @@ export class InterceptionEngine {
       session_quarantined: Boolean(session.quarantine),
       rate_limited: gates.rateLimited,
       loop_detected: gates.loopDetected,
+      critical_path: protectedPaths.critical,
+      argument_paths: protectedPaths.paths,
+      output_path_allowed: writesFile && protectedPaths.outputAllowed,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,
@@ -327,6 +333,9 @@ export class InterceptionEngine {
       taintMatches: allTaintMatches,
       rememberDestinations: egressGate && decision.action === "require_approval" ? entries : [],
       trustSessionDestinations: ruleOfTwo && decision.action === "require_approval" ? destinationKeys : [],
+      details: protectedPaths.critical && writesFile && decision.action === "require_approval" ? {
+        diff: protectedPaths.resolved.map((path) => protectedWriteDiff(path.canonical, params.arguments, this.options.config.protectedTargets.maxDiffBytes, allTaintMatches.some((match) => match.reason !== "temporal"), (text) => this.options.taintStore.match(this.options.sessionId, text).some((match) => match.reason !== "temporal"))).join("\n\n")
+      } : {},
       summary: formatToolCallApprovalSummary({
         tool,
         toolClass,
@@ -1307,6 +1316,7 @@ export class InterceptionEngine {
       summary: string;
       rememberDestinations?: string[];
       trustSessionDestinations?: string[];
+      details?: Record<string, unknown>;
     }
   ): Promise<{ approved: boolean; decision: PolicyDecision }> {
     if (decision.action !== "require_approval") {
@@ -1322,6 +1332,7 @@ export class InterceptionEngine {
       summary: input.summary,
       timeoutMs: this.options.config.approvals.timeoutMs,
       details: {
+        ...input.details,
         toolClass: input.toolClass,
         capabilities: input.classification?.capabilities,
         matchedRuleId: decision.matchedRuleId,

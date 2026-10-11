@@ -1,4 +1,5 @@
 import type { PolicyCondition, PolicyContext, PolicyDecision, PolicyDocument, PolicyRule } from "./types.js";
+import { matchesPathGlob } from "./paths.js";
 
 export function evaluatePolicy(policy: PolicyDocument, ctx: PolicyContext): PolicyDecision {
   try {
@@ -55,6 +56,9 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (condition.rule_of_two !== undefined && Boolean(ctx.rule_of_two) !== condition.rule_of_two) return false;
   if (condition.rate_limited !== undefined && Boolean(ctx.rate_limited) !== condition.rate_limited) return false;
   if (condition.loop_detected !== undefined && Boolean(ctx.loop_detected) !== condition.loop_detected) return false;
+  if (condition.critical_path !== undefined && Boolean(ctx.critical_path) !== condition.critical_path) return false;
+  if (condition.output_path_allowed !== undefined && Boolean(ctx.output_path_allowed) !== condition.output_path_allowed) return false;
+  if (condition.argument_path_glob && !condition.argument_path_glob.some((pattern) => ctx.argument_paths?.some((path) => matchesPathGlob(path, pattern)))) return false;
   if (condition.destination_session_trusted !== undefined && Boolean(ctx.destination_session_trusted) !== condition.destination_session_trusted) return false;
   if (condition.destination_allowlist_configured !== undefined && Boolean(ctx.destination_allowlist_configured) !== condition.destination_allowlist_configured) return false;
   if (condition.session_quarantined !== undefined && Boolean(ctx.session_quarantined) !== condition.session_quarantined) return false;

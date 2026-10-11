@@ -17,3 +17,4 @@ export * from "./stdio.js";
 export * from "./http.js";
 export * from "./http-listener.js";
 export * from "./factory.js";
+export * from "./protected-paths.js";

@@ -44,6 +44,8 @@ Upstream MCP server
 
 ## Features
 
+Writes to agent/MCP settings, CI definitions, shell startup files, credentials, policy/lock/learned allowlists and package.json require approval in enforcing presets. Strict blocks tainted critical writes. `protectedTargets.criticalPaths` extends built-ins; escaped, size-capped file diffs appear in approvals, with tainted/sensitive text masked. The whole package.json is protected conservatively.
+
 Behavior change: on semi/untrusted servers, `readOnlyHint` no longer turns a name-derived sink into a source (or an unknown tool into a source). Trusted-server annotation behavior and explicit tool-class overrides remain available.
 
 Enforcing presets approval-gate sink loops and rate limits: defaults are 60 sink attempts per minute, 20 distinct destinations per logical session and five identical calls before approval. `limits.historyEntries` bounds shared tracking to 1000 entries. Denied attempts count toward these limits.

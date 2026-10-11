@@ -34,6 +34,8 @@ palizade lock approve <serverName>
 
 ## Interception Points
 
+Protected writes resolve relative paths against the server working directory, expand home paths, normalize traversal/separators and resolve existing symlink ancestors even when the final file does not exist. Windows/macOS comparisons are case-insensitive. Built-in agent/client config, CI, shell profile, credential, policy/lock/allowlist and package.json targets can be extended with `protectedTargets.criticalPaths`. Uncertain resolution is treated as critical. `protectedTargets.maxDiffBytes` caps current/proposed file reads at 65536 bytes each; known write/edit forms produce escaped approval diffs, with tainted/sensitive content masked. Unknown edit formats explicitly report that a complete replacement was not supplied.
+
 1. `initialize`
    - Forwarded and audited as session setup.
    - Server capability metadata is lock-checked and scanned.
