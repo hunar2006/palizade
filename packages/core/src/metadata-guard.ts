@@ -159,6 +159,7 @@ export async function reviewMetadata(items: MetadataItem[], options: MetadataRev
     const shadows = options.config.shadowing
       ? others.filter((entry) => !ownNames.has(entry.tool) && mentionsTool(visible, entry))
       : [];
+    // shortcut: collisions are checked when this server answers tools/list, so a second server that registers the same name later is only caught on its own list, re-check on tools/call once list_changed handling (M5) refreshes the registry.
     const collidesWith = options.tools
       ? [...new Set(others.filter((entry) => entry.tool === item.name).map((entry) => entry.server))]
       : [];
