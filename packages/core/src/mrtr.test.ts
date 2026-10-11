@@ -32,6 +32,7 @@ rules:
 
 function makeConfig(dir: string): PalizadeConfig {
   return {
+    protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 },
     stateDir: dir,
     limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
     policy: join(dir, "policy.yaml"),

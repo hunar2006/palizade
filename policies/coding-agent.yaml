@@ -27,6 +27,9 @@ rules:
 
 
 
+
+
+
   # --- M1: destination provenance ---
   - id: block-tainted-destination
     when: { direction: request, tool_class: sink, tainted_destination: true }
@@ -45,6 +48,41 @@ rules:
       method: sampling/createMessage
     action: block
     reason: MCP server attempted to access the model through sampling.
+
+  # --- M5: MRTR input requests ---
+  - id: approve-elicitation
+    name: Require approval for elicitation requests
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+
+  # --- M4: tool metadata hardening ---
+  - id: block-tool-name-collision
+    name: Block tools whose name another wrapped server already exposes
+    when:
+      direction: response
+      name_collision_detected: true
+    action: block
+    reason: Another wrapped server already exposes a tool with this name.
+
+  - id: block-tool-shadowing
+    name: Block metadata that references another server's tools
+    when:
+      direction: response
+      tool_shadowing_detected: true
+    action: block
+    reason: Tool metadata references a tool that belongs to a different server.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.
+  # --- end M4 ---
 
   - id: block-poisoned-tool-metadata
     name: Block poisoned tool metadata
