@@ -14,6 +14,7 @@ import {
   HttpServeListener,
   loadConfig,
   LockfileStore,
+  sandboxStatus,
   StdioMcpProxy,
   type McpTool
 } from "@palizade/core";
@@ -274,7 +275,7 @@ program.command("wrap")
       await proxy.run();
       return;
     }
-    const proxy = new StdioMcpProxy({ serverName, server, transport: config.transport, engine: runtime.engine });
+    const proxy = new StdioMcpProxy({ serverName, server, transport: config.transport, engine: runtime.engine, audit: runtime.audit, sessionId: runtime.sessionId });
     await proxy.run();
   });
 
@@ -324,7 +325,7 @@ lock.command("approve")
     const timeoutMs = parseDuration(options.timeout);
     const tools = server.url
       ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
-      : await collectToolsFromStdioServer(server, timeoutMs) as McpTool[];
+      : await collectToolsFromStdioServer(server, timeoutMs, { serverName, audit: new AuditLogger([new JsonlAuditSink(config.audit.jsonl)]) }) as McpTool[];
     const lockStore = new LockfileStore(config.lockfile);
     const diff = diffToolsAgainstLock(await lockStore.read(), serverName, tools);
     console.log(formatToolDiff(serverName, diff));
@@ -361,7 +362,7 @@ lock.command("diff")
     const timeoutMs = parseDuration(options.timeout);
     const tools = server.url
       ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
-      : await collectToolsFromStdioServer(server, timeoutMs) as McpTool[];
+      : await collectToolsFromStdioServer(server, timeoutMs, { serverName, audit: new AuditLogger([new JsonlAuditSink(config.audit.jsonl)]) }) as McpTool[];
     const diff = diffToolsAgainstLock(await new LockfileStore(config.lockfile).read(), serverName, tools);
     console.log(options.json ? JSON.stringify(diff, null, 2) : formatToolDiff(serverName, diff));
     if (diff.some((entry) => entry.status !== "unchanged")) process.exitCode = 2;
@@ -473,6 +474,14 @@ program.command("doctor")
         console.log(`Server ${name}: url=${server.url} [trust=${server.trust}] [protocolVersion=${server.protocolVersion ?? "auto"}]`);
       } else {
         console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+      }
+    }
+    const sandboxRows = sandboxStatus(config.servers);
+    if (sandboxRows.length > 0) {
+      console.log("Sandbox:");
+      for (const row of sandboxRows.filter((entry) => entry.status !== "remote")) {
+        console.log(`  ${row.status === "unsandboxed" ? "UNSANDBOXED" : row.status === "unsupported" ? "UNSUPPORTED" : "sandboxed"} ${row.server} [${row.sandbox}]: ${row.detail}`);
+        if (row.status === "unsupported") process.exitCode = 1;
       }
     }
     const coverage = await inspectClientCoverage({
