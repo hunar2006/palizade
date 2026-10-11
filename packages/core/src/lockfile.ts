@@ -1,12 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { LockStatus } from "@palizade/policy";
-import { hashDescriptor, hashTool, stableStringify } from "./canonical.js";
+import { canonicalToolView, hashDescriptor, hashTool, stableStringify } from "./canonical.js";
 import type { McpTool } from "./mcp.js";
 
 export interface ToolLockEntry {
   hash: string;
   approvedAt: string;
+  snapshot?: unknown;
 }
 
 export interface ServerLock {
@@ -101,7 +102,7 @@ export class LockfileStore {
     const checks: ToolLockCheck[] = [];
     for (const tool of tools) {
       const hash = hashTool(tool);
-      lock.servers[serverName].tools[tool.name] = { hash, approvedAt: now };
+      lock.servers[serverName].tools[tool.name] = { hash, approvedAt: now, snapshot: canonicalToolView(tool) };
       checks.push({ tool: tool.name, hash, status: "approved" });
     }
     await this.write(lock);

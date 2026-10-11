@@ -7,6 +7,7 @@ export * from "./arguments.js";
 export * from "./text.js";
 export * from "./lockfile.js";
 export * from "./metadata-guard.js";
+export * from "./lock-diff.js";
 export * from "./interceptor.js";
 export * from "./stdio.js";
 export * from "./http.js";
