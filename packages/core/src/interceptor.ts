@@ -294,18 +294,24 @@ export class InterceptionEngine {
     const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
     const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
+    const outboundPayload = argumentFields.filter((field) => !field.path.includes("<")).flatMap((field) => {
+      if (field.role === "url") {
+        try { return [...new URL(field.text).searchParams.values()]; } catch { return []; }
+      }
+      return ["hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role) ? [] : [field.text];
+    }).join("");
     const splitMatches = toolClass !== "sink" ? [] : entries.flatMap((entry) => {
-      const payload = argumentFields.filter((field) => !field.path.includes("<") && !["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role)).map((field) => field.text).join("");
-      const combined = this.outboundWindow.append(this.options.sessionId, entry, payload || argumentText, this.options.config.taint.window);
+      const combined = this.outboundWindow.append(this.options.sessionId, entry, outboundPayload || argumentText, this.options.config.taint.window);
       return combined === undefined ? [] : expandCandidates(combined, this.options.config.taint.decode).flatMap((candidate) => this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax, sensitiveFragments: true }).filter((match) => match.reason !== "temporal"));
     });
     const splitMatch = splitMatches.some((match) => !matches.some((current) => current.reason !== "temporal" && current.taintId === match.taintId));
     sensitiveTaint ||= splitMatches.some((match) => match.classes?.includes("sensitive"));
-    const destination = summarizeDestinations(argumentFields, allowlist);
+    const destination = summarizeDestinations(argumentFields, allowlist, (value) => matchText(value).some((match) => match.reason !== "temporal"));
     const lookalikeDestination = destination.hosts.some((host) => {
       const skeleton = hostSkeleton(host);
       return skeleton !== canonicalHost(host) && (allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
     });
+    const safeDestination = { ...destination, hosts: destination.hosts.map((host) => matchText(host).some((match) => match.reason !== "temporal") ? "[REDACTED:tainted-host]" : maskKnownSensitiveText(host)) };
     const allTaintMatches = [
       ...matches,
       ...fieldMatches.map(({ match }) => match),
@@ -331,7 +337,7 @@ export class InterceptionEngine {
         inputResponseMatches.push(match);
       }
       inputResponseTaint = inputResponseMatches.some((match) => match.reason !== "temporal");
-      inputResponseSensitive = inputResponseMatches.some((match) => match.classes?.includes("sensitive"));
+      inputResponseSensitive = inputResponseMatches.some((match) => match.reason !== "temporal" && match.classes?.includes("sensitive"));
       allTaintMatches.push(...inputResponseMatches);
     }
 
@@ -394,7 +400,7 @@ export class InterceptionEngine {
         capabilities: classification.capabilities,
         taintMatches: allTaintMatches,
         taintedArgumentRoles,
-        destination,
+        destination: safeDestination,
         taintStore: this.options.taintStore
       })
     });
@@ -408,7 +414,7 @@ export class InterceptionEngine {
       approved: approval.approved,
       argumentRoles: argumentRolesSummary(argumentFields),
       taintedArgumentRoles,
-      destination,
+      destination: safeDestination,
       sensitiveTaint,
       secretDetected,
       piiDetected,
@@ -692,7 +698,7 @@ export class InterceptionEngine {
       trust: this.options.server.trust
     });
     const { fused: contentFused } = await this.detectContents(visibleMetadataContents(contents));
-    // shortcut: server/discover output is scanned but not locked here; M5 adds lockfile coverage for it.
+    // shortcut: discover shapes without a top-level tools array are scanned but not tool-hashed, extend schema-aware locking when more discover shapes are supported.
     const review = await this.reviewMetadataSafely(message, [{ name: "server/discover", value: result }], false, startedAt);
     if ("blocked" in review) {
       return review.blocked;
@@ -730,6 +736,7 @@ export class InterceptionEngine {
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
     const result = (message as { result: unknown }).result;
+    // shortcut: input-required gating runs only for tools/call results, extend prompt/resource handlers when those result forms are supported.
     const inputRequiredGate = await this.checkInputRequiredRequests(message, pending, result);
     if (inputRequiredGate) {
       return inputRequiredGate;
@@ -1507,7 +1514,7 @@ export class InterceptionEngine {
       action: decision.action,
       reason: decision.reason,
       latency_ms: Date.now() - startedAt,
-      payload: scrubAuditPayload(extra.payload),
+      payload: (extra.taintIds?.length || extra.taintMatches?.some((match) => match.reason !== "temporal")) && extra.payload !== undefined ? "[REDACTED:tainted-content]" : scrubAuditPayload(extra.payload),
       metadata: {
         toolClass: extra.toolClass,
         capabilities: extra.classification?.capabilities,
@@ -1637,21 +1644,19 @@ function summarizeApprovalDestination(destination: DestinationSummary): string |
   return parts.length > 0 ? parts.join("; ") : undefined;
 }
 
-function summarizeDestinations(argumentFields: ArgumentField[], allowlist: PalizadeConfig["egress"]["allowlist"]): DestinationSummary {
+function summarizeDestinations(argumentFields: ArgumentField[], allowlist: PalizadeConfig["egress"]["allowlist"], tainted: (value: string) => boolean): DestinationSummary {
   const hosts = dedupePreservingOrder(argumentFields.flatMap((field) => hostsFromField(field)));
   const emails = dedupePreservingOrder(argumentFields
     .filter((field) => field.role === "email_recipient")
     .map((field) => field.text.toLowerCase()));
-  const allowlistConfigured = allowlist.hosts.length > 0 || allowlist.emails.length > 0;
-  const hostsAllowed = hosts.every((host) => allowlist.hosts.some((entry) => matchesHost(entry, host)));
-  const emailsAllowed = emails.every((email) => allowlist.emails.some((entry) => matchesEmail(entry, email)));
-  const hasDestinations = hosts.length > 0 || emails.length > 0;
+  const entries = destinationEntries(argumentFields);
+  const allowlistConfigured = allowlist.hosts.length > 0 || allowlist.emails.length > 0 || allowlist.destinations.length > 0;
   return {
-    allowed: !allowlistConfigured || !hasDestinations || (hostsAllowed && emailsAllowed),
+    allowed: !allowlistConfigured || destinationsAllowed(entries, allowlist),
     allowlistConfigured,
     hosts,
-    emailRecipients: emails.map(maskSensitiveValueForMetadata),
-    destinationCount: hosts.length + emails.length
+    emailRecipients: emails.map((email) => tainted(email) ? "[REDACTED:tainted-recipient]" : maskSensitiveValueForMetadata(email)),
+    destinationCount: entries.length
   };
 }
 
@@ -1667,40 +1672,6 @@ function hostsFromField(field: ArgumentField): string[] {
   } catch {
     return [];
   }
-}
-
-function matchesHost(pattern: string, host: string): boolean {
-  const normalizedPattern = normalizeHost(pattern);
-  const normalizedHost = normalizeHost(host);
-  if (!normalizedPattern || !normalizedHost) {
-    return false;
-  }
-  if (normalizedPattern === "*") {
-    return true;
-  }
-  if (normalizedPattern.startsWith("*.")) {
-    const suffix = normalizedPattern.slice(1);
-    return normalizedHost.endsWith(suffix);
-  }
-  return normalizedPattern === normalizedHost;
-}
-
-function matchesEmail(pattern: string, email: string): boolean {
-  const normalizedPattern = pattern.trim().toLowerCase();
-  const normalizedEmail = email.trim().toLowerCase();
-  if (!normalizedPattern || !normalizedEmail) {
-    return false;
-  }
-  if (normalizedPattern === "*") {
-    return true;
-  }
-  if (normalizedPattern.startsWith("*@")) {
-    return normalizedEmail.endsWith(normalizedPattern.slice(1));
-  }
-  if (normalizedPattern.startsWith("@")) {
-    return normalizedEmail.endsWith(normalizedPattern);
-  }
-  return normalizedPattern === normalizedEmail;
 }
 
 function normalizeHost(value: string): string {

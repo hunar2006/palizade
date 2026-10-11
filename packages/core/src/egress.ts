@@ -82,7 +82,10 @@ export function destinationsAllowed(entries: string[], allowlist: PalizadeConfig
       const host = entry.slice(5);
       return allowlist.hosts.some((value) => value === "*" || (value.startsWith("*.") ? host.endsWith(`.${canonicalHost(value.slice(2))}`) : canonicalHost(value) === host));
     }
-    if (entry.startsWith("email:")) return allowlist.emails.some((value) => value === "*" || value.toLowerCase() === entry.slice(6) || (value.startsWith("*@") && entry.slice(6).endsWith(value.slice(1).toLowerCase())));
+    if (entry.startsWith("email:")) return allowlist.emails.some((configured) => {
+      const value = configured.trim().toLowerCase();
+      return value === "*" || value === entry.slice(6) || (value.startsWith("*@") && entry.slice(6).endsWith(value.slice(1))) || (value.startsWith("@") && entry.slice(6).endsWith(value));
+    });
     return allowlist.destinations.includes(entry);
   });
 }

@@ -63,9 +63,9 @@ program.command("init")
     await writeIfMissing("palizade.yaml", YAML.stringify(starter), options.force);
     await writeIfMissing(`policies/${options.preset}.yaml`, preset, options.force);
     await mkdir(".palizade", { recursive: true });
-    const token = await ensureListenerToken(".palizade/listener.token");
+    await ensureListenerToken(".palizade/listener.token");
     console.log(`Initialized Palizade config, ${options.preset} policy, and .palizade state directory.`);
-    console.log(`Listener bearer token stored at .palizade/listener.token (first 8 chars: ${token.slice(0, 8)}...).`);
+    console.log("Listener bearer token stored at .palizade/listener.token.");
   });
 
 program.command("install-config")

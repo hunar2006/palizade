@@ -4,6 +4,14 @@ import { tmpdir } from "node:os";
 import { expect, it } from "vitest";
 import { LearnedEgress, destinationsAllowed } from "./egress.js";
 
+it("retains legacy email-domain allowlists and denies other domains", () => {
+  for (const email of ["@example.test", "*@example.test", " USER@EXAMPLE.TEST "]) {
+    const allowlist = { hosts: [], emails: [email], destinations: [] };
+    expect(destinationsAllowed(["email:user@example.test"], allowlist)).toBe(true);
+    expect(destinationsAllowed(["email:user@other.test"], allowlist)).toBe(false);
+  }
+});
+
 it("remembers new hosts separately and reloads changes without rewriting config", async () => {
   const dir = await mkdtemp(join(tmpdir(), "palizade-learned-"));
   try {
