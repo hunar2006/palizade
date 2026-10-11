@@ -24,8 +24,8 @@ export class TerminalApprovalProvider implements ApprovalProvider {
     try {
       const answer = await withTimeout(rl.question(prompt), request.timeoutMs);
       const normalized = answer.trim().toLowerCase();
-      const remember = request.details?.allowAlways === true && normalized === "always" ? "always" : "once";
-      const approved = normalized === "y" || normalized === "yes" || remember === "always";
+      const remember = request.details?.allowAlways === true && normalized === "always" ? "always" : request.details?.allowSession === true && normalized === "session" ? "session" : "once";
+      const approved = normalized === "y" || normalized === "yes" || remember !== "once";
       return {
         remember,
         approved,
@@ -73,6 +73,7 @@ function formatApprovalPrompt(request: ApprovalRequest): string {
     `Reason: ${request.reason}`,
     request.taintIds.length > 0 ? `Taint matches: ${request.taintIds.length}` : undefined,
     `Summary: ${request.summary}`,
+    request.details?.allowSession === true ? "Type session to trust this destination for this session." : undefined,
     request.details?.allowAlways === true ? "Allow once [y], allow always [always], or deny [N]? " : "Allow this operation? [y/N] "
   ].filter(Boolean);
   return `${lines.join("\n")}`;

@@ -1,10 +1,24 @@
 import { makeFingerprint, hammingDistanceHex, normalizeText } from "./fingerprint.js";
 import { newTaintId, sha256 } from "./hash.js";
+import { emptySession, type SessionState } from "./session.js";
 import type { AddTaintInput, TaintClass, TaintMatch, TaintMatchOptions, TaintRecord, TaintStore, TemporalTaintConfig, TemporalTaintState } from "./types.js";
 
 export class InMemoryTaintStore implements TaintStore {
   private readonly records = new Map<string, TaintRecord>();
   private readonly temporalBySession = new Map<string, TemporalTaintState>();
+  private readonly sessions = new Map<string, SessionState>();
+
+  getSession(sessionId: string): SessionState {
+    return structuredClone(this.sessions.get(sessionId) ?? emptySession());
+  }
+
+  updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState {
+    const state = update(this.getSession(sessionId));
+    this.sessions.set(sessionId, structuredClone(state));
+    return state;
+  }
+
+  destinationKey(text: string): string { return sha256(text); }
 
   add(input: AddTaintInput): TaintRecord {
     const record: TaintRecord = {

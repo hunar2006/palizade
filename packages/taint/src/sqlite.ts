@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { extractAtomicTokens, hammingDistanceHex, makeSensitiveFragments, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
 import { hmacSha256Hex, newTaintId, sha256 } from "./hash.js";
+import { emptySession, type SessionState } from "./session.js";
 import type { AddTaintInput, TaintClass, TaintFingerprint, TaintMatch, TaintMatchOptions, TaintRecord, TaintScope, TaintStore, TemporalTaintConfig } from "./types.js";
 
 type SqliteDatabase = {
@@ -92,6 +93,7 @@ export class SqliteTaintStore implements TaintStore {
         remaining_turns integer not null
       );
       create index if not exists idx_temporal_expires on temporal_taint(expires_at);
+      create table if not exists session_state (scope_id text primary key, state_json text not null);
     `);
     this.ensureColumn("taint_records", "profile_id", "text");
     this.ensureColumn("taint_records", "scope_id", "text");
@@ -148,6 +150,28 @@ export class SqliteTaintStore implements TaintStore {
       JSON.stringify(record.fingerprint)
     );
     return record;
+  }
+
+  destinationKey(text: string): string { return hmacSha256Hex(this.hmacKey, text); }
+
+  getSession(sessionId: string): SessionState {
+    const row = this.db.prepare("select state_json from session_state where scope_id = ?").get(this.sessionKey(sessionId)) as { state_json: string } | undefined;
+    return row ? { ...emptySession(), ...JSON.parse(row.state_json) as SessionState } : emptySession();
+  }
+
+  updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState {
+    this.db.exec("begin immediate");
+    try {
+      const state = update(this.getSession(sessionId));
+      this.db.prepare("insert into session_state (scope_id, state_json) values (?, ?) on conflict(scope_id) do update set state_json = excluded.state_json").run(this.sessionKey(sessionId), JSON.stringify(state));
+      this.db.exec("commit");
+      return state;
+    } catch (error) { this.db.exec("rollback"); throw error; }
+  }
+
+  private sessionKey(sessionId: string): string {
+    if (this.runId) return `session:profile:${this.profileId}:run:${this.runId}`;
+    return `session:${this.scopeId(sessionId)}`;
   }
 
   get(id: string): TaintRecord | undefined {

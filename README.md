@@ -44,6 +44,8 @@ Upstream MCP server
 
 ## Features
 
+Default, strict and interactive now require approval for remote sinks once a session has seen both untrusted and sensitive content, even when no argument text matches. Approval can trust that destination for the current logical session. Use `PALIZADE_RUN_ID` for host-scoped session isolation; otherwise profile-scoped flags conservatively survive wrapper restarts.
+
 Split outbound payloads are correlated per session/destination in a bounded memory window. Default requires approval for reconstructed taint; strict and egress block it. Eight-character sensitive shard fingerprints are stored as HMACs. This covers bounded observable encodings and fragments; custom transformations and cross-process splits remain limitations.
 
 `egress.mode` defaults to `open` for compatibility. Use `approve_new` with the default preset: new destinations offer allow once, allow always, or deny. Allow always writes `palizade.allow.yaml` beside the config and reloads it on the next call. `allowlist_only` blocks unknown destinations; the strict preset enforces this even with mode `open`. Additional ID destinations can be listed in `egress.allowlist.destinations` as `channel_id:<id>`, `account_id:<id>` or `repository_destination:<id>`.

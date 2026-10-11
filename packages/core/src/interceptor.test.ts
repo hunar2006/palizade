@@ -27,6 +27,33 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("gates a paraphrased message after sensitive and untrusted reads and remembers only a session grant", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "trust destination", remember: "session" });
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, configure: (config) => { config.servers.toy!.sensitiveTools.read_secret = true; config.servers.toy!.toolClasses.read_secret = "source"; config.taint.temporal.enabled = false; } });
+    try {
+      const source = async (name: string, text: string) => {
+        await engine.handleClientMessage({ jsonrpc: "2.0", id: 60, method: "tools/call", params: { name } });
+        await engine.handleServerMessage({ jsonrpc: "2.0", id: 60, result: { content: [{ type: "text", text }] } });
+      };
+      await source("read_secret", "private credential from a sensitive origin");
+      await source("read_web", "A public news article about the weather.");
+      const send = () => engine.handleClientMessage({ jsonrpc: "2.0", id: 61, method: "tools/call", params: { name: "send_email", arguments: { to: "person@company.test", body: "Here is my independently phrased note." } } });
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests.at(-1)?.details?.matchedRuleId).toBe("approve-rule-of-two");
+      expect(approvals.requests.at(-1)?.details?.allowSession).toBe(true);
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("passes user-authored email after only an untrusted web read", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: false, reason: "deny" });
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals });
+    try {
+      await seedTaintedRead(engine);
+      expect((await engine.handleClientMessage({ jsonrpc: "2.0", id: 62, method: "tools/call", params: { name: "send_email", arguments: { to: "person@company.test", body: "Hello from the user." } } })).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(0);
+    } finally { await cleanup(); }
+  });
   it("catches a sensitive key split across four calls and passes unrelated chunks", async () => {
     const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/egress.yaml"), { configure: (config) => { config.taint.temporal.enabled = false; config.servers.toy!.sensitiveTools.read_web = true; config.egress.allowlist.hosts = ["known.test"]; } });
     try {

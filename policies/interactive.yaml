@@ -138,3 +138,14 @@ rules:
       temporal_taint: true
     action: require_approval
     reason: Recent suspicious untrusted content makes sink calls risky.
+
+  # --- M2: Rule of Two ---
+  - id: approve-rule-of-two
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_any: [network_egress, sends_message, writes_remote]
+      rule_of_two: true
+      destination_session_trusted: false
+    action: require_approval
+    reason: This session has seen both untrusted and sensitive content.

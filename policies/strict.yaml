@@ -140,3 +140,14 @@ rules:
       taint: false
     action: allow
     reason: Trusted pure tool call.
+
+  # --- M2: Rule of Two ---
+  - id: approve-rule-of-two
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_any: [network_egress, sends_message, writes_remote]
+      rule_of_two: true
+      destination_session_trusted: false
+    action: require_approval
+    reason: This session has seen both untrusted and sensitive content.

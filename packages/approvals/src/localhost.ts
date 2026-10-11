@@ -158,7 +158,7 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
       const approved = url.searchParams.get("approved") === "true";
       void this.settlePending(pending.request.id, {
         approved,
-        remember: approved && pending.request.details?.allowAlways === true && url.searchParams.get("remember") === "always" ? "always" : "once",
+        remember: approved && pending.request.details?.allowAlways === true && url.searchParams.get("remember") === "always" ? "always" : approved && pending.request.details?.allowSession === true && url.searchParams.get("remember") === "session" ? "session" : "once",
         reason: approved ? "approved in localhost browser" : "denied in localhost browser",
         approver: "localhost",
         approvalUrl: this.inboxUrl,
@@ -249,6 +249,7 @@ function renderApprovalPage(request: ApprovalRequest, token: string): string {
 
 function renderApprovalPanel(request: ApprovalRequest, token: string): string {
   const alwaysAction = escapeHtml(`/decision?${new URLSearchParams({ id: request.id, approved: "true", remember: "always", token }).toString()}`);
+  const sessionAction = escapeHtml(`/decision?${new URLSearchParams({ id: request.id, approved: "true", remember: "session", token }).toString()}`);
   const approveAction = escapeHtml(`/decision?${new URLSearchParams({ id: request.id, approved: "true", token }).toString()}`);
   const denyAction = escapeHtml(`/decision?${new URLSearchParams({ id: request.id, approved: "false", token }).toString()}`);
   const rows: Array<[string, string]> = [
@@ -266,6 +267,7 @@ function renderApprovalPanel(request: ApprovalRequest, token: string): string {
     <button class="approve" type="submit">Allow once</button>
   </form>
   ${request.details?.allowAlways === true ? `<form method="post" action="${alwaysAction}" style="display:inline"><button class="approve" type="submit">Allow always</button></form>` : ""}
+  ${request.details?.allowSession === true ? `<form method="post" action="${sessionAction}" style="display:inline"><button class="approve" type="submit">Trust destination for this session</button></form>` : ""}
   <form method="post" action="${denyAction}" style="display:inline">
     <button class="deny" type="submit">Deny</button>
   </form>`;

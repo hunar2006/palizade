@@ -96,6 +96,8 @@ The internal model uses capability flags such as `network_egress`, `sends_messag
 
 ## Shared Taint
 
+Session flags `seenUntrusted` and `seenSensitive` persist in SQLite. They follow the configured session scope; profile mode shares one logical session across wrapped processes. When `PALIZADE_RUN_ID` is supplied, flags and session grants are isolated by profile plus run ID, even with profile taint scope. Process scope keeps sessions independent. Without a host run ID, profile flags remain conservative across launches. Session destination grants are bounded to 1024 HMACs and never bypass hard blocks.
+
 Outbound sink calls keep a memory-only rolling payload window for each session and destination. `taint.window` defaults to 12 calls, 900000 ms TTL, 262144 bytes per window and 256 destinations. Concatenated payloads are decoded and matched; only sensitive records gain eight-character shard fingerprints, HMAC-protected in SQLite. Window matches exclude temporal-only hits. The window is process-local and bounded; it cannot correlate shards across distinct wrapper processes.
 
 Learned egress grants live in the separate `egress.learnedFile` (default `palizade.allow.yaml`, relative to config). It is validated at startup and before each sink call. Remember writes use an exclusive lock and atomic replacement; lock contention fails closed. Hard policy blocks always win over egress approvals. Source-call destinations are not egress-gated.
