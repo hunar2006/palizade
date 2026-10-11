@@ -1,5 +1,7 @@
 # Palizade
 
+Select a starter policy with `palizade init --preset coding-agent` or `palizade init --preset research-readonly --output-dir ./output`. Existing preset names also work. Initialization embeds the current policy files, and never overwrites existing files without `--force`. The research preset allows only sources and local output writes inside the selected directory; critical paths and other sinks remain blocked. The coding preset adds shell and tainted critical-write blocks and approval for Git pushes outside the allowlist. These presets are opt-in; ordinary `init` still selects `default`.
+
 **An MCP-native dataflow firewall for AI agents.**
 
 _iptables for agentic tool use._

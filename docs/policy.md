@@ -11,6 +11,7 @@ The `persists_memory` capability marks entity/observation/relation, remember/not
 - `critical_path`: a logical or symlink-resolved file argument matches a built-in/configured protected target or cannot be resolved safely. Enforcing presets require approval for writes; strict blocks tainted critical writes.
 - `argument_path_glob`: any configured glob matches a normalized logical/canonical argument path. Relative patterns match at any directory depth; `~` expands to the current user's home.
 - `output_path_allowed`: every file argument resolves within `protectedTargets.outputDirectory`; used by the research preset. Symlink/traversal escapes are excluded.
+- `git_push_unapproved`: a Git push targets a remote outside configured/learned allowlists, or its remote cannot be resolved safely. The coding preset requires approval.
 
 - `rate_limited`: per-minute sink attempts exceed `limits.sinkCallsPerMinute` (60), session destinations exceed `distinctDestinations` (20), or bounded history overflows.
 - `loop_detected`: an identical tool/argument HMAC repeats more than `limits.repeatThreshold` (5) times in the session. Enforcing presets require approval for these gates.
@@ -70,6 +71,8 @@ Set `audit.errorVerbosity: false` to make client-facing tool-call block messages
 For headless desktop clients, prefer `approvals.mode: localhost`. It serves a persistent loopback approval inbox at `http://127.0.0.1:32145/` by default, attempts to open the one-time approval page in the default browser, writes the current approval URL to `.palizade/pending-approval.url`, and includes that inbox/file hint in the client-facing tool error if the request times out or is denied. If the fixed port is already occupied by another Palizade process, localhost mode falls back to an ephemeral port and writes the actual URL to the same file and client-facing hint. `approvals.openBrowser: false` disables browser launch while keeping the inbox and URL file.
 
 ## Preset Spectrum
+
+`coding-agent` adds tainted critical-write and shell blocks, sensitive/Rule-of-Two network shell blocks (including DNS and ICMP), and approval for unallowlisted Git pushes to the default rules. `research-readonly` permits sources and local output writes within `protectedTargets.outputDirectory`; it blocks other sinks, unknown tools and critical targets. Explicit source classification is needed for read tools whose names imply network writes. These presets are opt-in.
 
 - `policies/audit-only.yaml`: log suspicious metadata, tainted sinks, resource/prompt injection, and sampling without enforcement.
 - `policies/interactive.yaml`: same posture as `default`, except `block-tainted-sink` uses `require_approval`. Choose this when legitimate user-authorized writes of tainted content should be possible after confirmation.

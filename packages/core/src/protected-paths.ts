@@ -86,6 +86,7 @@ export function protectedWriteDiff(path: string, args: unknown, maxBytes: number
     if (!before.includes(oldText)) throw new Error("Critical edit does not match current content");
     after = before.replace(oldText, newText);
   }
+  // shortcut: unfamiliar edit formats cannot produce a full diff, add adapters when a supported tool supplies another edit format.
   if (after === undefined) return "No complete replacement content was supplied; review the critical target operation.";
   if (Buffer.byteLength(after) > maxBytes) throw new Error("Critical path diff size limit exceeded");
   const safe = (text: string, redact: boolean) => escapeNonPrinting(redact || mask(text) ? "[REDACTED:tainted-or-sensitive-content]" : maskKnownSensitiveText(text));

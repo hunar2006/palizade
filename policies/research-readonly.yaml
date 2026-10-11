@@ -1,0 +1,38 @@
+version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  # --- M3: research read-only with bounded output writes ---
+  - id: deny-server-sampling
+    when: { direction: request, method: sampling/createMessage }
+    action: block
+    reason: Research sessions do not permit server-initiated model access.
+
+  - id: block-research-critical-path
+    when: { direction: request, critical_path: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    action: block
+    reason: Research output cannot change critical configuration or execution targets.
+
+  - id: allow-research-source
+    when: { direction: request, tool_class: source }
+    action: allow
+    reason: Read-only sources are permitted.
+
+  - id: block-research-nonfile-sink
+    when: { direction: request, tool_class: sink, capabilities_any: [network_egress, sends_message, writes_remote, persists_memory, executes_code, deletes_data] }
+    action: block
+    reason: Research sessions permit only local output file writes.
+
+  - id: allow-research-output
+    when: { direction: request, tool_class: sink, capabilities_all: [writes_local], output_path_allowed: true }
+    action: allow
+    reason: Every file target is inside the configured research output directory.
+
+  - id: block-research-sink
+    when: { direction: request, tool_class: sink }
+    action: block
+    reason: Research sessions block sinks outside the output directory.
+
+  - id: block-research-unknown-tool
+    when: { direction: request, method: tools/call, tool_class: unknown }
+    action: block
+    reason: Unknown tools cannot be verified as read-only.

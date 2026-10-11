@@ -108,6 +108,10 @@ The interceptor is era aware per message: `_meta["io.modelcontextprotocol/protoc
 
 ## Tool Classification
 
+The coding preset checks Git pushes by resolving simple literal remotes with local `git remote get-url --push --all`, under a one-second/4096-byte bound. It makes no network call. Dynamic, compound or unsupported command forms require approval. Shell network command detection is deliberately conservative, not a complete shell parser.
+
+The research preset checks every normalized/canonical file target against one configured output directory. It blocks critical paths even inside that directory, and rejects tools with network, remote-write, memory, execution or deletion capabilities. Source overrides remain an administrator trust decision.
+
 Annotations from semi/untrusted servers can raise risk but cannot lower it. `readOnlyHint` is ignored for classification/capability derivation on those servers; explicit administrator overrides still take priority. Trusted servers keep the prior annotation behavior, consistent with the 2026-07-28 MCP tools trust requirement.
 
 Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.

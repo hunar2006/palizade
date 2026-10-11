@@ -17,6 +17,7 @@ import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress
 import { trackSinkAttempt } from "./session-gates.js";
 import { DEFAULT_METADATA_GUARD_CONFIG, InMemoryToolRegistry, reviewMetadata, stripHiddenUnicodeDeep, type MetadataItem, type MetadataReview, type ToolRegistry } from "./metadata-guard.js";
 import { checkProtectedPaths, protectedWriteDiff } from "./protected-paths.js";
+import { checkGitPush } from "./git-egress.js";
 import {
   isRequest,
   isSuccess,
@@ -238,7 +239,9 @@ export class InterceptionEngine {
     const piiDetected = hasPiiLabel(argumentDetection.labels);
     let sensitiveTaint = sensitiveMatches.some((match) => match.reason !== "temporal") || sensitiveFieldMatches.some(({ match }) => match.reason !== "temporal");
     const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
+    const gitPush = checkGitPush(tool, argumentFields, this.options.server.cwd ?? process.cwd(), allowlist);
     const entries = destinationEntries(argumentFields);
+    for (const entry of gitPush.destinations) if (!entries.includes(entry)) entries.push(entry);
     if (classification.capabilities.includes("persists_memory") && entries.length === 0) entries.push(`memory:${this.options.serverName}`);
     const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
     const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
@@ -311,6 +314,7 @@ export class InterceptionEngine {
       critical_path: protectedPaths.critical,
       argument_paths: protectedPaths.paths,
       output_path_allowed: writesFile && protectedPaths.outputAllowed,
+      git_push_unapproved: gitPush.unapproved,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,

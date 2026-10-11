@@ -27,6 +27,28 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("enforces coding shell taint and gates unknown git push while passing npm test", async () => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/coding-agent.yaml"));
+    const shell = (command: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 110, method: "tools/call", params: { name: "shell", arguments: { command } } });
+    try {
+      expect((await shell("npm test")).toServer).toHaveLength(1);
+      expect((await shell("git push https://unknown.test/repository.git main")).toServer).toHaveLength(0);
+      expect(events.at(-1)?.matched_rule?.id).toBe("approve-unallowlisted-git-push");
+      const text = await seedTaintedRead(engine);
+      expect((await shell(`echo '${text}'`)).toServer).toHaveLength(0);
+      expect(events.at(-1)?.matched_rule?.id).toBe("block-tainted-shell");
+    } finally { await cleanup(); }
+  });
+  it("restricts research writes to the output directory and blocks remote sinks there", async () => {
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/research-readonly.yaml"), { configure: (config) => { config.protectedTargets.outputDirectory = join(config.servers.toy!.cwd!, "output"); } });
+    const call = (name: string, path?: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 111, method: "tools/call", params: { name, arguments: { path, content: "User-authored results." } } });
+    try {
+      expect((await call("read_web")).toServer).toHaveLength(1);
+      expect((await call("write_file", "output/results.md")).toServer).toHaveLength(1);
+      for (const path of ["elsewhere.md", "output/../escape.md", "output/.vscode/settings.json"]) expect((await call("write_file", path)).toServer).toHaveLength(0);
+      expect((await call("send_email", "output/results.md")).toServer).toHaveLength(0);
+    } finally { await cleanup(); }
+  });
   it("approval-gates memory writes and carries durable original provenance on a later read", async () => {
     const approvals = new RecordingApprovalProvider({ approved: true, reason: "save it" });
     const store = new InMemoryTaintStore();

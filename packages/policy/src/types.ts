@@ -58,6 +58,7 @@ export interface PolicyCondition {
   argument_regex?: string | undefined;
   argument_path_glob?: string[] | undefined;
   critical_path?: boolean | undefined;
+  git_push_unapproved?: boolean | undefined;
   output_path_allowed?: boolean | undefined;
   argument_role_any?: string[] | undefined;
   tainted_argument_role_any?: string[] | undefined;
@@ -105,6 +106,7 @@ export interface PolicyContext {
   argument_text?: string | undefined;
   argument_paths?: string[] | undefined;
   critical_path?: boolean | undefined;
+  git_push_unapproved?: boolean | undefined;
   output_path_allowed?: boolean | undefined;
   argument_roles?: string[] | undefined;
   tainted_argument_roles?: string[] | undefined;

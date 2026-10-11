@@ -56,6 +56,7 @@ export const policyConditionSchema = z.object({
   argument_regex: z.string().optional(),
   argument_path_glob: z.array(z.string()).optional(),
   critical_path: z.boolean().optional(),
+  git_push_unapproved: z.boolean().optional(),
   output_path_allowed: z.boolean().optional(),
   argument_role_any: z.array(z.string()).optional(),
   tainted_argument_role_any: z.array(z.string()).optional(),

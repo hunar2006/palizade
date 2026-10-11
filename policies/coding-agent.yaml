@@ -1,0 +1,216 @@
+version: 1
+defaults:
+  action: allow
+  on_error: block
+
+rules:
+  # --- M3: coding agent protections ---
+  - id: block-tainted-critical-path
+    when: { direction: request, critical_path: true, taint: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    action: block
+    reason: Tainted writes to critical paths are blocked for coding agents.
+
+  - id: block-tainted-shell
+    when: { direction: request, tainted_argument_role_any: [shell_command] }
+    action: block
+    reason: Untrusted content cannot drive shell commands.
+
+  - id: block-sensitive-network-shell
+    when: { direction: request, argument_role_any: [shell_command], sensitive_taint: true, argument_regex: '\b(curl|wget|nc|ncat|scp|ssh|nslookup|dig|ping)\b' }
+    action: block
+    reason: Sensitive taint cannot drive shell network, DNS or ICMP egress.
+
+  - id: block-rule-of-two-network-shell
+    when: { direction: request, argument_role_any: [shell_command], rule_of_two: true, argument_regex: '\b(curl|wget|nc|ncat|scp|ssh|nslookup|dig|ping)\b' }
+    action: block
+    reason: Rule of Two blocks shell network, DNS and ICMP egress.
+
+
+
+  # --- M1: destination provenance ---
+  - id: block-tainted-destination
+    when: { direction: request, tool_class: sink, tainted_destination: true }
+    action: block
+    reason: Destination came from untrusted content.
+
+  - id: block-lookalike-destination
+    when: { direction: request, tool_class: sink, lookalike_destination: true }
+    action: block
+    reason: Destination is a lookalike of a known host.
+
+  - id: deny-server-sampling
+    name: Deny server-initiated model access
+    when:
+      direction: request
+      method: sampling/createMessage
+    action: block
+    reason: MCP server attempted to access the model through sampling.
+
+  - id: block-poisoned-tool-metadata
+    name: Block poisoned tool metadata
+    when:
+      direction: response
+      method: tools/list
+      detector_score_gte: 0.75
+    action: block
+    reason: Tool metadata looks like prompt injection or tool poisoning.
+
+  - id: block-untrusted-unknown-tool
+    name: Block unknown tools on untrusted servers
+    when:
+      direction: request
+      method: tools/call
+      trust: untrusted
+      tool_class: unknown
+    action: block
+    reason: Unknown tools on untrusted servers must be classified explicitly.
+
+  - id: approve-semi-unknown-tool
+    name: Require approval for unknown tools on semi-trusted servers
+    when:
+      direction: request
+      method: tools/call
+      trust: semi
+      tool_class: unknown
+    action: require_approval
+    reason: Unknown tools on semi-trusted servers require approval.
+
+  - id: log-trusted-unknown-tool
+    name: Audit unknown tools on trusted servers
+    when:
+      direction: request
+      method: tools/call
+      trust: trusted
+      tool_class: unknown
+    action: log_only
+    reason: Unknown tool on trusted server allowed with audit logging.
+
+  - id: log-unapproved-tool-metadata
+    name: Surface tool lock drift
+    when:
+      direction: response
+      method: tools/list
+      lock_status:
+        - missing
+        - new
+        - changed
+    action: log_only
+    reason: Tool metadata is not approved in palizade.lock.
+
+  - id: sanitize-suspicious-untrusted-output
+    name: Spotlight suspicious untrusted output
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.35
+    action: sanitize
+    reason: Untrusted tool output contains injection-like signals.
+
+  - id: sanitize-suspicious-resource-content
+    name: Spotlight suspicious resource content
+    when:
+      direction: response
+      method:
+        - resources/read
+        - prompts/get
+      detector_score_gte: 0.35
+    action: sanitize
+    reason: Resource or prompt content contains injection-like signals.
+
+  - id: sanitize-strong-injection-any-trust
+    name: Spotlight strong injection signals regardless of trust
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.75
+    action: sanitize
+    reason: Strong injection signal in tool output.
+
+  # --- M1: split-call correlation ---
+  - id: approve-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: require_approval
+    reason: Split outbound calls reconstruct tainted content.
+
+  # --- M3: persistent memory provenance ---
+  - id: approve-tainted-memory
+    when: { direction: request, capabilities_any: [persists_memory], taint: true }
+    action: require_approval
+    reason: Tainted content is being persisted into memory.
+
+  - id: block-tainted-sink
+    name: Block tainted content entering sinks
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      taint: true
+    action: block
+    reason: Tainted content is flowing into a sink tool.
+
+  - id: block-tainted-egress-destination
+    name: Block tainted outbound destinations
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      capabilities_any:
+        - network_egress
+        - sends_message
+      tainted_argument_role_any:
+        - url
+        - hostname
+        - email_recipient
+        - http_query
+    action: block
+    reason: Tainted content is being used as an outbound destination or query parameter.
+
+  - id: require-approval-temporal-taint-sink
+    name: Require approval during temporal taint
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      temporal_taint: true
+    action: require_approval
+    reason: Recent suspicious untrusted content makes sink calls risky.
+
+  # --- M2: Rule of Two ---
+  - id: approve-rule-of-two
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_any: [network_egress, sends_message, writes_remote, persists_memory]
+      rule_of_two: true
+      destination_session_trusted: false
+    action: require_approval
+    reason: This session has seen both untrusted and sensitive content.
+
+  # --- M2: session quarantine ---
+  - id: approve-quarantined-sink
+    when: { direction: request, tool_class: sink, session_quarantined: true }
+    action: require_approval
+    reason: Session is quarantined after high-risk content or a blocked destination.
+
+  # --- M2: rate and loop gates ---
+  - id: approve-rate-limited-sink
+    when: { direction: request, tool_class: sink, rate_limited: true }
+    action: require_approval
+    reason: Session sink rate or distinct destination limit exceeded.
+
+  - id: approve-looping-sink
+    when: { direction: request, tool_class: sink, loop_detected: true }
+    action: require_approval
+    reason: Identical sink call repeated too many times.
+
+  # --- M3: protected targets ---
+  - id: approve-critical-path
+    when: { direction: request, critical_path: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    action: require_approval
+    reason: Writing a critical configuration or execution target requires approval.
+
+  # --- M3: git push destination gate ---
+  - id: approve-unallowlisted-git-push
+    when: { direction: request, git_push_unapproved: true }
+    action: require_approval
+    reason: Git push destination is not verified against the egress allowlist.
