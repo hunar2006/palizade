@@ -4,6 +4,7 @@ export * from "./config.js";
 export * from "./classifier.js";
 export * from "./content.js";
 export * from "./arguments.js";
+export * from "./era.js";
 export * from "./text.js";
 export * from "./lockfile.js";
 export * from "./metadata-guard.js";

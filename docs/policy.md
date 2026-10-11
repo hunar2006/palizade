@@ -85,6 +85,16 @@ Which preset should I use? Start with `audit-only` to learn your traffic. Use `i
 
 The allowlist rule is structural: with an allowlist configured, tainted data must flow only to allowed hosts/domains/emails. Secret and PII detection is pattern-based and intentionally high precision; it can miss custom, transformed, split, or obfuscated secrets.
 
+## Server Input Requests (2026-07-28 MRTR)
+
+Servers on the 2026-07-28 protocol request sampling, elicitation, and roots inside tool results (`resultType: "input_required"`). Palizade gates each request with the same policy methods the legacy server-initiated requests used:
+
+- `sampling/createMessage` requests are matched by the existing `deny-server-sampling` rule (block in `default`, `strict`, `interactive`, `egress`).
+- `elicitation/create` requests are matched by the new `approve-elicitation` rule in `default` and `interactive` (`strict` requires approval through its default action). Form-mode elicitations that request sensitive fields (passwords, API keys, tokens, payment data) are denied regardless of policy, per the spec. URL-mode elicitation URLs are checked against the egress allowlist and taint records.
+- `roots/list` requests pass through like the legacy safe list.
+
+The client's retry `inputResponses` are checked for tainted or sensitive content like any sink argument.
+
 ## Default Unknown Tool Behavior
 
 - Untrusted server plus unknown tool: block.

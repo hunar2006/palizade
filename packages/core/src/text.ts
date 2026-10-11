@@ -30,9 +30,18 @@ export function applyTextTransforms(value: unknown, transform: (text: string, bl
 }
 
 // Only MCP "text" fields carry readable content; wrapping type, mimeType, uri or base64 data
-// breaks schema validation in clients. shortcut: structuredContent strings are not spotlighted.
+// breaks schema validation in clients. structuredContent string fields stay strings when
+// spotlighted, so they keep the result schema valid (maxLength constraints can still break).
 export function isContentText(block: TextBlock): boolean {
   return block.path.at(-1) === "text";
+}
+
+export function isStructuredContentText(block: TextBlock): boolean {
+  return block.path.includes("structuredContent");
+}
+
+export function isSpotlightableText(block: TextBlock): boolean {
+  return isContentText(block) || isStructuredContentText(block);
 }
 
 export function spotlightText(text: string, source: { server: string; tool?: string; taintIds: string[] }): string {
