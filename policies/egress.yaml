@@ -1,10 +1,11 @@
+# FINAL: hard blocks precede gates; memory and allowlisted egress are explicit exceptions to the generic copied-content block.
+
 version: 1
 defaults:
   action: allow
   on_error: block
 
 rules:
-
 
   # --- M1: destination provenance ---
   - id: block-tainted-destination
@@ -41,14 +42,6 @@ rules:
       tool_shadowing_detected: true
     action: block
     reason: Tool metadata references a tool that belongs to a different server.
-
-  - id: sanitize-hidden-unicode-metadata
-    name: Strip hidden Unicode from metadata
-    when:
-      direction: response
-      hidden_unicode_detected: true
-    action: sanitize
-    reason: Metadata contains hidden Unicode characters.
   # --- end M4 ---
 
   - id: block-poisoned-tool-metadata
@@ -69,28 +62,6 @@ rules:
       tool_class: unknown
     action: block
     reason: Unknown tools on untrusted servers must be classified explicitly.
-
-  - id: approve-semi-unknown-tool
-    name: Require approval for unknown tools on semi-trusted servers
-    when:
-      direction: request
-      method: tools/call
-      trust: semi
-      tool_class: unknown
-    action: require_approval
-    reason: Unknown tools on semi-trusted servers require approval.
-
-  - id: log-unapproved-tool-metadata
-    name: Surface tool lock drift
-    when:
-      direction: response
-      method: tools/list
-      lock_status:
-        - missing
-        - new
-        - changed
-    action: log_only
-    reason: Tool metadata is not approved in palizade.lock.
 
   - id: block-secret-egress
     name: Block sensitive taint entering egress tools
@@ -137,6 +108,36 @@ rules:
     action: block
     reason: Tainted content is flowing to a destination outside the egress allowlist.
 
+  # --- M1: split-call correlation ---
+  - id: block-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: block
+    reason: Split outbound calls reconstruct tainted content.
+
+  - id: block-tainted-egress-destination
+    name: Block tainted outbound destinations
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      capabilities_any:
+        - network_egress
+        - sends_message
+      tainted_argument_role_any:
+        - url
+        - hostname
+        - email_recipient
+        - http_query
+    action: block
+    reason: Tainted content is being used as an outbound destination or query
+      parameter.
+
+  # --- M3: persistent memory provenance ---
+  - id: approve-tainted-memory
+    when: { direction: request, capabilities_any: [ persists_memory ], taint: true }
+    action: require_approval
+    reason: Tainted content is being persisted into memory.
+
   - id: redact-pii-egress
     name: Redact detected PII before message egress
     when:
@@ -146,49 +147,13 @@ rules:
       capabilities_any:
         - sends_message
         - network_egress
+      critical_path: false
+      temporal_taint: false
+      session_quarantined: false
+      rate_limited: false
+      loop_detected: false
     action: redact_secrets
     reason: PII-like content should be redacted before egress.
-
-  - id: sanitize-suspicious-untrusted-output
-    name: Spotlight suspicious untrusted output
-    when:
-      direction: response
-      method: tools/call
-      detector_score_gte: 0.35
-    action: sanitize
-    reason: Untrusted tool output contains injection-like signals.
-
-  - id: sanitize-suspicious-resource-content
-    name: Spotlight suspicious resource content
-    when:
-      direction: response
-      method:
-        - resources/read
-        - prompts/get
-      detector_score_gte: 0.35
-    action: sanitize
-    reason: Resource or prompt content contains injection-like signals.
-
-  - id: sanitize-strong-injection-any-trust
-    name: Spotlight strong injection signals regardless of trust
-    when:
-      direction: response
-      method: tools/call
-      detector_score_gte: 0.75
-    action: sanitize
-    reason: Strong injection signal in tool output.
-
-  # --- M1: split-call correlation ---
-  - id: block-split-match
-    when: { direction: request, tool_class: sink, split_match: true }
-    action: block
-    reason: Split outbound calls reconstruct tainted content.
-
-  # --- M3: persistent memory provenance ---
-  - id: approve-tainted-memory
-    when: { direction: request, capabilities_any: [persists_memory], taint: true }
-    action: require_approval
-    reason: Tainted content is being persisted into memory.
 
   - id: allow-tainted-allowed-egress-destination
     name: Allow tainted data only to explicitly allowlisted egress destinations
@@ -206,9 +171,11 @@ rules:
         - network_egress
         - sends_message
         - writes_remote
+      critical_path: false
+      temporal_taint: false
+      pii_detected: false
     action: allow
     reason: Tainted egress destination is explicitly allowlisted.
-
 
   - id: block-tainted-sink
     name: Block tainted content entering sinks
@@ -220,22 +187,15 @@ rules:
     action: block
     reason: Tainted content is flowing into a sink tool.
 
-  - id: block-tainted-egress-destination
-    name: Block tainted outbound destinations
+  - id: approve-semi-unknown-tool
+    name: Require approval for unknown tools on semi-trusted servers
     when:
       direction: request
       method: tools/call
-      tool_class: sink
-      capabilities_any:
-        - network_egress
-        - sends_message
-      tainted_argument_role_any:
-        - url
-        - hostname
-        - email_recipient
-        - http_query
-    action: block
-    reason: Tainted content is being used as an outbound destination or query parameter.
+      trust: semi
+      tool_class: unknown
+    action: require_approval
+    reason: Unknown tools on semi-trusted servers require approval.
 
   - id: require-approval-temporal-taint-sink
     name: Require approval during temporal taint
@@ -266,6 +226,66 @@ rules:
 
   # --- M3: protected targets ---
   - id: approve-critical-path
-    when: { direction: request, critical_path: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
     action: require_approval
     reason: Writing a critical configuration or execution target requires approval.
+  - id: approve-elicitation
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.
+
+  - id: log-unapproved-tool-metadata
+    name: Surface tool lock drift
+    when:
+      direction: response
+      method: tools/list
+      lock_status:
+        - missing
+        - new
+        - changed
+    action: log_only
+    reason: Tool metadata is not approved in palizade.lock.
+
+  - id: sanitize-suspicious-untrusted-output
+    name: Spotlight suspicious untrusted output
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.35
+    action: sanitize
+    reason: Untrusted tool output contains injection-like signals.
+
+  - id: sanitize-suspicious-resource-content
+    name: Spotlight suspicious resource content
+    when:
+      direction: response
+      method:
+        - resources/read
+        - prompts/get
+      detector_score_gte: 0.35
+    action: sanitize
+    reason: Resource or prompt content contains injection-like signals.
+
+  - id: sanitize-strong-injection-any-trust
+    name: Spotlight strong injection signals regardless of trust
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.75
+    action: sanitize
+    reason: Strong injection signal in tool output.

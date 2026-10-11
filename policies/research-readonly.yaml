@@ -1,3 +1,5 @@
+# FINAL: hard blocks precede gates; memory and allowlisted egress are explicit exceptions to the generic copied-content block.
+
 version: 1
 defaults: { action: allow, on_error: block }
 rules:
@@ -17,14 +19,6 @@ rules:
       tool_shadowing_detected: true
     action: block
     reason: Tool metadata references a tool that belongs to a different server.
-
-  - id: sanitize-hidden-unicode-metadata
-    name: Strip hidden Unicode from metadata
-    when:
-      direction: response
-      hidden_unicode_detected: true
-    action: sanitize
-    reason: Metadata contains hidden Unicode characters.
   # --- end M4 ---
 
   # --- M3: research read-only with bounded output writes ---
@@ -34,22 +28,82 @@ rules:
     reason: Research sessions do not permit server-initiated model access.
 
   - id: block-research-critical-path
-    when: { direction: request, critical_path: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
     action: block
     reason: Research output cannot change critical configuration or execution targets.
+
+  - id: block-research-nonfile-sink
+    when:
+      {
+        direction: request,
+        tool_class: sink,
+        capabilities_any:
+          [
+            network_egress,
+            sends_message,
+            writes_remote,
+            persists_memory,
+            executes_code,
+            deletes_data
+          ]
+      }
+    action: block
+    reason: Research sessions permit only local output file writes.
+  - id: approve-elicitation
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+  - id: approve-quarantined-output
+    when:
+      direction: request
+      tool_class: sink
+      output_path_allowed: true
+      capabilities_all:
+        - writes_local
+      session_quarantined: true
+    action: require_approval
+    reason: Research output requires approval while a session gate is active.
+  - id: approve-rate-limited-output
+    when:
+      direction: request
+      tool_class: sink
+      output_path_allowed: true
+      capabilities_all:
+        - writes_local
+      rate_limited: true
+    action: require_approval
+    reason: Research output requires approval while a session gate is active.
+  - id: approve-looping-output
+    when:
+      direction: request
+      tool_class: sink
+      output_path_allowed: true
+      capabilities_all:
+        - writes_local
+      loop_detected: true
+    action: require_approval
+    reason: Research output requires approval while a session gate is active.
 
   - id: allow-research-source
     when: { direction: request, tool_class: source }
     action: allow
     reason: Read-only sources are permitted.
 
-  - id: block-research-nonfile-sink
-    when: { direction: request, tool_class: sink, capabilities_any: [network_egress, sends_message, writes_remote, persists_memory, executes_code, deletes_data] }
-    action: block
-    reason: Research sessions permit only local output file writes.
-
   - id: allow-research-output
-    when: { direction: request, tool_class: sink, capabilities_all: [writes_local], output_path_allowed: true }
+    when:
+      {
+        direction: request,
+        tool_class: sink,
+        capabilities_all: [ writes_local ],
+        output_path_allowed: true
+      }
     action: allow
     reason: Every file target is inside the configured research output directory.
 
@@ -62,3 +116,11 @@ rules:
     when: { direction: request, method: tools/call, tool_class: unknown }
     action: block
     reason: Unknown tools cannot be verified as read-only.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.

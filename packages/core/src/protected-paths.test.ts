@@ -13,6 +13,9 @@ it("protects traversal, home targets and symlink ancestors without blocking norm
     const config = parseConfig("protectedTargets: { outputDirectory: output }\n", dir);
     const check = (path: string) => checkProtectedPaths(extractArgumentFields({ path }), dir, config);
     expect(check(".vscode/settings.json").critical).toBe(true);
+    expect(check(".worktrees/lane-a/.claude/settings.json").critical).toBe(true);
+    expect(check(".worktrees/lane-a/.github/workflows/.hidden/build.yml").critical).toBe(true);
+    expect(check(".worktrees/lane-a/src/app.ts").critical).toBe(false);
     expect(check("../.github/workflows/x.yml").critical).toBe(true);
     expect(check("~/.ssh/id_rsa").critical).toBe(true);
     expect(check("src/app.ts").critical).toBe(false);

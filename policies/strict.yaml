@@ -1,3 +1,5 @@
+# FINAL: hard blocks precede gates; memory and allowlisted egress are explicit exceptions to the generic copied-content block.
+
 version: 1
 defaults:
   action: require_approval
@@ -6,10 +8,15 @@ defaults:
 rules:
   # --- M3: tainted protected targets ---
   - id: block-tainted-critical-path
-    when: { direction: request, critical_path: true, taint: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        taint: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
     action: block
     reason: Tainted writes to critical paths are blocked in strict mode.
-
 
   # --- M1: strict default deny egress ---
   - id: block-new-destination
@@ -51,14 +58,6 @@ rules:
       tool_shadowing_detected: true
     action: block
     reason: Tool metadata references a tool that belongs to a different server.
-
-  - id: sanitize-hidden-unicode-metadata
-    name: Strip hidden Unicode from metadata
-    when:
-      direction: response
-      hidden_unicode_detected: true
-    action: sanitize
-    reason: Metadata contains hidden Unicode characters.
   # --- end M4 ---
 
   - id: block-any-tool-lock-drift
@@ -71,14 +70,6 @@ rules:
         - changed
     action: block
     reason: Strict mode requires pre-approved tool metadata.
-
-  - id: sanitize-strong-injection-any-trust
-    when:
-      direction: response
-      method: tools/call
-      detector_score_gte: 0.75
-    action: sanitize
-    reason: Strong injection signal in tool output.
 
   - id: block-suspicious-output
     when:
@@ -130,17 +121,6 @@ rules:
     action: block
     reason: Tainted content is flowing to a destination outside the egress allowlist.
 
-  - id: redact-pii-egress
-    when:
-      direction: request
-      method: tools/call
-      pii_detected: true
-      capabilities_any:
-        - sends_message
-        - network_egress
-    action: redact_secrets
-    reason: PII-like content should be redacted before egress.
-
   # --- M1: split-call correlation ---
   - id: block-split-match
     when: { direction: request, tool_class: sink, split_match: true }
@@ -149,9 +129,17 @@ rules:
 
   # --- M3: persistent memory provenance ---
   - id: block-tainted-memory
-    when: { direction: request, capabilities_any: [persists_memory], taint: true }
+    when: { direction: request, capabilities_any: [ persists_memory ], taint: true }
     action: block
     reason: Tainted content is being persisted into memory.
+
+  - id: block-unknown-tools
+    when:
+      direction: request
+      method: tools/call
+      tool_class: unknown
+    action: block
+    reason: Strict mode blocks all unknown tools.
 
   - id: block-tainted-sink
     when:
@@ -162,30 +150,12 @@ rules:
     action: block
     reason: Tainted content cannot enter sink tools in strict mode.
 
-  - id: block-unknown-tools
-    when:
-      direction: request
-      method: tools/call
-      tool_class: unknown
-    action: block
-    reason: Strict mode blocks all unknown tools.
-
-  - id: allow-trusted-pure
-    when:
-      direction: request
-      method: tools/call
-      trust: trusted
-      tool_class: pure
-      taint: false
-    action: allow
-    reason: Trusted pure tool call.
-
   # --- M2: Rule of Two ---
   - id: approve-rule-of-two
     when:
       direction: request
       tool_class: sink
-      capabilities_any: [network_egress, sends_message, writes_remote, persists_memory]
+      capabilities_any: [ network_egress, sends_message, writes_remote, persists_memory ]
       rule_of_two: true
       destination_session_trusted: false
     action: require_approval
@@ -210,6 +180,59 @@ rules:
 
   # --- M3: protected targets ---
   - id: approve-critical-path
-    when: { direction: request, critical_path: true, capabilities_any: [file_write, writes_local, deletes_data] }
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
     action: require_approval
     reason: Writing a critical configuration or execution target requires approval.
+  - id: approve-elicitation
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.
+
+  - id: sanitize-strong-injection-any-trust
+    when:
+      direction: response
+      method: tools/call
+      detector_score_gte: 0.75
+    action: sanitize
+    reason: Strong injection signal in tool output.
+
+  - id: allow-trusted-pure
+    when:
+      direction: request
+      method: tools/call
+      trust: trusted
+      tool_class: pure
+      taint: false
+    action: allow
+    reason: Trusted pure tool call.
+
+  - id: redact-pii-egress
+    when:
+      direction: request
+      method: tools/call
+      pii_detected: true
+      capabilities_any:
+        - sends_message
+        - network_egress
+      critical_path: false
+      temporal_taint: false
+      session_quarantined: false
+      rate_limited: false
+      loop_detected: false
+    action: redact_secrets
+    reason: PII-like content should be redacted before egress.
