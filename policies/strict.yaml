@@ -151,3 +151,9 @@ rules:
       destination_session_trusted: false
     action: require_approval
     reason: This session has seen both untrusted and sensitive content.
+
+  # --- M2: session quarantine ---
+  - id: approve-quarantined-sink
+    when: { direction: request, tool_class: sink, session_quarantined: true }
+    action: require_approval
+    reason: Session is quarantined after high-risk content or a blocked destination.

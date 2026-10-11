@@ -171,6 +171,11 @@ export const palizadeConfigSchema = z.object({
     allowRemote: false
   }),
   taint: z.object({
+    quarantine: z.object({
+      scoreGte: z.number().min(0).max(1).default(0.85),
+      turns: z.number().int().positive().default(20),
+      ttlMs: z.number().int().positive().default(1800000)
+    }).default({ scoreGte: 0.85, turns: 20, ttlMs: 1800000 }),
     window: z.object({
       calls: z.number().int().min(1).max(100).default(12),
       ttlMs: z.number().int().positive().default(900_000),
@@ -196,6 +201,7 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
     window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
     decode: { maxDepth: 2, maxBytes: 256 * 1024 },
     keyPath: ".palizade/taint.key",

@@ -150,6 +150,7 @@ export class InterceptionEngine {
     const knownTool = this.knownTools.get(tool);
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
+    await this.expireQuarantine();
     const session = this.options.taintStore.getSession(this.options.sessionId);
     const ruleOfTwo = session.seenUntrusted && session.seenSensitive;
     const argumentText = flattenArguments(params.arguments);
@@ -228,6 +229,7 @@ export class InterceptionEngine {
       split_match: splitMatch,
       rule_of_two: ruleOfTwo,
       destination_session_trusted: sessionTrusted,
+      session_quarantined: Boolean(session.quarantine),
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,
@@ -280,6 +282,14 @@ export class InterceptionEngine {
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);
+    if (!approval.approved || decision.action === "block") {
+      if (decision.action === "block" && (taintedDestination || splitMatch || lookalikeDestination)) await this.startQuarantine("Blocked risky outbound destination or split match.");
+    }
+    const quarantine = this.options.taintStore.getSession(this.options.sessionId).quarantine;
+    if (quarantine) {
+      this.options.taintStore.updateSession(this.options.sessionId, (state) => ({ ...state, quarantine: state.quarantine ? { ...state.quarantine, remainingTurns: state.quarantine.remainingTurns - 1 } : undefined }));
+      await this.expireQuarantine();
+    }
 
     if (!approval.approved || decision.action === "block") {
       return {
@@ -409,6 +419,7 @@ export class InterceptionEngine {
     });
     const { fused, detectionsByPath } = await this.detectContents(contents);
     const taintRecords = this.registerTaintFromContents(tool, classification, contents, fused, pending.sensitive);
+    if (fused.score >= this.options.config.taint.quarantine.scoreGte) await this.startQuarantine("High-score tool response.");
     if (fused.score >= this.options.config.taint.temporal.detectorScoreGte) {
       this.options.taintStore.markTemporal(this.options.sessionId, taintRecords.map((record) => record.id), this.options.config.taint.temporal);
     }
@@ -679,6 +690,7 @@ export class InterceptionEngine {
     const { fused, detectionsByPath } = await this.detectContents(contents);
     const classification: ToolClassification = { toolClass: "source", capabilities: ["reads_untrusted_content"] };
     const taintRecords = this.registerTaintFromContents(pending.method, classification, contents, fused);
+    if (fused.score >= this.options.config.taint.quarantine.scoreGte) await this.startQuarantine("High-score source response.");
     if (fused.score >= this.options.config.taint.temporal.detectorScoreGte) {
       this.options.taintStore.markTemporal(this.options.sessionId, taintRecords.map((record) => record.id), this.options.config.taint.temporal);
     }
@@ -866,6 +878,24 @@ export class InterceptionEngine {
       sensitive: this.isSensitiveOrigin(tool ?? message.method) || extractArgumentFields((message.params as ToolsCallParams | undefined)?.arguments).some((field) => field.role === "file_path" && this.options.server.sensitivePathPatterns.some((pattern) => new RegExp(pattern, "iu").test(field.text))),
       startedAt: Date.now()
     });
+  }
+
+  private async startQuarantine(reason: string): Promise<void> {
+    const previous = this.options.taintStore.getSession(this.options.sessionId).quarantine;
+    const config = this.options.config.taint.quarantine;
+    this.options.taintStore.updateSession(this.options.sessionId, (state) => ({ ...state, quarantine: { expiresAt: Date.now() + config.ttlMs, remainingTurns: config.turns } }));
+    if (!previous) await this.auditSessionEvent("start", reason);
+  }
+
+  private async expireQuarantine(): Promise<void> {
+    const quarantine = this.options.taintStore.getSession(this.options.sessionId).quarantine;
+    if (!quarantine || (quarantine.expiresAt > Date.now() && quarantine.remainingTurns > 0)) return;
+    this.options.taintStore.updateSession(this.options.sessionId, (state) => ({ ...state, quarantine: undefined }));
+    await this.auditSessionEvent("end", "Session quarantine expired.");
+  }
+
+  private async auditSessionEvent(event: string, reason: string): Promise<void> {
+    await this.options.audit.write({ session: this.options.sessionId, profile_id: this.options.config.taint.profileId, run_id: process.env.PALIZADE_RUN_ID, direction: "internal", method: `session/quarantine/${event}`, action: "log_only", reason });
   }
 
   private async auditDecision(

@@ -6,6 +6,8 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 
 ## Match Fields
 
+- `session_quarantined`: shared session quarantine remains within both TTL and turn bounds. Every enforcing preset requires approval for sinks after hard blocks.
+
 - `rule_of_two`: session has seen both untrusted/suspicious and sensitive content; default, strict and interactive approval-gate network, message and remote-write sinks even for paraphrased arguments. Specific hard blocks run first.
 - `destination_session_trusted`: every destination has an explicit session grant. This suppresses only the Rule of Two gate and approve-new mode, not hard blocks.
 

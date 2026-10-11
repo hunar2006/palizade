@@ -174,6 +174,8 @@ Palizade blocked this tool call. Rule: block-tainted-sink. Reason: Tainted conte
 
 ## Debugging
 
+Inspect quarantine with `palizade session quarantine`; clear it explicitly with `palizade session quarantine --clear [--session <id>]`. This clears quarantine only; seen-sensitive/untrusted flags and hard blocks remain active. High-score responses and blocked tainted/split/lookalike destinations quarantine the session; enforcing presets approval-gate subsequent sinks until expiry or operator clearance.
+
 Check local config and MCP coverage:
 
 ```bash

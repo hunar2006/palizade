@@ -208,3 +208,9 @@ rules:
       temporal_taint: true
     action: require_approval
     reason: Recent suspicious untrusted content makes sink calls risky.
+
+  # --- M2: session quarantine ---
+  - id: approve-quarantined-sink
+    when: { direction: request, tool_class: sink, session_quarantined: true }
+    action: require_approval
+    reason: Session is quarantined after high-risk content or a blocked destination.
