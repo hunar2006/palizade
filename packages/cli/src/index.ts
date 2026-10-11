@@ -10,6 +10,7 @@ import {
   createRuntime,
   diffToolsAgainstLock,
   ensureListenerToken,
+  evaluateHookEvent,
   formatToolDiff,
   HttpBridgeProxy,
   HttpServeListener,
@@ -29,6 +30,7 @@ import {
   installClientConfig,
   selectInstallConfigPath
 } from "./install-config.js";
+import { installHooks, type InstallHooksResult } from "./install-hooks.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
 
@@ -529,6 +531,77 @@ program.command("status")
     printStatus(report, options.json);
   });
 
+program.command("hook")
+  .description("Evaluate a native client hook event (JSON on stdin) and print the client's decision format")
+  .argument("<client>", "claude-code, cursor, or codex")
+  .argument("[event]", "Hook event name (read from stdin hook_event_name when omitted)")
+  .option("--session <id>", "Override the session id used for taint scoping")
+  .option("--cwd <dir>", "Override the working directory used for path checks")
+  .action(async (client: string, event: string | undefined, options: { session?: string; cwd?: string }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const config = await loadConfigForCli(configPath);
+    const raw = await readStdinBounded(config.hooks.maxInputBytes);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw new Error("Hook stdin is not valid JSON.");
+    }
+    const hookEvent = event
+      ?? (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).hook_event_name === "string"
+        ? (payload as Record<string, unknown>).hook_event_name as string
+        : undefined);
+    if (!hookEvent) {
+      throw new Error("No hook event name: pass it as an argument or include hook_event_name in the stdin payload.");
+    }
+    try {
+      const result = await evaluateHookEvent({
+        config,
+        client: client as "claude-code" | "cursor" | "codex",
+        event: hookEvent,
+        payload,
+        ...(options.session ? { sessionId: options.session } : {}),
+        ...(options.cwd ? { cwd: resolve(options.cwd) } : {})
+      });
+      if (result.output !== undefined) {
+        console.log(JSON.stringify(result.output));
+      }
+      if (result.exitCode !== 0) {
+        process.exitCode = result.exitCode;
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (config.hooks.failMode === "closed") {
+        console.error(`Palizade hook failed closed: ${reason}`);
+        process.exitCode = 2;
+        return;
+      }
+      console.error(`Palizade hook failed open: ${reason}`);
+    }
+  });
+
+program.command("install-hooks")
+  .description("Install Palizade hook entries into a native client's settings file")
+  .argument("<client>", "claude-code, cursor, or codex")
+  .option("--config <path>", "Path to palizade.yaml")
+  .option("--settings <path>", "Override the client settings file location")
+  .option("--dry-run", "Print the resulting settings JSON without writing", false)
+  .action(async (client: string, options: { config?: string; settings?: string; dryRun: boolean }) => {
+    const configPath = options.config ?? selectInstallConfigPath({ getOptionValue: () => options.config, getOptionValueSource: () => options.config ? "cli" : "default" }, program);
+    const result = await installHooks(client, {
+      configPath: configPath ?? program.opts<{ config: string }>().config,
+      ...(options.settings ? { settingsPath: options.settings } : {}),
+      dryRun: options.dryRun
+    });
+    if (options.dryRun) {
+      console.log(result.configJson);
+      return;
+    }
+    console.log(`Updated ${result.settingsPath}`);
+    console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new settings file)");
+    console.log("Restart the client for the hooks to take effect. Review and trust the hook in the client's hooks UI.");
+  });
+
 program.parseAsync().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
@@ -542,6 +615,20 @@ async function writeIfMissing(path: string, content: string, force: boolean): Pr
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf8");
   console.log(`Wrote ${path}`);
+}
+
+async function readStdinBounded(maxBytes: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      throw new Error(`Hook input exceeded ${maxBytes} bytes.`);
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function loadConfigForCli(configPath: string): ReturnType<typeof loadConfig> {

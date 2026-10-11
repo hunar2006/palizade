@@ -219,7 +219,7 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 
 ## What Palizade Does Not Protect
 
-- Palizade only guards traffic through MCP servers it wraps. Native client tools, such as Claude Code's built-in Read, Write, and Bash tools, bypass MCP and are not protected.
+- Palizade only guards traffic through MCP servers it wraps, plus native tool hooks where `palizade install-hooks` is installed (Claude Code PreToolUse/PostToolUse, Cursor beforeShellExecution/beforeMCPExecution, Codex PreToolUse). Native tools without installed hooks remain unprotected, and shell parsing is heuristic — it extracts URLs, hosts, redirect targets, and suspicious constructs but is not a shell parser.
 - It does not protect against a malicious MCP client or a compromised host OS.
 - Pattern-based secret and PII detection misses obfuscated, split, transformed, or custom secrets. See [docs/detector-coverage.md](docs/detector-coverage.md).
 - Taint matching is containment-by-observables: exact fragments, atomic tokens, fuzzy SimHash, and temporal taint. It does not defeat full semantic paraphrase laundering.
@@ -295,6 +295,8 @@ palizade install-config --all
 palizade wrap <serverName>
 palizade serve
 palizade status [--json]
+palizade hook <client> [event]
+palizade install-hooks <client>
 palizade lock approve <serverName>
 palizade lock diff <serverName>
 palizade detectors install promptguard2
@@ -305,6 +307,12 @@ palizade audit prune --older-than 30d
 palizade taint prune
 palizade doctor
 ```
+
+### Native client tool hooks
+
+`palizade install-hooks <client>` writes hook entries for `claude-code` (`~/.claude/settings.json`), `cursor` (`~/.cursor/hooks.json`, `failClosed: true`), or `codex` (`~/.codex/hooks.json`) — backing up and merging without ever overwriting malformed JSON. The `palizade hook` command reads the client's hook JSON on stdin and prints the client's decision format (Claude Code/Codex `hookSpecificOutput.permissionDecision`, Cursor `permission`).
+
+Hooks reuse the same SQLite taint store, policy, and audit as the proxy: Bash/Shell/apply_patch commands run the full sink check (shell-command role, network destinations, critical-path redirects), Write/Edit are gated on critical paths and tainted content, WebFetch URLs run destination checks, and PostToolUse of Read/WebFetch/Grep/Glob registers taint that later commands are matched against. Hooks fail closed by default (`hooks.failMode: closed`): a crash or timeout exits 2 (block), never allow.
 
 ### Remote (HTTP) MCP servers
 

@@ -60,6 +60,7 @@ function makeConfig(dir: string): PalizadeConfig {
       maxRedirects: 5
     },
     listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
+    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
     taint: {
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1_800_000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },

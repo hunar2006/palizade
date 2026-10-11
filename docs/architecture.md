@@ -96,6 +96,16 @@ The interceptor is era aware per message: `_meta["io.modelcontextprotocol/protoc
 - `subscriptions/listen` responses are scanned through the generic content path.
 - `structuredContent` is scanned and taint-registered like `content` text; sanitize/spotlight applies to string fields only, keeping the result schema valid. `ttlMs`/`cacheScope` on list results are audited; the lockfile is re-verified on every refresh regardless of client caching.
 
+## Native Client Tool Hooks
+
+`packages/core/src/hooks.ts` brings native client tools (Claude Code Bash/Read/Write/Edit/WebFetch, Cursor shell and MCP execution, Codex shell/apply_patch) under the same engine as the proxy.
+
+- `normalizeNativeEvent` maps each client's hook JSON into a synthetic `tools/call` request/response pair, so `evaluateHookEvent` runs the real `InterceptionEngine` sink check with a synthetic `native-tools` server: Bash/Shell commands carry the `shell_command` role plus extracted URLs, hosts, redirect targets, and suspicious constructs; Write/Edit carry file paths and content (critical-path rules fire); WebFetch carries the destination URL; PostToolUse of Read/WebFetch/Grep/Glob registers taint into the same SQLite store (profile scope, keyed by the client's `session_id`/`conversation_id`).
+- Decisions map to each client's output format: Claude Code/Codex `hookSpecificOutput.permissionDecision` (deny/ask), Cursor `permission` (deny/ask). `require_approval` policy decisions become "ask" so the client's own approval flow decides.
+- Hooks fail closed by default (`hooks.failMode: closed`, `hooks.timeoutMs`, `hooks.maxInputBytes`): a crash or timeout exits 2, which blocks in all three clients.
+- `palizade install-hooks <client>` merges hook entries into `~/.claude/settings.json`, `~/.cursor/hooks.json` (`failClosed: true`), or `~/.codex/hooks.json`, backing up and refusing to overwrite malformed JSON.
+- Shell parsing is intentionally heuristic (`analyzeShellCommand`): URLs, host-looking tokens after network verbs, `>`/`<` redirect targets, and suspicious constructs (`$(...)`, backticks, `eval`, base64 pipelines, `/dev/tcp`). It is not a shell parser.
+
 ## Sandboxed Launch
 
 `packages/core/src/sandbox.ts` turns `servers.<name>.sandbox` into a launch plan; `packages/core/src/launch.ts` is the only place stdio upstreams are spawned (`wrap`, `lock approve`, `lock diff`). `none` (default) keeps the old behavior. Validation runs before any spawn: on Windows only `docker` is accepted, `bubblewrap` needs Linux and `seatbelt` needs macOS, and a `url` server with a sandbox is a config error.
