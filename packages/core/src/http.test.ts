@@ -314,7 +314,7 @@ describe("HttpMcpTransport (legacy 2025-11-25)", () => {
 async function makeEngineWithAudit(dir: string): Promise<{ engine: InterceptionEngine; events: AuditEvent[] }> {
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
-    stateDir: dir,
+    stateDir: dir, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
     policy: join(dir, "policy.yaml"),
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -333,7 +333,7 @@ async function makeEngineWithAudit(dir: string): Promise<{ engine: InterceptionE
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     http: httpLimits,
     listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
-    taint: {
+    taint: { quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },
       sqlite: join(dir, "taint.sqlite"),
@@ -446,7 +446,7 @@ describe("HttpServeListener", () => {
     const { engine } = await makeEngineWithAudit(dir);
     const listener = new HttpServeListener({
       config: {
-        stateDir: dir,
+        stateDir: dir, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
         policy: join(dir, "policy.yaml"),
         lockfile: join(dir, "palizade.lock"),
         audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -465,7 +465,7 @@ describe("HttpServeListener", () => {
         transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
         http: httpLimits,
         listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
-        taint: {
+        taint: { quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
           window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
           decode: { maxDepth: 2, maxBytes: 262144 },
           sqlite: join(dir, "taint.sqlite"),
