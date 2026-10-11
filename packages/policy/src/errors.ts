@@ -93,6 +93,13 @@ function hintFor(schema: z.ZodType, issue: z.core.$ZodIssue, path: string[]): st
   }
 }
 
+/** Returns a function mapping a YAML path to its 1-based line, or undefined when the text is not valid YAML. */
+export function createLineLocator(raw: string): (path: Array<string | number>) => number | undefined {
+  const lineCounter = new LineCounter();
+  const doc = parseDocument(raw, { lineCounter });
+  return (path) => doc.errors.length > 0 ? undefined : lineOf(doc, lineCounter, path.map(String));
+}
+
 function lineOf(doc: Document, lineCounter: LineCounter, path: string[]): number | undefined {
   let node: unknown = doc.contents;
   let offset: number | undefined = rangeStart(node);
