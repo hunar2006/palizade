@@ -33,6 +33,7 @@ rules:
 function makeConfig(dir: string): PalizadeConfig {
   return {
     stateDir: dir,
+    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
     policy: join(dir, "policy.yaml"),
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -59,6 +60,7 @@ function makeConfig(dir: string): PalizadeConfig {
     },
     listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
     taint: {
+      quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1_800_000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },
       sqlite: join(dir, "taint.sqlite"),
