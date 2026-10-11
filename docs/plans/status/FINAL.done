@@ -1,0 +1,2 @@
+6abb563f2eb03e2c035acc214f1b39197b247041
+FINAL: M1-M9 integrated, policy precedence and hidden-path regressions fixed; 214 tests pass, one Docker test skipped; filesystem smoke passes; SQLite sink p95 1.89 ms.

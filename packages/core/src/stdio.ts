@@ -1,10 +1,12 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import type { AuditLogger } from "@palizade/audit";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { InterceptionEngine } from "./interceptor.js";
+import { launchUpstream } from "./launch.js";
 import type { JsonRpcEnvelope, JsonRpcMessage } from "./mcp.js";
 import type { ServerConfig } from "./config.js";
 import type { PalizadeConfig } from "./config.js";
@@ -119,6 +121,8 @@ export interface StdioProxyOptions {
   server: ServerConfig;
   transport?: PalizadeConfig["transport"];
   engine: InterceptionEngine;
+  audit?: AuditLogger | undefined;
+  sessionId?: string | undefined;
 }
 
 export class StdioMcpProxy {
@@ -128,12 +132,11 @@ export class StdioMcpProxy {
 
   async run(): Promise<void> {
     assertSafeSpawn(this.options.server);
-    const child = spawn(resolveCommandForPlatform(this.options.server.command), this.options.server.args, {
-      cwd: this.options.server.cwd,
-      env: { ...process.env, ...this.options.server.env },
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true
+    requireCommand(this.options.server);
+    const { child } = await launchUpstream(this.options.serverName, this.options.server, {
+      resolveCommand: resolveCommandForPlatform,
+      audit: this.options.audit,
+      sessionId: this.options.sessionId
     });
     this.child = child;
 
@@ -184,14 +187,16 @@ export class StdioMcpProxy {
   }
 }
 
-export async function collectToolsFromStdioServer(server: ServerConfig, timeoutMs = 5_000): Promise<unknown[]> {
+export async function collectToolsFromStdioServer(
+  server: ServerConfig,
+  timeoutMs = 5_000,
+  context: { serverName?: string; audit?: AuditLogger } = {}
+): Promise<unknown[]> {
   assertSafeSpawn(server);
-  const child = spawn(resolveCommandForPlatform(server.command), server.args, {
-    cwd: server.cwd,
-    env: { ...process.env, ...server.env },
-    stdio: ["pipe", "pipe", "pipe"],
-    shell: false,
-    windowsHide: true
+  requireCommand(server);
+  const { child } = await launchUpstream(context.serverName ?? "unnamed", server, {
+    resolveCommand: resolveCommandForPlatform,
+    audit: context.audit
   });
   const peer = new LineJsonRpcPeer(child.stdout, child.stdin);
   const id = randomUUID();
@@ -250,6 +255,13 @@ function assertSafeSpawn(server: ServerConfig): void {
   if (server.shell && !server.allowShell) {
     throw new Error("Unsafe server config: shell execution requires allowShell: true");
   }
+}
+
+function requireCommand(server: ServerConfig): string {
+  if (!server.command) {
+    throw new Error(`Server config has no 'command'; url servers must use the HTTP transport instead of stdio.`);
+  }
+  return server.command;
 }
 
 export function resolveCommandForPlatform(command: string): string {

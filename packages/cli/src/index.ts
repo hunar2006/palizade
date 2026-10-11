@@ -1,18 +1,29 @@
 #!/usr/bin/env node
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
+import YAML from "yaml";
 import {
+  collectToolsFromHttpServer,
   collectToolsFromStdioServer,
   createRuntime,
+  diffToolsAgainstLock,
+  ensureListenerToken,
+  evaluateHookEvent,
+  buildDenyOutput,
+  formatToolDiff,
+  HttpBridgeProxy,
+  HttpServeListener,
   loadConfig,
   LockfileStore,
+  sandboxStatus,
   StdioMcpProxy,
   type McpTool
 } from "@palizade/core";
-import { JsonlAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
+import { AuditLogger, JsonlAuditSink, SqliteAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
-import { SqliteTaintStore } from "@palizade/taint";
+import { emptySession, SqliteTaintStore } from "@palizade/taint";
 import {
   getRunningCliPath,
   inspectClientCoverage,
@@ -20,9 +31,14 @@ import {
   installClientConfig,
   selectInstallConfigPath
 } from "./install-config.js";
-import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
+import { installHooks, type InstallHooksResult } from "./install-hooks.js";
+import { formatLearnDraft, learnFromAudit } from "./learn.js";
+import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
+import { buildStatus, printStatus } from "./status.js";
+import { DEFAULT_CONFIG } from "./templates.js";
 
 declare const __PKG_VERSION__: string;
+declare const __POLICY_PRESETS__: Record<string, string>;
 
 const program = new Command();
 
@@ -35,12 +51,22 @@ program
 program.command("init")
   .description("Create a starter palizade.yaml, default policy, and state directory")
   .option("--force", "Overwrite existing files", false)
-  .action(async (options: { force: boolean }) => {
+  .option("--preset <name>", "Policy preset", "default")
+  .option("--output-dir <path>", "Permitted output directory for research-readonly")
+  .action(async (options: { force: boolean; preset: string; outputDir?: string }) => {
+    const preset = __POLICY_PRESETS__[options.preset];
+    if (!preset) throw new Error(`Unknown preset '${options.preset}'. Choose ${Object.keys(__POLICY_PRESETS__).join(", ")}.`);
+    const starter = YAML.parse(DEFAULT_CONFIG) as Record<string, unknown>;
+    starter.policy = `policies/${options.preset}.yaml`;
+    if (options.preset === "strict") (starter.egress as Record<string, unknown>).mode = "allowlist_only";
+    if (options.outputDir) starter.protectedTargets = { outputDirectory: options.outputDir };
     // Keep generated paths relative; loadConfig resolves them against palizade.yaml's directory.
-    await writeIfMissing("palizade.yaml", DEFAULT_CONFIG, options.force);
-    await writeIfMissing("policies/default.yaml", DEFAULT_POLICY, options.force);
+    await writeIfMissing("palizade.yaml", YAML.stringify(starter), options.force);
+    await writeIfMissing(`policies/${options.preset}.yaml`, preset, options.force);
     await mkdir(".palizade", { recursive: true });
-    console.log("Initialized Palizade config, default policy, and .palizade state directory.");
+    await ensureListenerToken(".palizade/listener.token");
+    console.log(`Initialized Palizade config, ${options.preset} policy, and .palizade state directory.`);
+    console.log("Listener bearer token stored at .palizade/listener.token.");
   });
 
 program.command("install-config")
@@ -136,13 +162,47 @@ program.command("install-config")
     }
     console.log(`Updated ${result.clientConfigPath}`);
     console.log(`Entry: ${result.entryName}`);
-    console.log(`Command: ${result.entry.command} ${result.entry.args.join(" ")}`);
+    console.log(`Command: ${result.entry.command ?? "node"} ${(result.entry.args ?? []).join(" ")}`);
     console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new config file)");
     console.log("Fully quit and reopen Claude Desktop for the change to take effect.");
   });
 
 const detectors = program.command("detectors")
   .description("Manage optional detector models");
+
+const sessions = program.command("session").description("Manage security session state");
+sessions.command("quarantine")
+  .description("Inspect or explicitly clear session quarantine")
+  .option("--clear", "Clear quarantine", false)
+  .option("--session <id>", "Native client session identifier (otherwise configured profile/run scope)")
+  .action(async (options: { clear: boolean; session?: string }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const store = new SqliteTaintStore(config.taint.sqlite, { scope: config.taint.scope, profileId: config.taint.profileId, keyPath: config.taint.keyPath, ttlMs: config.taint.ttlMs, ...(options.session ? { sessionScope: "client" as const } : {}), ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {}) });
+    const session = options.session ?? process.env.PALIZADE_RUN_ID ?? config.taint.profileId;
+    try {
+      if (options.clear) {
+        store.updateSession(session, (state) => ({ ...state, quarantine: undefined }));
+        const audit = new AuditLogger([new JsonlAuditSink(config.audit.jsonl), new SqliteAuditSink(config.audit.sqlite)]);
+        await audit.write({ session, direction: "internal", method: "session/quarantine/clear", action: "log_only", reason: "Session quarantine explicitly cleared by operator." });
+        console.log("Session quarantine cleared.");
+      } else console.log(JSON.stringify(store.getSession(session).quarantine ?? null, null, 2));
+    } finally { store.close(); }
+  });
+
+sessions.command("reset")
+  .description("Reset exposure, quarantine, grants and counters without deleting taint records")
+  .option("--session <id>", "Native client session identifier (otherwise configured profile/run scope)")
+  .action(async (options: { session?: string }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const store = new SqliteTaintStore(config.taint.sqlite, { scope: config.taint.scope, profileId: config.taint.profileId, keyPath: config.taint.keyPath, ...(options.session ? { sessionScope: "client" as const } : {}), ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {}) });
+    const session = options.session ?? process.env.PALIZADE_RUN_ID ?? config.taint.profileId;
+    const audit = new AuditLogger([new JsonlAuditSink(config.audit.jsonl), new SqliteAuditSink(config.audit.sqlite)]);
+    try {
+      store.updateSession(session, () => emptySession());
+      await audit.write({ session, direction: "internal", method: "session/reset", action: "log_only", reason: "Security session explicitly reset by operator." });
+      console.log("Security session reset; taint records preserved.");
+    } finally { store.close(); await audit.close(); }
+  });
 
 detectors.command("install")
   .description("Download an optional detector model")
@@ -214,7 +274,7 @@ detectors.command("verify")
   });
 
 program.command("wrap")
-  .description("Wrap an upstream MCP server over stdio")
+  .description("Wrap an upstream MCP server over stdio (command servers) or HTTP (url servers)")
   .argument("<serverName>", "Server name from palizade.yaml")
   .action(async (serverName: string) => {
     const configPath = program.opts<{ config: string }>().config;
@@ -223,9 +283,75 @@ program.command("wrap")
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
     }
-    const runtime = await createRuntime(config, serverName);
-    const proxy = new StdioMcpProxy({ serverName, server, transport: config.transport, engine: runtime.engine });
+    const runtime = await createRuntime(config, serverName, { configPath });
+    if (server.url) {
+      const proxy = new HttpBridgeProxy({
+        serverName,
+        server,
+        config,
+        engine: runtime.engine,
+        onSecurityEvent: (event) => {
+          console.warn(`[palizade:${serverName}] ${event.message}`);
+          void runtime.audit.write({
+            session: runtime.sessionId,
+            server: serverName,
+            direction: "internal",
+            action: "log_only",
+            reason: `[http] ${event.kind}: ${event.message}`,
+            metadata: { httpSecurity: event.kind }
+          });
+        }
+      });
+      await proxy.run();
+      return;
+    }
+    const proxy = new StdioMcpProxy({ serverName, server, transport: config.transport, engine: runtime.engine, audit: runtime.audit, sessionId: runtime.sessionId });
     await proxy.run();
+  });
+
+program.command("serve")
+  .description("Run a local HTTP listener exposing configured url servers at /mcp/<serverName>")
+  .option("--port <port>", "Override the listener port")
+  .option("--host <host>", "Override the listener bind address")
+  .option("--allow-remote", "Allow binding to non-localhost addresses", false)
+  .action(async (options: { port?: string; host?: string; allowRemote: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const config = await loadConfigForCli(configPath);
+    const urlServers = Object.entries(config.servers).filter(([, server]) => server.url);
+    if (urlServers.length === 0) {
+      throw new Error("No url servers in palizade.yaml; the listener only serves remote HTTP servers.");
+    }
+    const listener = new HttpServeListener({
+      config,
+      ...(options.host ? { host: options.host } : {}),
+      ...(options.port ? { port: Number(options.port) } : {}),
+      ...(options.allowRemote ? { allowRemote: true } : {}),
+      onSecurityEvent: (event) => console.warn(`[palizade] ${event.message}`),
+      createRuntime: async (serverName) => createRuntime(config, serverName, { configPath })
+    });
+    const bound = await listener.start();
+    console.log(`Palizade listener bound to http://${bound.host}:${bound.port}/mcp/<serverName>`);
+    console.log(`Serving: ${urlServers.map(([name]) => name).join(", ")}`);
+    console.log(`Listener token: ${config.listener.tokenPath} (send as X-Palizade-Token header)`);
+    console.log("RFC 8707 note: Palizade never terminates TLS or rewrites URLs; upstream OAuth tokens are passed through untouched.");
+    await new Promise<void>(() => {});
+  });
+
+program.command("policy")
+  .description("Inspect policy files")
+  .command("check")
+  .description("Validate a policy: schema, unknown keys, unreachable rules, impossible conditions, unknown servers and tools")
+  .argument("[file]", "Policy file (defaults to the policy in palizade.yaml)")
+  .option("--json", "Print findings as JSON", false)
+  .option("--strict", "Exit non-zero on warnings too", false)
+  .action(async (file: string | undefined, options: { json: boolean; strict: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const report = await runPolicyCheck({ file, configPath }).catch((error: unknown) => {
+      if (isMissingConfigError(error) && !file) throw new Error(missingConfigMessage(configPath));
+      throw error;
+    });
+    console.log(options.json ? JSON.stringify(report, null, 2) : formatPolicyCheck(report));
+    if (report.errors > 0 || (options.strict && report.warnings > 0)) process.exitCode = 1;
   });
 
 const lock = program.command("lock")
@@ -235,19 +361,58 @@ lock.command("approve")
   .description("Approve current tools/list metadata for a configured server")
   .argument("<serverName>", "Server name from palizade.yaml")
   .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
-  .action(async (serverName: string, options: { timeout: string }) => {
+  .option("-y, --yes", "Approve without the interactive confirmation", false)
+  .action(async (serverName: string, options: { timeout: string; yes: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const server = config.servers[serverName];
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
     }
-    const tools = await collectToolsFromStdioServer(server, parseDuration(options.timeout)) as McpTool[];
-    const checks = await new LockfileStore(config.lockfile).approveTools(serverName, tools);
+    const timeoutMs = parseDuration(options.timeout);
+    const tools = server.url
+      ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
+      : await collectToolsFromStdioServer(server, timeoutMs, { serverName, audit: new AuditLogger([new JsonlAuditSink(config.audit.jsonl)]) }) as McpTool[];
+    const lockStore = new LockfileStore(config.lockfile);
+    const diff = diffToolsAgainstLock(await lockStore.read(), serverName, tools);
+    console.log(formatToolDiff(serverName, diff));
+    const hasChanges = diff.some((entry) => entry.status !== "unchanged");
+    if (hasChanges && !options.yes && process.stdin.isTTY) {
+      const prompt = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await prompt.question("Approve these changes? [y/N] ");
+      prompt.close();
+      if (!/^y(es)?$/iu.test(answer.trim())) {
+        console.log("Lock approval cancelled.");
+        process.exitCode = 1;
+        return;
+      }
+    }
+    const checks = await lockStore.approveTools(serverName, tools);
     for (const check of checks) {
       console.log(`${check.status}\t${serverName}/${check.tool}\t${check.hash}`);
     }
     console.log(`Approved ${checks.length} tool(s) in ${config.lockfile}.`);
+  });
+
+lock.command("diff")
+  .description("Show a field by field diff between a server's current tools and the lockfile, with non printing characters escaped")
+  .argument("<serverName>", "Server name from palizade.yaml")
+  .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
+  .option("--json", "Print the diff as JSON", false)
+  .action(async (serverName: string, options: { timeout: string; json: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const config = await loadConfigForCli(configPath);
+    const server = config.servers[serverName];
+    if (!server) {
+      throw new Error(`Unknown server '${serverName}'.`);
+    }
+    const timeoutMs = parseDuration(options.timeout);
+    const tools = server.url
+      ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
+      : await collectToolsFromStdioServer(server, timeoutMs, { serverName, audit: new AuditLogger([new JsonlAuditSink(config.audit.jsonl)]) }) as McpTool[];
+    const diff = diffToolsAgainstLock(await new LockfileStore(config.lockfile).read(), serverName, tools);
+    console.log(options.json ? JSON.stringify(diff, null, 2) : formatToolDiff(serverName, diff));
+    if (diff.some((entry) => entry.status !== "unchanged")) process.exitCode = 2;
   });
 
 const audit = program.command("audit")
@@ -325,7 +490,8 @@ const taint = program.command("taint")
 
 taint.command("prune")
   .description("Prune expired taint records")
-  .action(async () => {
+  .option("--include-persistent", "Also remove persistent memory provenance in this profile", false)
+  .action(async (options: { includePersistent: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const store = new SqliteTaintStore(config.taint.sqlite, {
@@ -335,7 +501,7 @@ taint.command("prune")
       ttlMs: config.taint.ttlMs,
       ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
     });
-    const pruned = store.pruneExpired();
+    const pruned = store.pruneExpired(new Date(), options.includePersistent);
     store.close();
     console.log(`Pruned ${pruned} taint record(s).`);
   });
@@ -352,7 +518,19 @@ program.command("doctor")
     console.log(`Lockfile: ${config.lockfile}`);
     console.log(`Audit JSONL: ${config.audit.jsonl}`);
     for (const [name, server] of Object.entries(config.servers)) {
-      console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+      if (server.url) {
+        console.log(`Server ${name}: url=${server.url} [trust=${server.trust}] [protocolVersion=${server.protocolVersion ?? "auto"}]`);
+      } else {
+        console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+      }
+    }
+    const sandboxRows = sandboxStatus(config.servers);
+    if (sandboxRows.length > 0) {
+      console.log("Sandbox:");
+      for (const row of sandboxRows.filter((entry) => entry.status !== "remote")) {
+        console.log(`  ${row.status === "unsandboxed" ? "UNSANDBOXED" : row.status === "unsupported" ? "UNSUPPORTED" : "sandboxed"} ${row.server} [${row.sandbox}]: ${row.detail}`);
+        if (row.status === "unsupported") process.exitCode = 1;
+      }
     }
     const coverage = await inspectClientCoverage({
       client: options.client,
@@ -379,6 +557,98 @@ program.command("doctor")
     }
   });
 
+program.command("learn")
+  .description("Print a draft palizade.yaml snippet of observed tool classes and destinations; never writes config")
+  .option("--from-audit", "Learn from the JSONL audit log", false)
+  .option("--since <duration>", "Only events within a duration such as 7d", "7d")
+  .option("--server <server>", "Only this server")
+  .action(async (options: { fromAudit: boolean; since: string; server?: string }) => {
+    if (!options.fromAudit) throw new Error("palizade learn needs a source; use --from-audit.");
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const since = new Date(Date.now() - parseDuration(options.since));
+    // shortcut: loads the whole JSONL audit file into memory like `palizade audit`; stream it line by line if audit files reach hundreds of MB.
+    const events = await new JsonlAuditSink(config.audit.jsonl).query({ since, ...(options.server ? { server: options.server } : {}), limit: Number.MAX_SAFE_INTEGER });
+    const existingToolClasses = Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [name, server.toolClasses]));
+    process.stdout.write(formatLearnDraft(learnFromAudit(events, { since, existingToolClasses }), since));
+  });
+
+program.command("status")
+  .description("Report per-server transport, era, policy hash, and taint record counts")
+  .option("--json", "Emit JSON", false)
+  .action(async (options: { json: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const report = await buildStatus(configPath);
+    printStatus(report, options.json);
+  });
+
+program.command("hook")
+  .description("Evaluate a native client hook event (JSON on stdin) and print the client's decision format")
+  .argument("<client>", "claude-code, cursor, or codex")
+  .argument("[event]", "Hook event name (read from stdin hook_event_name when omitted)")
+  .option("--session <id>", "Override the native client session identifier")
+  .option("--cwd <dir>", "Override the working directory used for path checks")
+  .action(async (client: string, event: string | undefined, options: { session?: string; cwd?: string }) => {
+    let failMode: "closed" | "open" = "closed";
+    let hookEvent = event ?? "PreToolUse";
+    try {
+      const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+      failMode = config.hooks.failMode;
+      const raw = await readStdinBounded(config.hooks.maxInputBytes);
+      const payload: unknown = JSON.parse(raw);
+      const payloadEvent = event
+        ?? (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).hook_event_name === "string"
+          ? (payload as Record<string, unknown>).hook_event_name as string
+          : undefined);
+      if (!payloadEvent) throw new Error("Missing hook event name.");
+      hookEvent = payloadEvent;
+      const result = await evaluateHookEvent({
+        config,
+        client: client as "claude-code" | "cursor" | "codex",
+        event: hookEvent,
+        payload,
+        ...(options.session ? { sessionId: options.session } : {}),
+        ...(options.cwd ? { cwd: resolve(options.cwd) } : {})
+      });
+      if (result.output !== undefined) {
+        console.log(JSON.stringify(result.output));
+      }
+      if (result.exitCode !== 0) {
+        process.exitCode = result.exitCode;
+      }
+    } catch {
+      const reason = "Hook evaluation failed; check the local configuration and input.";
+      if (failMode === "closed") {
+        console.log(JSON.stringify(buildDenyOutput(client as "claude-code" | "cursor" | "codex", hookEvent, reason).output));
+        console.error(`Palizade hook failed closed: ${reason}`);
+        process.exitCode = 2;
+        return;
+      }
+      console.error(`Palizade hook failed open: ${reason}`);
+    }
+  });
+
+program.command("install-hooks")
+  .description("Install Palizade hook entries into a native client's settings file")
+  .argument("<client>", "claude-code, cursor, or codex")
+  .option("--config <path>", "Path to palizade.yaml")
+  .option("--settings <path>", "Override the client settings file location")
+  .option("--dry-run", "Print the resulting settings JSON without writing", false)
+  .action(async (client: string, options: { config?: string; settings?: string; dryRun: boolean }) => {
+    const configPath = options.config ?? selectInstallConfigPath({ getOptionValue: () => options.config, getOptionValueSource: () => options.config ? "cli" : "default" }, program);
+    const result = await installHooks(client, {
+      configPath: configPath ?? program.opts<{ config: string }>().config,
+      ...(options.settings ? { settingsPath: options.settings } : {}),
+      dryRun: options.dryRun
+    });
+    if (options.dryRun) {
+      console.log(result.configJson);
+      return;
+    }
+    console.log(`Updated ${result.settingsPath}`);
+    console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new settings file)");
+    console.log("Restart the client for the hooks to take effect. Review and trust the hook in the client's hooks UI.");
+  });
+
 program.parseAsync().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
@@ -392,6 +662,20 @@ async function writeIfMissing(path: string, content: string, force: boolean): Pr
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content, "utf8");
   console.log(`Wrote ${path}`);
+}
+
+async function readStdinBounded(maxBytes: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      throw new Error(`Hook input exceeded ${maxBytes} bytes.`);
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function loadConfigForCli(configPath: string): ReturnType<typeof loadConfig> {

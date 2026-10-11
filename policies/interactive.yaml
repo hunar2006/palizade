@@ -1,9 +1,23 @@
+# FINAL: hard blocks precede gates; memory and allowlisted egress are explicit exceptions to the generic copied-content block.
+
 version: 1
 defaults:
   action: allow
   on_error: block
 
 rules:
+
+  # --- M1: destination provenance ---
+  - id: block-tainted-destination
+    when: { direction: request, tool_class: sink, tainted_destination: true }
+    action: block
+    reason: Destination came from untrusted content.
+
+  - id: block-lookalike-destination
+    when: { direction: request, tool_class: sink, lookalike_destination: true }
+    action: block
+    reason: Destination is a lookalike of a known host.
+
   - id: deny-server-sampling
     name: Deny server-initiated model access
     when:
@@ -11,6 +25,24 @@ rules:
       method: sampling/createMessage
     action: block
     reason: MCP server attempted to access the model through sampling.
+
+  # --- M4: tool metadata hardening ---
+  - id: block-tool-name-collision
+    name: Block tools whose name another wrapped server already exposes
+    when:
+      direction: response
+      name_collision_detected: true
+    action: block
+    reason: Another wrapped server already exposes a tool with this name.
+
+  - id: block-tool-shadowing
+    name: Block metadata that references another server's tools
+    when:
+      direction: response
+      tool_shadowing_detected: true
+    action: block
+    reason: Tool metadata references a tool that belongs to a different server.
+  # --- end M4 ---
 
   - id: block-poisoned-tool-metadata
     name: Block poisoned tool metadata
@@ -31,6 +63,38 @@ rules:
     action: block
     reason: Unknown tools on untrusted servers must be classified explicitly.
 
+  - id: block-tainted-egress-destination
+    name: Block tainted outbound destinations
+    when:
+      direction: request
+      method: tools/call
+      capabilities_any:
+        - network_egress
+        - sends_message
+      tainted_argument_role_any:
+        - url
+        - hostname
+        - email_recipient
+        - http_query
+    action: block
+    reason: Tainted content is being used as an outbound destination or query
+      parameter.
+
+  # --- M3: persistent memory provenance ---
+  - id: approve-tainted-memory
+    when: { direction: request, capabilities_any: [ persists_memory ], taint: true }
+    action: require_approval
+    reason: Tainted content is being persisted into memory.
+
+  # --- M5: MRTR input requests ---
+  - id: approve-elicitation
+    name: Require approval for elicitation requests
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+
   - id: approve-semi-unknown-tool
     name: Require approval for unknown tools on semi-trusted servers
     when:
@@ -40,6 +104,73 @@ rules:
       tool_class: unknown
     action: require_approval
     reason: Unknown tools on semi-trusted servers require approval.
+
+  - id: block-tainted-sink
+    name: Require approval for tainted content entering sinks
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      taint: true
+    action: require_approval
+    reason: Tainted content is flowing into a sink tool.
+
+  - id: require-approval-temporal-taint-sink
+    name: Require approval during temporal taint
+    when:
+      direction: request
+      method: tools/call
+      tool_class: sink
+      temporal_taint: true
+    action: require_approval
+    reason: Recent suspicious untrusted content makes sink calls risky.
+
+  # --- M2: Rule of Two ---
+  - id: approve-rule-of-two
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_any: [ network_egress, sends_message, writes_remote, persists_memory ]
+      rule_of_two: true
+      destination_session_trusted: false
+    action: require_approval
+    reason: This session has seen both untrusted and sensitive content.
+
+  # --- M2: session quarantine ---
+  - id: approve-quarantined-sink
+    when: { direction: request, tool_class: sink, session_quarantined: true }
+    action: require_approval
+    reason: Session is quarantined after high-risk content or a blocked destination.
+
+  # --- M2: rate and loop gates ---
+  - id: approve-rate-limited-sink
+    when: { direction: request, tool_class: sink, rate_limited: true }
+    action: require_approval
+    reason: Session sink rate or distinct destination limit exceeded.
+
+  - id: approve-looping-sink
+    when: { direction: request, tool_class: sink, loop_detected: true }
+    action: require_approval
+    reason: Identical sink call repeated too many times.
+
+  # --- M3: protected targets ---
+  - id: approve-critical-path
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
+    action: require_approval
+    reason: Writing a critical configuration or execution target requires approval.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.
 
   - id: log-trusted-unknown-tool
     name: Audit unknown tools on trusted servers
@@ -91,39 +222,3 @@ rules:
       detector_score_gte: 0.75
     action: sanitize
     reason: Strong injection signal in tool output.
-
-  - id: block-tainted-sink
-    name: Require approval for tainted content entering sinks
-    when:
-      direction: request
-      method: tools/call
-      tool_class: sink
-      taint: true
-    action: require_approval
-    reason: Tainted content is flowing into a sink tool.
-
-  - id: block-tainted-egress-destination
-    name: Block tainted outbound destinations
-    when:
-      direction: request
-      method: tools/call
-      capabilities_any:
-        - network_egress
-        - sends_message
-      tainted_argument_role_any:
-        - url
-        - hostname
-        - email_recipient
-        - http_query
-    action: block
-    reason: Tainted content is being used as an outbound destination or query parameter.
-
-  - id: require-approval-temporal-taint-sink
-    name: Require approval during temporal taint
-    when:
-      direction: request
-      method: tools/call
-      tool_class: sink
-      temporal_taint: true
-    action: require_approval
-    reason: Recent suspicious untrusted content makes sink calls risky.

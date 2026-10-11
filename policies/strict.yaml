@@ -1,15 +1,64 @@
+# FINAL: hard blocks precede gates; memory and allowlisted egress are explicit exceptions to the generic copied-content block.
+
 version: 1
 defaults:
   action: require_approval
   on_error: block
 
 rules:
+  # --- M3: tainted protected targets ---
+  - id: block-tainted-critical-path
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        taint: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
+    action: block
+    reason: Tainted writes to critical paths are blocked in strict mode.
+
+  # --- M1: strict default deny egress ---
+  - id: block-new-destination
+    when: { direction: request, tool_class: sink, new_destination: true }
+    action: block
+    reason: Strict mode allows only allowlisted egress destinations.
+
+  # --- M1: destination provenance ---
+  - id: block-tainted-destination
+    when: { direction: request, tool_class: sink, tainted_destination: true }
+    action: block
+    reason: Destination came from untrusted content.
+
+  - id: block-lookalike-destination
+    when: { direction: request, tool_class: sink, lookalike_destination: true }
+    action: block
+    reason: Destination is a lookalike of a known host.
+
   - id: deny-server-sampling
     when:
       direction: request
       method: sampling/createMessage
     action: block
     reason: Server-initiated model access is denied in strict mode.
+
+  # --- M4: tool metadata hardening ---
+  - id: block-tool-name-collision
+    name: Block tools whose name another wrapped server already exposes
+    when:
+      direction: response
+      name_collision_detected: true
+    action: block
+    reason: Another wrapped server already exposes a tool with this name.
+
+  - id: block-tool-shadowing
+    name: Block metadata that references another server's tools
+    when:
+      direction: response
+      tool_shadowing_detected: true
+    action: block
+    reason: Tool metadata references a tool that belongs to a different server.
+  # --- end M4 ---
 
   - id: block-any-tool-lock-drift
     when:
@@ -21,14 +70,6 @@ rules:
         - changed
     action: block
     reason: Strict mode requires pre-approved tool metadata.
-
-  - id: sanitize-strong-injection-any-trust
-    when:
-      direction: response
-      method: tools/call
-      detector_score_gte: 0.75
-    action: sanitize
-    reason: Strong injection signal in tool output.
 
   - id: block-suspicious-output
     when:
@@ -80,16 +121,25 @@ rules:
     action: block
     reason: Tainted content is flowing to a destination outside the egress allowlist.
 
-  - id: redact-pii-egress
+  # --- M1: split-call correlation ---
+  - id: block-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: block
+    reason: Split outbound calls reconstruct tainted content.
+
+  # --- M3: persistent memory provenance ---
+  - id: block-tainted-memory
+    when: { direction: request, capabilities_any: [ persists_memory ], taint: true }
+    action: block
+    reason: Tainted content is being persisted into memory.
+
+  - id: block-unknown-tools
     when:
       direction: request
       method: tools/call
-      pii_detected: true
-      capabilities_any:
-        - sends_message
-        - network_egress
-    action: redact_secrets
-    reason: PII-like content should be redacted before egress.
+      tool_class: unknown
+    action: block
+    reason: Strict mode blocks all unknown tools.
 
   - id: block-tainted-sink
     when:
@@ -100,13 +150,66 @@ rules:
     action: block
     reason: Tainted content cannot enter sink tools in strict mode.
 
-  - id: block-unknown-tools
+  # --- M2: Rule of Two ---
+  - id: approve-rule-of-two
     when:
       direction: request
+      tool_class: sink
+      capabilities_any: [ network_egress, sends_message, writes_remote, persists_memory ]
+      rule_of_two: true
+      destination_session_trusted: false
+    action: require_approval
+    reason: This session has seen both untrusted and sensitive content.
+
+  # --- M2: session quarantine ---
+  - id: approve-quarantined-sink
+    when: { direction: request, tool_class: sink, session_quarantined: true }
+    action: require_approval
+    reason: Session is quarantined after high-risk content or a blocked destination.
+
+  # --- M2: rate and loop gates ---
+  - id: approve-rate-limited-sink
+    when: { direction: request, tool_class: sink, rate_limited: true }
+    action: require_approval
+    reason: Session sink rate or distinct destination limit exceeded.
+
+  - id: approve-looping-sink
+    when: { direction: request, tool_class: sink, loop_detected: true }
+    action: require_approval
+    reason: Identical sink call repeated too many times.
+
+  # --- M3: protected targets ---
+  - id: approve-critical-path
+    when:
+      {
+        direction: request,
+        critical_path: true,
+        capabilities_any: [ file_write, writes_local, deletes_data ]
+      }
+    action: require_approval
+    reason: Writing a critical configuration or execution target requires approval.
+  - id: approve-elicitation
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.
+
+  - id: sanitize-strong-injection-any-trust
+    when:
+      direction: response
       method: tools/call
-      tool_class: unknown
-    action: block
-    reason: Strict mode blocks all unknown tools.
+      detector_score_gte: 0.75
+    action: sanitize
+    reason: Strong injection signal in tool output.
 
   - id: allow-trusted-pure
     when:
@@ -117,3 +220,19 @@ rules:
       taint: false
     action: allow
     reason: Trusted pure tool call.
+
+  - id: redact-pii-egress
+    when:
+      direction: request
+      method: tools/call
+      pii_detected: true
+      capabilities_any:
+        - sends_message
+        - network_egress
+      critical_path: false
+      temporal_taint: false
+      session_quarantined: false
+      rate_limited: false
+      loop_detected: false
+    action: redact_secrets
+    reason: PII-like content should be redacted before egress.

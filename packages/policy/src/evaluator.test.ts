@@ -59,7 +59,7 @@ describe("evaluatePolicy", () => {
     expect(decision.matchedRuleId).toBe("sanitize-suspicious-untrusted-output");
   });
 
-  it("keeps strict tainted-sink blocking trust-agnostic and sanitizes strong response signals", async () => {
+  it("keeps strict tainted-sink blocking trust-agnostic and blocks strong response signals", async () => {
     const shippedDefault = await loadPolicyFile(join(process.cwd(), "policies", "default.yaml"));
     const shippedStrict = await loadPolicyFile(join(process.cwd(), "policies", "strict.yaml"));
 
@@ -80,8 +80,8 @@ describe("evaluatePolicy", () => {
       trust: "semi",
       detector_score: 0.8
     })).toMatchObject({
-      action: "sanitize",
-      matchedRuleId: "sanitize-strong-injection-any-trust"
+      action: "block",
+      matchedRuleId: "block-suspicious-output"
     });
 
     expect(evaluatePolicy(shippedStrict, {

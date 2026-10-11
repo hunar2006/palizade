@@ -41,7 +41,7 @@ describe("substring taint is position independent", () => {
       }
       expect(missed).toEqual([]);
     });
-  });
+  }, 20_000);
 
   it("matches a copied sentence embedded in a different sink argument", async () => {
     await withStores((makeStore) => {

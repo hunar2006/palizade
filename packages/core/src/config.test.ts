@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { loadConfig, parseConfig } from "./config.js";
 
 describe("loadConfig", () => {
   it("resolves config paths relative to the config file, not the caller cwd", async () => {
@@ -33,6 +33,7 @@ describe("loadConfig", () => {
       expect(config.approvals.openBrowser).toBe(true);
       expect(config.egress.allowlist.hosts).toEqual([]);
       expect(config.egress.allowlist.emails).toEqual([]);
+      expect(config.taint.exposure.ttlMs).toBe(7_200_000);
       expect(config.servers.filesystem?.cwd).toBe(join(configDir, "servers"));
       expect(config.servers.filesystem?.command).toBe("node");
       expect(config.servers.filesystem?.args).toEqual(["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "."]);
@@ -81,6 +82,61 @@ describe("loadConfig", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("accepts exactly one of command (stdio) or url (remote) per server", () => {
+    const stdio = parseConfig(`servers:
+  filesystem:
+    command: node
+    args: [server.js]
+`);
+    expect(stdio.servers.filesystem?.command).toBe("node");
+    expect(stdio.servers.filesystem?.url).toBeUndefined();
+
+    const remote = parseConfig(`servers:
+  remote:
+    url: https://example.com/mcp
+    headers:
+      Authorization: "\${GITHUB_TOKEN}"
+`);
+    expect(remote.servers.remote?.url).toBe("https://example.com/mcp");
+    expect(remote.servers.remote?.headers).toEqual({ Authorization: "${GITHUB_TOKEN}" });
+    expect(remote.servers.remote?.protocolVersion).toBe("auto");
+
+    expect(() => parseConfig(`servers:
+  both:
+    command: node
+    url: https://example.com/mcp
+`)).toThrow(/exactly one/);
+
+    expect(() => parseConfig(`servers:
+  neither:
+    args: []
+`)).toThrow(/exactly one/);
+  });
+
+  it("defaults http and listener sections with safe limits", () => {
+    const config = parseConfig(`servers:
+  remote:
+    url: https://example.com/mcp
+`);
+    expect(config.http.maxBodyBytes).toBe(64 * 1024 * 1024);
+    expect(config.http.maxSseLineBytes).toBe(1024 * 1024);
+    expect(config.http.requestTimeoutMs).toBe(30_000);
+    expect(config.listener.host).toBe("127.0.0.1");
+    expect(config.listener.allowRemote).toBe(false);
+  });
+
+  it("keeps metrics off by default and resolves metrics.jsonl against the config directory", () => {
+    expect(parseConfig("servers: {}\n").metrics).toBeUndefined();
+    expect(parseConfig("metrics: { jsonl: .palizade/metrics.jsonl }\n", resolve("project")).metrics).toEqual({ jsonl: resolve("project", ".palizade/metrics.jsonl"), maxBytes: 64 * 1024 * 1024 });
+  });
+
+  it("reports config problems with the YAML path, line and a fix hint, never the value", () => {
+    const raw = "servers:\n  fs:\n    command: node\n    trsut: trusted\n    headers: { Authorization: 5 }\n";
+    expect(() => parseConfig(raw)).toThrow(/servers\.fs\.trsut \(line 4\): Unknown key 'trsut'\n    fix: Did you mean 'trust'\?/u);
+    expect(() => parseConfig("approvals:\n  mode: termnal\n")).toThrow(/approvals\.mode \(line 2\): .*\n    fix: Use one of: "terminal", "localhost"/u);
+    expect(() => parseConfig("servers:\n  gh:\n    url: https://example.test/mcp\n    headers: { Authorization: 12345678 }\n")).not.toThrow(/12345678/u);
   });
 });
 

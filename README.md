@@ -44,32 +44,17 @@ Upstream MCP server
 
 ## Features
 
-Inbound defense:
+- Shared SQLite provenance for tool, resource, prompt and sensitive-origin content, with hidden-Unicode normalization, identifier/host skeletons and bounded decoded sink views.
+- Sink checks for copied destinations, URL/host/email and tool-specific IDs, known-host lookalikes, sensitive egress and split outbound payloads.
+- Persistent memory/vector provenance after approved writes, plus explicit pruning.
+- Rule of Two, quarantine, rate and loop gates shared across wrapped processes; optional session destination grants.
+- Critical filesystem targets, traversal/symlink checks and bounded escaped, masked approval diffs.
+- Metadata locks, faithful lock diffs, dangerous-default detection and cross-server tool collision/shadowing checks.
+- Dual-era stdio and Streamable HTTP, including a stdio bridge for remote servers and a protected local listener.
+- Native client hooks and optional sandboxed stdio launch.
+- Seven YAML presets, terminal/localhost approvals, payload-masked audit logs, optional counter metrics, hot reload, policy validation, status and draft learning commands.
 
-- Taint tracking for untrusted tool output, resources, prompts, and suspicious content.
-- Cross-turn and cross-server persistence through profile-scoped SQLite taint storage.
-- Sink gating for write, send, delete, shell, publish, network, and other side-effect tools.
-- Temporal taint for risky follow-on sink calls after suspicious content appears.
-
-Outbound defense:
-
-- Secret and PII detectors for common plaintext formats.
-- `redact_secrets` policy action for outbound argument redaction.
-- Egress allowlists for hosts and email recipients.
-- Sensitive-origin tagging by server, tool, or path pattern.
-
-Detection is a signal, not the guarantee. Pattern-based secret and PII detection can miss custom, encoded, split, or obfuscated values. Destination allowlists and taint/provenance rules are the structural controls. See [docs/detector-coverage.md](docs/detector-coverage.md).
-
-Controls:
-
-- Tool metadata locking in `palizade.lock` for rug-pull detection.
-- Server-initiated `sampling/createMessage` controls.
-- First-match-wins YAML policy engine.
-- Core policy presets: `audit-only`, `default`, `strict`, and `interactive` approval mode.
-- Optional `egress` preset for secret/PII outbound controls.
-- Legible blocked-call messages returned as MCP `isError` tool results.
-- JSONL audit log with masked raw payload capture by default and an optional SQLite mirror.
-- Localhost approval inbox for headless desktop clients.
+Detection remains a signal: pattern-based secret/PII recognition and observable matching do not provide complete semantic DLP. See [known limits](#what-palizade-does-not-protect), [architecture](docs/architecture.md) and [detector coverage](docs/detector-coverage.md).
 
 ## Quickstart
 
@@ -166,6 +151,12 @@ Palizade blocked this tool call. Rule: block-tainted-sink. Reason: Tainted conte
 
 ## Debugging
 
+`palizade taint prune` skips persistent memory provenance. `palizade taint prune --include-persistent` explicitly removes persistent records in the current profile as well as expired normal records. Approved tainted memory writes have no provenance TTL; later reads retain the original source in audit metadata.
+
+Inspect quarantine with `palizade session quarantine`; clear it explicitly with `palizade session quarantine --clear [--session <id>]`. This clears quarantine only; seen-sensitive/untrusted flags and hard blocks remain active. High-score responses and blocked tainted/split/lookalike destinations quarantine the session; enforcing presets approval-gate subsequent sinks until expiry or operator clearance.
+
+Exposure flags expire after `taint.exposure.ttlMs` (default 7200000, two hours), refreshed on each new untrusted or sensitive exposure. Native hooks isolate flags, quarantine, grants and counters by the client's `session_id` (Cursor's `conversation_id`), while profile-scoped taint records remain shared. `palizade session reset [--session <id>]` clears session flags, quarantine, grants and counters without deleting taint records. With `--session`, reset/quarantine target that native client session; without it, they target the configured wrapper profile/run scope.
+
 Check local config and MCP coverage:
 
 ```bash
@@ -181,6 +172,14 @@ Inspect decisions:
 palizade -c /absolute/path/to/palizade.yaml audit --last 15m
 palizade -c /absolute/path/to/palizade.yaml audit --last 1h --action block
 ```
+
+Operate a running setup:
+
+- `palizade status [--json]` shows each server's transport, configured and last seen protocol era, lock state and sandbox; the policy file and hash; taint record counts (normal and persistent); quarantined sessions; sessions where the Rule of Two is armed (untrusted and sensitive content both seen); and the last 10 blocks.
+- `palizade policy check [file]` validates a policy before you deploy it: schema and unknown keys (with a "did you mean" hint), rules that can never run because an earlier rule matches everything, conditions that can never be true (`labels_any: []`, `detector_score_gte` above `detector_score_lt`, an invalid `argument_regex`), and `server` or `tool` names that are not in `palizade.yaml` or `palizade.lock`. It exits 1 on errors, and on warnings too with `--strict`.
+- `palizade learn --from-audit --since 7d` prints a draft YAML of tool classes and allowlist entries observed in audit. It never writes a file, and it does not suggest destinations that were only seen in blocked calls or with tainted data.
+- Edits to `palizade.yaml`, the policy file and `palizade.allow.yaml` are picked up by running `wrap` and `serve` processes within about a second. An invalid edit is rejected: the previous version keeps running, the failure is audited and printed on stderr with the YAML path and a fix hint. Turn this off with `reload: { enabled: false }`; change the poll interval with `reload.intervalMs`.
+- For SIEM ingestion, `metrics: { jsonl: .palizade/metrics.jsonl }` writes one line per decision with counters only (no payloads), rotating at `metrics.maxBytes` (default 64 MiB).
 
 Common Windows and client gotchas:
 
@@ -199,13 +198,21 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 
 ## What Palizade Does Not Protect
 
-- Palizade only guards traffic through MCP servers it wraps. Native client tools, such as Claude Code's built-in Read, Write, and Bash tools, bypass MCP and are not protected.
+- Palizade only guards traffic through MCP servers it wraps, plus native tool hooks where `palizade install-hooks` is installed (Claude Code PreToolUse/PostToolUse, Cursor beforeShellExecution/beforeMCPExecution, Codex PreToolUse). Native tools without installed hooks remain unprotected, and shell parsing is heuristic — it extracts URLs, hosts, redirect targets, and suspicious constructs but is not a shell parser.
 - It does not protect against a malicious MCP client or a compromised host OS.
 - Pattern-based secret and PII detection misses obfuscated, split, transformed, or custom secrets. See [docs/detector-coverage.md](docs/detector-coverage.md).
-- Taint matching is containment-by-observables: exact fragments, atomic tokens, fuzzy SimHash, and temporal taint. It does not defeat full semantic paraphrase laundering.
+- Taint matching uses observable fragments/tokens, lightweight SimHash and temporal evidence. Rule of Two gates paraphrased remote/memory actions after both exposure flags are set; it does not provide unrestricted semantic matching.
+- Outbound windows are process-local. Splits across wrapper/hook processes or independently padded encoded shards can evade concatenation; the later adaptive evaluation must measure these cases.
+- Critical paths are checked against the local filesystem at decision time. They do not enforce a malicious server's actual I/O or prevent subsequent symlink races. Unknown edit formats cannot produce a complete approval diff.
+- Client-rendered side effects such as automatically fetched Markdown images are outside observable proxy/hook traffic.
+- Input-required gating currently covers tool results; prompt/resource input-required handlers, full discover schemas, structured string constraints and listener inbound parameter-header disagreement remain limited. The [integration report](docs/v0.4-report.md) distinguishes these gaps from tested behavior.
 - Substring fingerprints cover roughly the first 17 KB of each tool response. An injection past that point is caught only by token, fuzzy, or temporal matching.
 - The benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive.
-- Streamable HTTP transport is not implemented yet; stdio MCP is the current transport.
+- Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
+- The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
+- Tool name collision and shadowing checks only compare servers wrapped by Palizade that share one state directory, and only from the moment each server has answered `tools/list`. The server that lists a shared name first keeps it until that server restarts; after that both copies are withheld until one is renamed or removed from `palizade.yaml`.
+- Sandboxing is opt-in and limited by its backend. The docker `allowlist` mode relies on the server honoring `HTTPS_PROXY` unless `sandbox.dockerNetwork` names an internal network; seatbelt restricts writes and network but not reads; Palizade does not sandbox `url` servers or the client itself, and it does not harden the docker daemon or the image you choose.
+- Hot reload only applies settings the interception engine reads per message (policy, egress allowlist and mode, limits, trust, tool classes and other per-server classification). Changes to stores, sinks, detectors, transport or the upstream launch are reported and need a restart. A message already being processed when a reload lands may evaluate its later rules against the new policy. `palizade learn` output is a starting point built from what was observed, not a reviewed policy.
 
 These are scope boundaries, not footnotes. Palizade is strongest when sensitive capabilities are exposed through wrapped MCP servers and policy is reviewed for each server.
 
@@ -221,10 +228,10 @@ In scope:
 
 Out of scope:
 
-- Native client tools outside MCP.
+- Native client tools without installed hooks.
 - Host compromise.
 - Malicious clients that bypass or tamper with the proxy.
-- Complete semantic DLP or memory/vector-store defenses.
+- Complete semantic DLP, arbitrary memory rewriting, or unobserved side effects.
 
 For depth, read [docs/architecture.md](docs/architecture.md), [docs/policy.md](docs/policy.md), and [docs/detector-coverage.md](docs/detector-coverage.md).
 
@@ -255,28 +262,95 @@ Preset guidance:
 | --- | --- |
 | `policies/audit-only.yaml` | You want to observe what Palizade would flag without enforcement. |
 | `policies/interactive.yaml` | A human should be able to approve legitimate tainted sink calls. |
-| `policies/default.yaml` | You want unattended hard blocking for tainted sink calls. |
+| `policies/default.yaml` | Hard-block general copied-content sinks, with explicit memory approval and session gates. |
 | `policies/strict.yaml` | You want stricter metadata, output, unknown-tool, taint, and egress enforcement. |
 | `policies/egress.yaml` | You want the default posture plus opt-in secret/PII outbound controls. |
+| `policies/coding-agent.yaml` | Add shell and tainted critical-write protection to default. |
+| `policies/research-readonly.yaml` | Confine side effects to one configured output directory. |
 
 Full reference: [docs/policy.md](docs/policy.md).
 
+v0.4 behavior changes:
+
+- Enforcing presets block destinations copied from untrusted content and known-host lookalikes, including tool-specific channel/account/repository IDs. Unicode and decoding checks use separate matching views.
+- Default gates split matches; strict and egress block them. Default, strict and interactive gate remote/memory sinks after both untrusted and sensitive exposure, even for paraphrases. Quarantine, rate and loop gates count denied attempts; explicit session grants never bypass hard blocks.
+- Critical writes require approval after hard blocks; strict and coding block tainted critical writes, and research blocks all critical writes. Whole package.json writes are protected. Semi/untrusted annotations can raise risk but cannot make a risky tool read-only; trusted annotations and administrator overrides retain priority.
+- Tainted memory writes require approval in default, interactive and egress; strict blocks them. Approved observable provenance persists beyond TTL. Default's generic copied-content sink block remains, with this explicit memory exception.
+- Metadata collisions/shadowing are blocked and hidden Unicode is sanitized; audit-only logs those findings. Common built-in names are labelled without being blocked. Lock approval stores snapshots, prints escaped diffs and asks in a TTY (`--yes` skips the prompt).
+- All enforcing presets approval-gate elicitation. Strict now blocks strong suspicious output before sanitization. Destination/query, secret and split hard blocks precede generic approval/redaction rules. Egress exceptions cannot bypass critical, temporal, quarantine, rate or loop gates.
+- `egress.mode` remains `open` by default. Use `approve_new` with default for allow once/always/deny; remembered grants go to the separate `palizade.allow.yaml`. Strict blocks new destinations even with open mode. Typed IDs use `egress.allowlist.destinations`, for example `channel_id:C123`.
+- Running wrap/serve processes reload valid policy/config/allowlist edits by default. Invalid edits keep the last valid version and are audited; `reload.enabled: false` restores fail-closed learned-file errors. Startup still rejects invalid files. Schema validation rejects unknown keys with path/line hints.
+- Optional raw audit capture masks observable tainted payloads entirely and masks known sensitive text otherwise. Copied destinations are masked in audit and approvals. Sandboxing remains opt-in, metrics remain off, and existing stdio configs keep working.
+
 ## Commands
 
+Select a starter with `palizade init --preset coding-agent` or `palizade init --preset research-readonly --output-dir ./output`. Initialization copies the current embedded preset and preserves existing files unless `--force` is supplied. Ordinary `init` selects default; strict initialization also sets allowlist-only egress.
+
 ```bash
-palizade init
+palizade init [--preset <name>] [--output-dir <path>]
 palizade install-config <serverName>
 palizade install-config --all
 palizade wrap <serverName>
+palizade serve
+palizade status [--json]
+palizade hook <client> [event]
+palizade install-hooks <client>
+palizade policy check [file] [--json] [--strict]
+palizade learn --from-audit --since 7d [--server <name>]
 palizade lock approve <serverName>
+palizade lock diff <serverName>
 palizade detectors install promptguard2
 palizade detectors verify heuristic
 palizade audit --last 1h
 palizade audit verify
 palizade audit prune --older-than 30d
-palizade taint prune
+palizade taint prune [--include-persistent]
+palizade session quarantine --clear [--session <id>]
+palizade session reset [--session <id>]
 palizade doctor
 ```
+
+### Native client tool hooks
+
+`palizade install-hooks <client>` writes hook entries for `claude-code` (`~/.claude/settings.json`), `cursor` (`~/.cursor/hooks.json`, `failClosed: true`), or `codex` (`~/.codex/hooks.json`) — backing up and merging without ever overwriting malformed JSON. The `palizade hook` command reads the client's hook JSON on stdin and prints the client's decision format (Claude Code/Codex `hookSpecificOutput.permissionDecision`, Cursor `permission`).
+
+Hooks reuse the same SQLite taint store, policy, and audit as the proxy: Bash/Shell/apply_patch commands run the full sink check (shell-command role, network destinations, critical-path redirects), Write/Edit are gated on critical paths and tainted content, WebFetch URLs run destination checks, and PostToolUse of Read/WebFetch/Grep/Glob registers taint that later commands are matched against. Hooks fail closed by default (`hooks.failMode: closed`): a crash or timeout exits 2 (block), never allow.
+
+### Remote (HTTP) MCP servers
+
+Palizade proxies remote MCP servers declared with `url` instead of `command` in `palizade.yaml`:
+
+```yaml
+servers:
+  remote:
+    url: https://example.com/mcp
+    headers:
+      Authorization: "${GITHUB_TOKEN}"
+```
+
+`palizade wrap <server>` bridges the remote server over stdio so existing client integrations keep working. `palizade serve` runs a transparent local listener at `http://127.0.0.1:32146/mcp/<serverName>`: the upstream is always taken from config (never from request input), client `Authorization` headers are forwarded only to the configured upstream origin (never to redirect targets), `401`/`403`/`WWW-Authenticate` pass through untouched for OAuth discovery, and the listener requires Palizade's own bearer token (generated at `init`, stored at `.palizade/listener.token`, sent as `X-Palizade-Token`). Both protocol eras are supported: 2025-11-25 (initialize, sessions, GET SSE streams) and 2026-07-28 (POST only, `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Param-*` headers, request-scoped SSE).
+
+RFC 8707 caveat: forwarded tokens must target the configured upstream resource. Palizade does not mint upstream tokens or act as an OAuth authorization server. The listener has not been validated as an OAuth-terminating gateway; avoiding TLS termination alone does not establish audience compliance. MCP forbids accepting another resource's token and passing it downstream. See the official [authorization requirements](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) and [token-passthrough guidance](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices#token-passthrough).
+
+### Sandboxed stdio servers
+
+Stdio servers can optionally be launched inside a sandbox. The default is `none` (unchanged behavior):
+
+```yaml
+servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    sandbox:
+      type: docker            # none | docker | bubblewrap (Linux) | seatbelt (macOS); Windows: docker only
+      image: node:22-slim
+      writable: ["out"]       # cwd is mounted read-only; only these paths are writable
+      network: allowlist      # none (default) | allowlist
+      allowHosts: ["registry.npmjs.org"]
+      passEnv: ["LANG"]       # no host environment is passed except these names and `env`
+```
+
+The shorthand `sandbox: docker` uses those defaults with `network: none`. Every spawn is written to audit with secrets masked, and `palizade doctor` lists servers that run unsandboxed.
 
 Development and eval commands:
 
@@ -302,7 +376,7 @@ pnpm eval:combined
 ## Status And Clients
 
 - Works with Claude Desktop, Claude Code, and any MCP client that can launch stdio MCP servers.
-- Coverage equals wrapped MCP servers. Native client tools remain outside the proxy.
+- Coverage includes wrapped MCP traffic and installed native-hook events; live client hook activation needs verification.
 - Claude Desktop live validation has exercised tainted write blocking.
 - Claude Code support is documented with a non-native fetch/post MCP demo in [examples/claude-code-fetch-demo.md](examples/claude-code-fetch-demo.md).
 - Real filesystem server smoke test is available through `pnpm smoke:filesystem`.
@@ -311,7 +385,7 @@ pnpm eval:combined
 ## Security And Privacy
 
 - Audit logs hash payloads by default.
-- Raw payload capture requires `audit.captureRawPayloads: true`; detected sensitive strings are masked before capture.
+- Raw capture requires `audit.captureRawPayloads: true`; observable tainted payloads are replaced by a redaction marker and other text receives known-secret/PII masking.
 - SQLite taint fingerprints are HMAC-protected by `.palizade/taint.key`; the key is local and never printed.
 - Policy evaluation errors fail closed in enforcing presets.
 - Localhost approval is tokenized, one-time, POST-only, loopback-bound, and served from a persistent inbox at `http://127.0.0.1:32145/` by default.

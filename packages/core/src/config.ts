@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
-import YAML from "yaml";
+import { parseYamlWithSchema } from "@palizade/policy";
 import { z } from "zod";
+import { normalizeSandbox, sandboxConfigSchema } from "./sandbox.js";
 
 const trustSchema = z.enum(["trusted", "semi", "untrusted"]);
 const toolClassSchema = z.enum(["source", "sink", "pure", "unknown"]);
@@ -12,6 +13,7 @@ const capabilitySchema = z.enum([
   "file_write",
   "writes_local",
   "writes_remote",
+  "persists_memory",
   "deletes_data",
   "executes_code",
   "sends_message",
@@ -21,19 +23,36 @@ const capabilitySchema = z.enum([
 ]);
 
 export const serverConfigSchema = z.object({
-  command: z.string().min(1),
+  command: z.string().min(1).optional(),
+  url: z.string().min(1).optional(),
   args: z.array(z.string()).default([]),
   cwd: z.string().optional(),
   env: z.record(z.string(), z.string()).default({}),
+  headers: z.record(z.string(), z.string()).default({}),
+  protocolVersion: z.enum(["auto", "2026-07-28", "2025-11-25"]).default("auto"),
   trust: trustSchema.default("untrusted"),
   toolClasses: z.record(z.string(), toolClassSchema).default({}),
   toolCapabilities: z.record(z.string(), z.array(capabilitySchema)).default({}),
+  argumentRoles: z.record(z.string(), z.record(z.string(), z.enum(["url", "hostname", "email_recipient", "file_path", "shell_command", "repository_destination", "channel_id", "account_id", "http_header", "http_query", "body", "unknown"]))).default({}),
   sensitive: z.boolean().default(false),
   sensitiveTools: z.record(z.string(), z.boolean()).default({}),
-  sensitivePathPatterns: z.array(z.string()).default([]),
+  sensitivePathPatterns: z.array(z.string().refine((pattern) => { try { new RegExp(pattern, "iu"); return true; } catch { return false; } }, "Invalid sensitive path regular expression")).default([]),
   shell: z.boolean().default(false),
-  allowShell: z.boolean().default(false)
-}).strict();
+  allowShell: z.boolean().default(false),
+  sandbox: sandboxConfigSchema.optional()
+}).strict().superRefine((server, ctx) => {
+  if (server.sandbox !== undefined && server.url !== undefined && normalizeSandbox(server.sandbox).type !== "none") {
+    ctx.addIssue({ code: "custom", path: ["sandbox"], message: "sandbox applies only to stdio servers (command); remove it from url servers." });
+  }
+  const hasCommand = server.command !== undefined && server.command.length > 0;
+  const hasUrl = server.url !== undefined && server.url.length > 0;
+  if (hasCommand === hasUrl) {
+    ctx.addIssue({
+      code: "custom",
+      message: `Server config must define exactly one of 'command' (stdio transport) or 'url' (remote HTTP transport). Found command=${hasCommand ? "set" : "unset"}, url=${hasUrl ? "set" : "unset"}.`
+    });
+  }
+});
 
 const secretDetectorConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -75,6 +94,17 @@ const piiDetectorConfigSchema = z.object({
 
 export const palizadeConfigSchema = z.object({
   stateDir: z.string().default(".palizade"),
+  protectedTargets: z.object({
+    criticalPaths: z.array(z.string()).default([]),
+    maxDiffBytes: z.number().int().positive().default(65536),
+    outputDirectory: z.string().optional()
+  }).default({ criticalPaths: [], maxDiffBytes: 65536 }),
+  limits: z.object({
+    sinkCallsPerMinute: z.number().int().min(1).max(1000).default(60),
+    distinctDestinations: z.number().int().min(1).max(1000).default(20),
+    repeatThreshold: z.number().int().min(1).max(1000).default(5),
+    historyEntries: z.number().int().min(1).max(1000).default(1000)
+  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 }),
   policy: z.string().default("policies/default.yaml"),
   lockfile: z.string().default("palizade.lock"),
   audit: z.object({
@@ -109,12 +139,16 @@ export const palizadeConfigSchema = z.object({
     pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
   }),
   egress: z.object({
+    mode: z.enum(["allowlist_only", "approve_new", "open"]).default("open"),
+    learnedFile: z.string().default("palizade.allow.yaml"),
     allowlist: z.object({
       hosts: z.array(z.string()).default([]),
-      emails: z.array(z.string()).default([])
-    }).default({ hosts: [], emails: [] })
+      emails: z.array(z.string()).default([]),
+      destinations: z.array(z.string()).default([])
+    }).default({ hosts: [], emails: [], destinations: [] })
   }).default({
-    allowlist: { hosts: [], emails: [] }
+    mode: "open", learnedFile: "palizade.allow.yaml",
+    allowlist: { hosts: [], emails: [], destinations: [] }
   }),
   transport: z.object({
     maxMessageBytes: z.number().int().min(1024).default(64 * 1024 * 1024),
@@ -127,7 +161,58 @@ export const palizadeConfigSchema = z.object({
     allowBatches: false,
     allowContentLength: false
   }),
+  http: z.object({
+    requestTimeoutMs: z.number().int().min(1000).default(30_000),
+    maxBodyBytes: z.number().int().min(1024).default(64 * 1024 * 1024),
+    maxSseLineBytes: z.number().int().min(1024).default(1024 * 1024),
+    maxSseEventBytes: z.number().int().min(1024).default(16 * 1024 * 1024),
+    maxConcurrentStreams: z.number().int().min(1).default(8),
+    maxRedirects: z.number().int().min(0).max(10).default(5)
+  }).default({
+    requestTimeoutMs: 30_000,
+    maxBodyBytes: 64 * 1024 * 1024,
+    maxSseLineBytes: 1024 * 1024,
+    maxSseEventBytes: 16 * 1024 * 1024,
+    maxConcurrentStreams: 8,
+    maxRedirects: 5
+  }),
+  listener: z.object({
+    host: z.string().default("127.0.0.1"),
+    port: z.number().int().min(0).max(65_535).default(32_146),
+    tokenPath: z.string().default(".palizade/listener.token"),
+    allowRemote: z.boolean().default(false)
+  }).default({
+    host: "127.0.0.1",
+    port: 32_146,
+    tokenPath: ".palizade/listener.token",
+    allowRemote: false
+  }),
+  hooks: z.object({
+    failMode: z.enum(["closed", "open"]).default("closed"),
+    timeoutMs: z.number().int().min(1000).default(30_000),
+    maxInputBytes: z.number().int().min(1024).default(1024 * 1024)
+  }).default({
+    failMode: "closed",
+    timeoutMs: 30_000,
+    maxInputBytes: 1024 * 1024
+  }),
   taint: z.object({
+    exposure: z.object({ ttlMs: z.number().int().positive().default(7_200_000) }).default({ ttlMs: 7_200_000 }),
+    quarantine: z.object({
+      scoreGte: z.number().min(0).max(1).default(0.85),
+      turns: z.number().int().positive().default(20),
+      ttlMs: z.number().int().positive().default(1800000)
+    }).default({ scoreGte: 0.85, turns: 20, ttlMs: 1800000 }),
+    window: z.object({
+      calls: z.number().int().min(1).max(100).default(12),
+      ttlMs: z.number().int().positive().default(900_000),
+      maxBytes: z.number().int().positive().default(262144),
+      maxDestinations: z.number().int().positive().default(256)
+    }).default({ calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 }),
+    decode: z.object({
+      maxDepth: z.number().int().min(0).max(8).default(2),
+      maxBytes: z.number().int().positive().default(256 * 1024)
+    }).default({ maxDepth: 2, maxBytes: 256 * 1024 }),
     sqlite: z.string().default(".palizade/taint.sqlite"),
     keyPath: z.string().default(".palizade/taint.key"),
     scope: z.enum(["process", "profile", "external_run_id"]).default("profile"),
@@ -143,6 +228,10 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    exposure: { ttlMs: 7_200_000 },
+    quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
+    window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
+    decode: { maxDepth: 2, maxBytes: 256 * 1024 },
     keyPath: ".palizade/taint.key",
     scope: "profile",
     profileId: "default",
@@ -151,6 +240,20 @@ export const palizadeConfigSchema = z.object({
     fuzzyHammingMax: 7,
     temporal: { enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 }
   }),
+  metadata: z.object({
+    shadowing: z.boolean().default(true),
+    builtinNames: z.array(z.string()).default(["read_file", "write_file", "bash", "fetch"]),
+    dangerousDefaults: z.array(z.string()).default([]),
+    maxScanBytes: z.number().int().min(1024).max(16 * 1024 * 1024).default(256 * 1024)
+  }).strict().optional(),
+  reload: z.object({
+    enabled: z.boolean().default(true),
+    intervalMs: z.number().int().min(100).max(60_000).default(1000)
+  }).strict().optional(),
+  metrics: z.object({
+    jsonl: z.string().min(1),
+    maxBytes: z.number().int().min(1024).default(64 * 1024 * 1024)
+  }).strict().optional(),
   servers: z.record(z.string(), serverConfigSchema).default({})
 }).strict();
 
@@ -160,18 +263,21 @@ export type PalizadeConfig = z.infer<typeof palizadeConfigSchema>;
 export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): Promise<PalizadeConfig> {
   const absolute = resolve(cwd, path);
   const raw = await readFile(absolute, "utf8");
-  const parsed = palizadeConfigSchema.parse(YAML.parse(raw));
+  const parsed = parseYamlWithSchema(palizadeConfigSchema, raw, absolute);
+  parsed.protectedTargets.criticalPaths.push(absolute);
   return resolveConfigPaths(parsed, dirname(absolute));
 }
 
 export function parseConfig(raw: string, baseDir = process.cwd()): PalizadeConfig {
-  return resolveConfigPaths(palizadeConfigSchema.parse(YAML.parse(raw)), baseDir);
+  return resolveConfigPaths(parseYamlWithSchema(palizadeConfigSchema, raw, "palizade.yaml"), baseDir);
 }
 
 export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd()): PalizadeConfig {
   return {
     ...config,
     stateDir: resolvePath(baseDir, config.stateDir),
+    protectedTargets: { ...config.protectedTargets, outputDirectory: config.protectedTargets.outputDirectory ? resolvePath(baseDir, config.protectedTargets.outputDirectory) : undefined },
+    egress: { ...config.egress, learnedFile: resolvePath(baseDir, config.egress.learnedFile) },
     policy: resolvePath(baseDir, config.policy),
     lockfile: resolvePath(baseDir, config.lockfile),
     audit: {
@@ -192,6 +298,11 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
       sqlite: resolvePath(baseDir, config.taint.sqlite),
       keyPath: resolvePath(baseDir, config.taint.keyPath)
     },
+    listener: {
+      ...config.listener,
+      tokenPath: resolvePath(baseDir, config.listener.tokenPath)
+    },
+    ...(config.metrics ? { metrics: { ...config.metrics, jsonl: resolvePath(baseDir, config.metrics.jsonl) } } : {}),
     servers: Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [
       name,
       {

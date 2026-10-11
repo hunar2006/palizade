@@ -1,10 +1,32 @@
 import { makeFingerprint, hammingDistanceHex, normalizeText } from "./fingerprint.js";
 import { newTaintId, sha256 } from "./hash.js";
+import { emptySession, type SessionState } from "./session.js";
 import type { AddTaintInput, TaintClass, TaintMatch, TaintMatchOptions, TaintRecord, TaintStore, TemporalTaintConfig, TemporalTaintState } from "./types.js";
 
 export class InMemoryTaintStore implements TaintStore {
   private readonly records = new Map<string, TaintRecord>();
   private readonly temporalBySession = new Map<string, TemporalTaintState>();
+  private readonly sessions = new Map<string, SessionState>();
+
+  getSession(sessionId: string): SessionState {
+    return structuredClone(this.sessions.get(sessionId) ?? emptySession());
+  }
+
+  updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState {
+    const state = update(this.getSession(sessionId));
+    this.sessions.set(sessionId, structuredClone(state));
+    return state;
+  }
+
+  destinationKey(text: string): string { return sha256(text); }
+
+  promotePersistent(id: string): void {
+    const record = this.records.get(id);
+    if (!record) throw new Error("Missing taint provenance record");
+    record.persistent = true;
+    record.expiresAt = undefined;
+    record.classes = [...new Set<TaintClass>([...record.classes, "untrusted"])];
+  }
 
   add(input: AddTaintInput): TaintRecord {
     const record: TaintRecord = {
@@ -15,10 +37,12 @@ export class InMemoryTaintStore implements TaintStore {
       trust: input.trust,
       createdAt: new Date().toISOString(),
       payloadHash: sha256(input.text),
+      persistent: input.persistent ?? false,
+      provenanceIds: input.provenanceIds ?? [],
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
-      fingerprint: makeFingerprint(input.text)
+      fingerprint: makeFingerprint(input.text, input.classes?.includes("sensitive"))
     };
     this.records.set(record.id, record);
     return record;
@@ -40,10 +64,15 @@ export class InMemoryTaintStore implements TaintStore {
     const matches: TaintMatch[] = [];
 
     for (const record of this.records.values()) {
-      if (record.sessionId !== sessionId) {
+      if (options.persistentOnly && !record.persistent) continue;
+      if (record.sessionId !== sessionId && !record.persistent) {
         continue;
       }
       if (!matchesClassFilter(record.classes, options.classes)) {
+        continue;
+      }
+      if (options.sensitiveFragments && record.classes.includes("sensitive") && record.fingerprint.sensitiveFragments?.some((fragment) => normalized.includes(fragment))) {
+        matches.push({ taintId: record.id, reason: "substring", classes: record.classes });
         continue;
       }
 

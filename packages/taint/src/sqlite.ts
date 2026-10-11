@@ -2,8 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { extractAtomicTokens, hammingDistanceHex, makeFingerprint, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
+import { extractAtomicTokens, hammingDistanceHex, makeSensitiveFragments, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
 import { hmacSha256Hex, newTaintId, sha256 } from "./hash.js";
+import { emptySession, type SessionState } from "./session.js";
 import type { AddTaintInput, TaintClass, TaintFingerprint, TaintMatch, TaintMatchOptions, TaintRecord, TaintScope, TaintStore, TemporalTaintConfig } from "./types.js";
 
 type SqliteDatabase = {
@@ -32,6 +33,8 @@ interface TaintRow {
   labels_json: string;
   classes_json?: string | null;
   fingerprint_json: string;
+  persistent?: number;
+  provenance_json?: string | null;
 }
 
 interface TemporalRow {
@@ -47,6 +50,7 @@ export interface SqliteTaintStoreOptions {
   runId?: string;
   keyPath?: string;
   ttlMs?: number;
+  sessionScope?: "client";
 }
 
 export class SqliteTaintStore implements TaintStore {
@@ -55,6 +59,7 @@ export class SqliteTaintStore implements TaintStore {
   private readonly profileId: string;
   private readonly runId: string | undefined;
   private readonly ttlMs: number;
+  private readonly sessionScope: "client" | undefined;
   private readonly hmacKey: Buffer;
 
   constructor(private readonly path: string, options: SqliteTaintStoreOptions = {}) {
@@ -62,6 +67,7 @@ export class SqliteTaintStore implements TaintStore {
     this.profileId = options.profileId ?? "default";
     this.runId = options.runId;
     this.ttlMs = options.ttlMs ?? 86_400_000;
+    this.sessionScope = options.sessionScope;
     mkdirSync(dirname(path), { recursive: true });
     this.hmacKey = loadOrCreateHmacKey(options.keyPath ?? resolve(dirname(path), "taint.key"));
     const sqlite = requireNodeSqlite();
@@ -92,12 +98,15 @@ export class SqliteTaintStore implements TaintStore {
         remaining_turns integer not null
       );
       create index if not exists idx_temporal_expires on temporal_taint(expires_at);
+      create table if not exists session_state (scope_id text primary key, state_json text not null);
     `);
     this.ensureColumn("taint_records", "profile_id", "text");
     this.ensureColumn("taint_records", "scope_id", "text");
     this.ensureColumn("taint_records", "run_id", "text");
     this.ensureColumn("taint_records", "expires_at", "text");
     this.ensureColumn("taint_records", "classes_json", "text");
+    this.ensureColumn("taint_records", "persistent", "integer not null default 0");
+    this.ensureColumn("taint_records", "provenance_json", "text");
     this.db.exec(`
       create index if not exists idx_taint_scope on taint_records(scope_id);
       create index if not exists idx_taint_expires on taint_records(expires_at);
@@ -119,17 +128,19 @@ export class SqliteTaintStore implements TaintStore {
       sourceTool: input.sourceTool,
       trust: input.trust,
       createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: input.persistent ? undefined : expiresAt.toISOString(),
       payloadHash: sha256(input.text),
+      persistent: input.persistent ?? false,
+      provenanceIds: input.provenanceIds ?? [],
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
-      fingerprint: makeProtectedFingerprint(input.text, this.hmacKey)
+      fingerprint: makeProtectedFingerprint(input.text, this.hmacKey, input.classes?.includes("sensitive"))
     };
     this.db.prepare(
       `insert into taint_records
-       (id, profile_id, scope_id, run_id, session_id, source_server, source_tool, trust, created_at, expires_at, payload_hash, detector_score, labels_json, classes_json, fingerprint_json)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, profile_id, scope_id, run_id, session_id, source_server, source_tool, trust, created_at, expires_at, payload_hash, detector_score, labels_json, classes_json, fingerprint_json, persistent, provenance_json)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       record.id,
       record.profileId,
@@ -140,14 +151,45 @@ export class SqliteTaintStore implements TaintStore {
       record.sourceTool,
       record.trust,
       record.createdAt,
-      record.expiresAt,
+      record.expiresAt ?? null,
       record.payloadHash,
       record.detectorScore,
       JSON.stringify(record.labels),
       JSON.stringify(record.classes),
-      JSON.stringify(record.fingerprint)
+      JSON.stringify(record.fingerprint),
+      record.persistent ? 1 : 0,
+      JSON.stringify(record.provenanceIds)
     );
     return record;
+  }
+
+  destinationKey(text: string): string { return hmacSha256Hex(this.hmacKey, text); }
+
+  promotePersistent(id: string): void {
+    const record = this.get(id);
+    if (!record) throw new Error("Missing taint provenance record");
+    this.db.prepare("update taint_records set persistent = 1, expires_at = null, classes_json = ? where id = ?").run(JSON.stringify([...new Set<TaintClass>([...record.classes, "untrusted"])]), id);
+  }
+
+  getSession(sessionId: string): SessionState {
+    const row = this.db.prepare("select state_json from session_state where scope_id = ?").get(this.sessionKey(sessionId)) as { state_json: string } | undefined;
+    return row ? { ...emptySession(), ...JSON.parse(row.state_json) as SessionState } : emptySession();
+  }
+
+  updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState {
+    this.db.exec("begin immediate");
+    try {
+      const state = update(this.getSession(sessionId));
+      this.db.prepare("insert into session_state (scope_id, state_json) values (?, ?) on conflict(scope_id) do update set state_json = excluded.state_json").run(this.sessionKey(sessionId), JSON.stringify(state));
+      this.db.exec("commit");
+      return state;
+    } catch (error) { this.db.exec("rollback"); throw error; }
+  }
+
+  private sessionKey(sessionId: string): string {
+    if (this.sessionScope === "client") return `client:${JSON.stringify([this.profileId, sessionId])}`;
+    if (this.runId) return `session:profile:${this.profileId}:run:${this.runId}`;
+    return `session:${this.scopeId(sessionId)}`;
   }
 
   get(id: string): TaintRecord | undefined {
@@ -161,17 +203,22 @@ export class SqliteTaintStore implements TaintStore {
 
   match(sessionId: string, text: string, options: TaintMatchOptions = {}): TaintMatch[] {
     this.pruneExpired();
-    const incoming = makeProtectedFingerprint(text, this.hmacKey);
+    const incoming = makeProtectedFingerprint(text, this.hmacKey, options.sensitiveFragments);
+    const sensitiveFragments = new Set(incoming.sensitiveFragments);
+    const incomingFragments = new Set(incoming.substrings);
     const minNormalizedLength = options.minNormalizedLength ?? 16;
     const fuzzyHammingMax = options.fuzzyHammingMax ?? 7;
-    const records = this.recordsForScope(sessionId);
+    const records = this.recordsForScope(sessionId, options.persistentOnly);
     const matches: TaintMatch[] = [];
 
     for (const record of records) {
       if (!matchesClassFilter(record.classes, options.classes)) {
         continue;
       }
-      const incomingFragments = new Set(incoming.substrings);
+      if (options.sensitiveFragments && record.classes.includes("sensitive") && record.fingerprint.sensitiveFragments?.some((fragment) => sensitiveFragments.has(fragment))) {
+        matches.push({ taintId: record.id, reason: "substring", classes: record.classes });
+        continue;
+      }
       const substring = record.fingerprint.substrings.find((candidate) => candidate.length >= minNormalizedLength && incomingFragments.has(candidate));
       if (substring) {
         matches.push({ taintId: record.id, reason: "substring", token: substring, classes: record.classes });
@@ -242,17 +289,34 @@ export class SqliteTaintStore implements TaintStore {
     this.db.close();
   }
 
-  pruneExpired(now = new Date()): number {
+  /** Record counts for operator status: all stored records, split into expiring and persistent memory provenance. */
+  recordCounts(): { normal: number; persistent: number } {
+    const rows = this.db.prepare("select persistent, count(*) as count from taint_records group by persistent").all() as Array<{ persistent: number; count: number }>;
+    return {
+      normal: rows.find((row) => row.persistent === 0)?.count ?? 0,
+      persistent: rows.find((row) => row.persistent === 1)?.count ?? 0
+    };
+  }
+
+  /** Stored session states across all scopes in this database, at most `limit` rows (unordered). */
+  listSessions(limit = 1000): Array<{ key: string; state: SessionState }> {
+    const rows = this.db.prepare("select scope_id, state_json from session_state limit ?").all(Math.max(1, Math.min(limit, 10_000))) as Array<{ scope_id: string; state_json: string }>;
+    return rows.map((row) => ({ key: row.scope_id, state: { ...emptySession(), ...JSON.parse(row.state_json) as SessionState } }));
+  }
+
+  pruneExpired(now = new Date(), includePersistent = false): number {
     const before = this.db.prepare("select count(*) as count from taint_records").get() as { count: number };
-    this.db.prepare("delete from taint_records where expires_at is not null and expires_at <= ?").run(now.toISOString());
+    this.db.prepare("delete from taint_records where persistent = 0 and expires_at is not null and expires_at <= ?").run(now.toISOString());
+    if (includePersistent) this.db.prepare("delete from taint_records where persistent = 1 and profile_id = ?").run(this.profileId);
     this.db.prepare("delete from temporal_taint where expires_at <= ? or remaining_turns <= 0").run(Date.now());
     const after = this.db.prepare("select count(*) as count from taint_records").get() as { count: number };
     return before.count - after.count;
   }
 
-  private recordsForScope(sessionId: string): TaintRecord[] {
+  private recordsForScope(sessionId: string, persistentOnly = false): TaintRecord[] {
     const scopeId = this.scopeId(sessionId);
-    return (this.db.prepare("select * from taint_records where scope_id = ? order by created_at asc").all(scopeId) as TaintRow[]).map(rowToRecord);
+    if (persistentOnly) return (this.db.prepare("select * from taint_records where persistent = 1 and profile_id = ? order by created_at asc").all(this.profileId) as TaintRow[]).map(rowToRecord);
+    return (this.db.prepare("select * from taint_records where scope_id = ? or (persistent = 1 and profile_id = ?) order by created_at asc").all(scopeId, this.profileId) as TaintRow[]).map(rowToRecord);
   }
 
   private activeTemporalRows(sessionId: string): TemporalRow[] {
@@ -308,6 +372,8 @@ function rowToRecord(row: TaintRow): TaintRecord {
     createdAt: row.created_at,
     expiresAt: row.expires_at ?? undefined,
     payloadHash: row.payload_hash,
+    persistent: row.persistent === 1,
+    provenanceIds: row.provenance_json ? JSON.parse(row.provenance_json) as string[] : [],
     detectorScore: row.detector_score,
     labels: JSON.parse(row.labels_json) as string[],
     classes: row.classes_json ? JSON.parse(row.classes_json) as TaintClass[] : ["untrusted"],
@@ -324,7 +390,7 @@ function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefi
   return !filter || filter.some((taintClass) => classes.includes(taintClass));
 }
 
-function makeProtectedFingerprint(input: string, key: Buffer): TaintFingerprint {
+function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false): TaintFingerprint {
   const normalized = normalizeText(input);
   const fragments = makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment));
   const tokens = extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token)));
@@ -332,7 +398,8 @@ function makeProtectedFingerprint(input: string, key: Buffer): TaintFingerprint 
     normalized: hmacSha256Hex(key, normalized),
     substrings: fragments,
     tokens,
-    simhash: simhash(normalized)
+    simhash: simhash(normalized),
+    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized).map((fragment) => hmacSha256Hex(key, fragment)) } : {})
   };
 }
 

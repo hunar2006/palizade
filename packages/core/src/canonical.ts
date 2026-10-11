@@ -20,7 +20,11 @@ export function sha256(input: string): string {
 }
 
 export function hashTool(tool: McpTool): string {
-  return hashDescriptor({
+  return hashDescriptor(canonicalToolView(tool));
+}
+
+export function canonicalToolView(tool: McpTool): Record<string, unknown> {
+  return {
     name: tool.name,
     title: tool.title ?? "",
     description: tool.description ?? "",
@@ -29,7 +33,7 @@ export function hashTool(tool: McpTool): string {
     annotations: tool.annotations ?? {},
     icons: tool.icons ?? [],
     _meta: tool._meta ?? {}
-  });
+  };
 }
 
 export function hashDescriptor(value: unknown): string {

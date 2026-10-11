@@ -1,4 +1,5 @@
 import type { PolicyCondition, PolicyContext, PolicyDecision, PolicyDocument, PolicyRule } from "./types.js";
+import { matchesPathGlob } from "./paths.js";
 
 export function evaluatePolicy(policy: PolicyDocument, ctx: PolicyContext): PolicyDecision {
   try {
@@ -48,8 +49,23 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (condition.secret_detected !== undefined && Boolean(ctx.secret_detected) !== condition.secret_detected) return false;
   if (condition.pii_detected !== undefined && Boolean(ctx.pii_detected) !== condition.pii_detected) return false;
   if (condition.destination_allowed !== undefined && Boolean(ctx.destination_allowed) !== condition.destination_allowed) return false;
+  if (condition.tainted_destination !== undefined && Boolean(ctx.tainted_destination) !== condition.tainted_destination) return false;
+  if (condition.lookalike_destination !== undefined && Boolean(ctx.lookalike_destination) !== condition.lookalike_destination) return false;
+  if (condition.new_destination !== undefined && Boolean(ctx.new_destination) !== condition.new_destination) return false;
+  if (condition.split_match !== undefined && Boolean(ctx.split_match) !== condition.split_match) return false;
+  if (condition.rule_of_two !== undefined && Boolean(ctx.rule_of_two) !== condition.rule_of_two) return false;
+  if (condition.rate_limited !== undefined && Boolean(ctx.rate_limited) !== condition.rate_limited) return false;
+  if (condition.loop_detected !== undefined && Boolean(ctx.loop_detected) !== condition.loop_detected) return false;
+  if (condition.critical_path !== undefined && Boolean(ctx.critical_path) !== condition.critical_path) return false;
+  if (condition.git_push_unapproved !== undefined && Boolean(ctx.git_push_unapproved) !== condition.git_push_unapproved) return false;
+  if (condition.output_path_allowed !== undefined && Boolean(ctx.output_path_allowed) !== condition.output_path_allowed) return false;
+  if (condition.argument_path_glob && !condition.argument_path_glob.some((pattern) => ctx.argument_paths?.some((path) => matchesPathGlob(path, pattern)))) return false;
+  if (condition.destination_session_trusted !== undefined && Boolean(ctx.destination_session_trusted) !== condition.destination_session_trusted) return false;
   if (condition.destination_allowlist_configured !== undefined && Boolean(ctx.destination_allowlist_configured) !== condition.destination_allowlist_configured) return false;
   if (condition.session_quarantined !== undefined && Boolean(ctx.session_quarantined) !== condition.session_quarantined) return false;
+  if (condition.tool_shadowing_detected !== undefined && Boolean(ctx.tool_shadowing_detected) !== condition.tool_shadowing_detected) return false;
+  if (condition.name_collision_detected !== undefined && Boolean(ctx.name_collision_detected) !== condition.name_collision_detected) return false;
+  if (condition.hidden_unicode_detected !== undefined && Boolean(ctx.hidden_unicode_detected) !== condition.hidden_unicode_detected) return false;
   if (condition.detector_score_gte !== undefined && (ctx.detector_score ?? 0) < condition.detector_score_gte) return false;
   if (condition.detector_score_lt !== undefined && (ctx.detector_score ?? 0) >= condition.detector_score_lt) return false;
   if (condition.labels_any && !condition.labels_any.some((label) => ctx.labels?.includes(label))) return false;

@@ -1,3 +1,4 @@
+import type { SessionState } from "./session.js";
 export type TrustLevel = "trusted" | "semi" | "untrusted";
 export type TaintScope = "process" | "profile" | "external_run_id";
 export type TaintClass = "untrusted" | "sensitive";
@@ -7,6 +8,7 @@ export interface TaintFingerprint {
   substrings: string[];
   tokens: string[];
   simhash: string;
+  sensitiveFragments?: string[];
 }
 
 export interface TaintRecord {
@@ -21,6 +23,8 @@ export interface TaintRecord {
   createdAt: string;
   expiresAt?: string | undefined;
   payloadHash: string;
+  persistent?: boolean;
+  provenanceIds?: string[];
   detectorScore: number;
   labels: string[];
   classes: TaintClass[];
@@ -29,13 +33,15 @@ export interface TaintRecord {
 
 export interface TaintMatch {
   taintId: string;
-  reason: "substring" | "token" | "fuzzy" | "temporal";
+  reason: "substring" | "token" | "fuzzy" | "temporal" | `decoded:${string}`;
   classes?: TaintClass[] | undefined;
   token?: string;
   score?: number;
 }
 
 export interface AddTaintInput {
+  persistent?: boolean;
+  provenanceIds?: string[];
   profileId?: string | undefined;
   scopeId?: string | undefined;
   runId?: string | undefined;
@@ -50,12 +56,18 @@ export interface AddTaintInput {
 }
 
 export interface TaintMatchOptions {
+  persistentOnly?: boolean;
+  sensitiveFragments?: boolean;
   fuzzyHammingMax?: number;
   minNormalizedLength?: number;
   classes?: TaintClass[] | undefined;
 }
 
 export interface TaintStore {
+  promotePersistent(id: string): void;
+  getSession(sessionId: string): SessionState;
+  updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState;
+  destinationKey(text: string): string;
   add(input: AddTaintInput): TaintRecord;
   get(id: string): TaintRecord | undefined;
   all(): TaintRecord[];
