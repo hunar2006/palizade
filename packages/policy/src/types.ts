@@ -11,6 +11,7 @@ export type ToolCapability =
   | "file_write"
   | "writes_local"
   | "writes_remote"
+  | "persists_memory"
   | "deletes_data"
   | "executes_code"
   | "sends_message"
@@ -55,6 +56,10 @@ export interface PolicyCondition {
   labels_any?: string[] | undefined;
   lock_status?: LockStatus | LockStatus[] | undefined;
   argument_regex?: string | undefined;
+  argument_path_glob?: string[] | undefined;
+  critical_path?: boolean | undefined;
+  git_push_unapproved?: boolean | undefined;
+  output_path_allowed?: boolean | undefined;
   argument_role_any?: string[] | undefined;
   tainted_argument_role_any?: string[] | undefined;
   session_quarantined?: boolean | undefined;
@@ -99,6 +104,10 @@ export interface PolicyContext {
   labels?: string[] | undefined;
   lock_status?: LockStatus | undefined;
   argument_text?: string | undefined;
+  argument_paths?: string[] | undefined;
+  critical_path?: boolean | undefined;
+  git_push_unapproved?: boolean | undefined;
+  output_path_allowed?: boolean | undefined;
   argument_roles?: string[] | undefined;
   tainted_argument_roles?: string[] | undefined;
   session_quarantined?: boolean | undefined;

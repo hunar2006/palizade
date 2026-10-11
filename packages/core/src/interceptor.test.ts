@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StaticApprovalProvider, type ApprovalDecision, type ApprovalProvider, type ApprovalRequest } from "@palizade/approvals";
 import { AuditLogger, type AuditEvent } from "@palizade/audit";
 import { DetectorPipeline, HeuristicDetector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
 import { loadPolicyFile, parsePolicy } from "@palizade/policy";
-import { InMemoryTaintStore } from "@palizade/taint";
+import { InMemoryTaintStore, type TaintStore } from "@palizade/taint";
 import { describe, expect, it, vi } from "vitest";
 import type { PalizadeConfig } from "./config.js";
 import { InterceptionEngine } from "./interceptor.js";
@@ -27,6 +27,62 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("enforces coding shell taint and gates unknown git push while passing npm test", async () => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/coding-agent.yaml"));
+    const shell = (command: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 110, method: "tools/call", params: { name: "shell", arguments: { command } } });
+    try {
+      expect((await shell("npm test")).toServer).toHaveLength(1);
+      expect((await shell("git push https://unknown.test/repository.git main")).toServer).toHaveLength(0);
+      expect(events.at(-1)?.matched_rule?.id).toBe("approve-unallowlisted-git-push");
+      const text = await seedTaintedRead(engine);
+      expect((await shell(`echo '${text}'`)).toServer).toHaveLength(0);
+      expect(events.at(-1)?.matched_rule?.id).toBe("block-tainted-shell");
+    } finally { await cleanup(); }
+  });
+  it("restricts research writes to the output directory and blocks remote sinks there", async () => {
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/research-readonly.yaml"), { configure: (config) => { config.protectedTargets.outputDirectory = join(config.servers.toy!.cwd!, "output"); } });
+    const call = (name: string, path?: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 111, method: "tools/call", params: { name, arguments: { path, content: "User-authored results." } } });
+    try {
+      expect((await call("read_web")).toServer).toHaveLength(1);
+      expect((await call("write_file", "output/results.md")).toServer).toHaveLength(1);
+      for (const path of ["elsewhere.md", "output/../escape.md", "output/.vscode/settings.json"]) expect((await call("write_file", path)).toServer).toHaveLength(0);
+      expect((await call("send_email", "output/results.md")).toServer).toHaveLength(0);
+    } finally { await cleanup(); }
+  });
+  it("approval-gates memory writes and carries durable original provenance on a later read", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "save it" });
+    const store = new InMemoryTaintStore();
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, taintStore: store });
+    try {
+      const text = await seedTaintedRead(engine);
+      const original = store.all()[0]!;
+      const write = (observation: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 100, method: "tools/call", params: { name: "create_entities", arguments: { entities: [{ name: "note", entityType: "page", observations: [observation] }] } } });
+      expect((await write("A user-authored note.")).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(0);
+      expect((await write(text)).toServer).toHaveLength(1);
+      expect(approvals.requests.at(-1)?.details?.matchedRuleId).toBe("approve-tainted-memory");
+      expect(store.get(original.id)?.persistent).toBe(true);
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 101, method: "tools/call", params: { name: "get_memory" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 101, result: { content: [{ type: "text", text }] } });
+      expect(JSON.stringify(events.at(-1)?.metadata)).toContain("read_web");
+      expect(JSON.stringify(events.at(-1)?.metadata)).toContain(original.id);
+      expect(events.at(-1)?.taint_ids).not.toHaveLength(0);
+    } finally { await cleanup(); }
+  });
+  it("asks for an untainted critical write with a diff and passes a normal source write", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "reviewed" });
+    let cwd = "";
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, configure: (config) => { cwd = config.servers.toy!.cwd!; } });
+    try {
+      await mkdir(join(cwd, ".vscode"));
+      await writeFile(join(cwd, ".vscode", "settings.json"), '{"enabled":false}');
+      const write = (path: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 90, method: "tools/call", params: { name: "write_file", arguments: { path, content: '{"enabled":true}' } } });
+      expect((await write(".vscode/settings.json")).toServer).toHaveLength(1);
+      expect(approvals.requests.at(-1)?.details?.diff).toContain('+{"enabled":true}');
+      expect((await write("src/app.ts")).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
   it.each([
     { key: "sinkCallsPerMinute", rule: "approve-rate-limited-sink", varied: false },
     { key: "distinctDestinations", rule: "approve-rate-limited-sink", varied: true },
@@ -734,12 +790,14 @@ async function makeEngine(
     detector?: Detector;
     captureRawPayloads?: boolean;
     approvals?: ApprovalProvider;
+    taintStore?: TaintStore;
     configure?: (config: PalizadeConfig) => void;
   } = {}
 ): Promise<{ engine: InterceptionEngine; events: AuditEvent[]; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "palizade-engine-"));
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
+    protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 },
     limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
     stateDir: dir,
     policy: "unused",
@@ -805,7 +863,7 @@ async function makeEngine(
       sessionId: "test-session",
       policy: activePolicy,
       detector: options.detector ?? new HeuristicDetector(),
-      taintStore: new InMemoryTaintStore(),
+      taintStore: options.taintStore ?? new InMemoryTaintStore(),
       audit: new AuditLogger([{ write: async (event) => { events.push(event); } }], { captureRawPayloads: options.captureRawPayloads ?? false }),
       approvals: options.approvals ?? new StaticApprovalProvider(false, "test denies approval"),
       lockfile: new LockfileStore(config.lockfile)

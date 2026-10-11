@@ -13,6 +13,7 @@ const capabilitySchema = z.enum([
   "file_write",
   "writes_local",
   "writes_remote",
+  "persists_memory",
   "deletes_data",
   "executes_code",
   "sends_message",
@@ -93,6 +94,11 @@ const piiDetectorConfigSchema = z.object({
 
 export const palizadeConfigSchema = z.object({
   stateDir: z.string().default(".palizade"),
+  protectedTargets: z.object({
+    criticalPaths: z.array(z.string()).default([]),
+    maxDiffBytes: z.number().int().positive().default(65536),
+    outputDirectory: z.string().optional()
+  }).default({ criticalPaths: [], maxDiffBytes: 65536 }),
   limits: z.object({
     sinkCallsPerMinute: z.number().int().min(1).max(1000).default(60),
     distinctDestinations: z.number().int().min(1).max(1000).default(20),
@@ -239,6 +245,7 @@ export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): P
   const absolute = resolve(cwd, path);
   const raw = await readFile(absolute, "utf8");
   const parsed = palizadeConfigSchema.parse(YAML.parse(raw));
+  parsed.protectedTargets.criticalPaths.push(absolute);
   return resolveConfigPaths(parsed, dirname(absolute));
 }
 
@@ -250,6 +257,7 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
   return {
     ...config,
     stateDir: resolvePath(baseDir, config.stateDir),
+    protectedTargets: { ...config.protectedTargets, outputDirectory: config.protectedTargets.outputDirectory ? resolvePath(baseDir, config.protectedTargets.outputDirectory) : undefined },
     egress: { ...config.egress, learnedFile: resolvePath(baseDir, config.egress.learnedFile) },
     policy: resolvePath(baseDir, config.policy),
     lockfile: resolvePath(baseDir, config.lockfile),

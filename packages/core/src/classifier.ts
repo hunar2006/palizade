@@ -5,6 +5,7 @@ import type { ServerConfig } from "./config.js";
 const SINK_RE = /\b(send|post|put|patch|delete|write|save|exec|shell|run|spawn|email|sms|publish|commit|push|upload|http|fetch|request|webhook)\b/iu;
 const SOURCE_RE = /\b(read|get|fetch|search|browse|list|download|crawl|open|load|query|receive|inbox|issue|pull|web|url|file)\b/iu;
 const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
+  [/\b(create entities|add observations|create relations|add memory|store memory|remember|save note|upsert|(?:write|add|insert|store|save).{0,24}(?:vector|memory)|(?:vector|memory).{0,24}(?:write|add|insert|store|save))\b/iu, ["persists_memory", "writes_remote"]],
   [/\b(fetch|http|post|put|patch|request|webhook|url|browser|crawl)\b/iu, ["network_egress", "reads_untrusted_content"]],
   [/\b(email|mail|send|sms|slack|discord|message|publish)\b/iu, ["sends_message", "writes_remote", "network_egress"]],
   [/\b(write|save|edit|create|move|append)\b/iu, ["file_write", "writes_local"]],
@@ -30,8 +31,9 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
   const configured = server.toolClasses[toolName];
   const capabilities = new Set<ToolCapability>(server.toolCapabilities[toolName] ?? []);
 
-  const annotationClass = classFromAnnotations(tool?.annotations);
+  const annotationClass = server.trust === "trusted" || tool?.annotations?.destructiveHint === true || tool?.annotations?.openWorldHint === true ? classFromAnnotations(tool?.annotations) : undefined;
   for (const capability of capabilitiesFromAnnotations(tool?.annotations)) {
+    if (server.trust !== "trusted" && capability === "reads_untrusted_content" && tool?.annotations?.openWorldHint !== true) continue;
     capabilities.add(capability);
   }
 
@@ -89,6 +91,7 @@ function deriveClass(toolName: string, capabilities: Set<ToolCapability>): ToolC
     "file_write",
     "writes_local",
     "writes_remote",
+    "persists_memory",
     "deletes_data",
     "executes_code",
     "sends_message",

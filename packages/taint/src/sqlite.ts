@@ -33,6 +33,8 @@ interface TaintRow {
   labels_json: string;
   classes_json?: string | null;
   fingerprint_json: string;
+  persistent?: number;
+  provenance_json?: string | null;
 }
 
 interface TemporalRow {
@@ -100,6 +102,8 @@ export class SqliteTaintStore implements TaintStore {
     this.ensureColumn("taint_records", "run_id", "text");
     this.ensureColumn("taint_records", "expires_at", "text");
     this.ensureColumn("taint_records", "classes_json", "text");
+    this.ensureColumn("taint_records", "persistent", "integer not null default 0");
+    this.ensureColumn("taint_records", "provenance_json", "text");
     this.db.exec(`
       create index if not exists idx_taint_scope on taint_records(scope_id);
       create index if not exists idx_taint_expires on taint_records(expires_at);
@@ -121,8 +125,10 @@ export class SqliteTaintStore implements TaintStore {
       sourceTool: input.sourceTool,
       trust: input.trust,
       createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: input.persistent ? undefined : expiresAt.toISOString(),
       payloadHash: sha256(input.text),
+      persistent: input.persistent ?? false,
+      provenanceIds: input.provenanceIds ?? [],
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
@@ -130,8 +136,8 @@ export class SqliteTaintStore implements TaintStore {
     };
     this.db.prepare(
       `insert into taint_records
-       (id, profile_id, scope_id, run_id, session_id, source_server, source_tool, trust, created_at, expires_at, payload_hash, detector_score, labels_json, classes_json, fingerprint_json)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, profile_id, scope_id, run_id, session_id, source_server, source_tool, trust, created_at, expires_at, payload_hash, detector_score, labels_json, classes_json, fingerprint_json, persistent, provenance_json)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       record.id,
       record.profileId,
@@ -142,17 +148,25 @@ export class SqliteTaintStore implements TaintStore {
       record.sourceTool,
       record.trust,
       record.createdAt,
-      record.expiresAt,
+      record.expiresAt ?? null,
       record.payloadHash,
       record.detectorScore,
       JSON.stringify(record.labels),
       JSON.stringify(record.classes),
-      JSON.stringify(record.fingerprint)
+      JSON.stringify(record.fingerprint),
+      record.persistent ? 1 : 0,
+      JSON.stringify(record.provenanceIds)
     );
     return record;
   }
 
   destinationKey(text: string): string { return hmacSha256Hex(this.hmacKey, text); }
+
+  promotePersistent(id: string): void {
+    const record = this.get(id);
+    if (!record) throw new Error("Missing taint provenance record");
+    this.db.prepare("update taint_records set persistent = 1, expires_at = null, classes_json = ? where id = ?").run(JSON.stringify([...new Set<TaintClass>([...record.classes, "untrusted"])]), id);
+  }
 
   getSession(sessionId: string): SessionState {
     const row = this.db.prepare("select state_json from session_state where scope_id = ?").get(this.sessionKey(sessionId)) as { state_json: string } | undefined;
@@ -190,7 +204,7 @@ export class SqliteTaintStore implements TaintStore {
     const incomingFragments = new Set(incoming.substrings);
     const minNormalizedLength = options.minNormalizedLength ?? 16;
     const fuzzyHammingMax = options.fuzzyHammingMax ?? 7;
-    const records = this.recordsForScope(sessionId);
+    const records = this.recordsForScope(sessionId, options.persistentOnly);
     const matches: TaintMatch[] = [];
 
     for (const record of records) {
@@ -271,17 +285,19 @@ export class SqliteTaintStore implements TaintStore {
     this.db.close();
   }
 
-  pruneExpired(now = new Date()): number {
+  pruneExpired(now = new Date(), includePersistent = false): number {
     const before = this.db.prepare("select count(*) as count from taint_records").get() as { count: number };
-    this.db.prepare("delete from taint_records where expires_at is not null and expires_at <= ?").run(now.toISOString());
+    this.db.prepare("delete from taint_records where persistent = 0 and expires_at is not null and expires_at <= ?").run(now.toISOString());
+    if (includePersistent) this.db.prepare("delete from taint_records where persistent = 1 and profile_id = ?").run(this.profileId);
     this.db.prepare("delete from temporal_taint where expires_at <= ? or remaining_turns <= 0").run(Date.now());
     const after = this.db.prepare("select count(*) as count from taint_records").get() as { count: number };
     return before.count - after.count;
   }
 
-  private recordsForScope(sessionId: string): TaintRecord[] {
+  private recordsForScope(sessionId: string, persistentOnly = false): TaintRecord[] {
     const scopeId = this.scopeId(sessionId);
-    return (this.db.prepare("select * from taint_records where scope_id = ? order by created_at asc").all(scopeId) as TaintRow[]).map(rowToRecord);
+    if (persistentOnly) return (this.db.prepare("select * from taint_records where persistent = 1 and profile_id = ? order by created_at asc").all(this.profileId) as TaintRow[]).map(rowToRecord);
+    return (this.db.prepare("select * from taint_records where scope_id = ? or (persistent = 1 and profile_id = ?) order by created_at asc").all(scopeId, this.profileId) as TaintRow[]).map(rowToRecord);
   }
 
   private activeTemporalRows(sessionId: string): TemporalRow[] {
@@ -337,6 +353,8 @@ function rowToRecord(row: TaintRow): TaintRecord {
     createdAt: row.created_at,
     expiresAt: row.expires_at ?? undefined,
     payloadHash: row.payload_hash,
+    persistent: row.persistent === 1,
+    provenanceIds: row.provenance_json ? JSON.parse(row.provenance_json) as string[] : [],
     detectorScore: row.detector_score,
     labels: JSON.parse(row.labels_json) as string[],
     classes: row.classes_json ? JSON.parse(row.classes_json) as TaintClass[] : ["untrusted"],

@@ -73,6 +73,7 @@ function formatApprovalPrompt(request: ApprovalRequest): string {
     `Reason: ${request.reason}`,
     request.taintIds.length > 0 ? `Taint matches: ${request.taintIds.length}` : undefined,
     `Summary: ${request.summary}`,
+    typeof request.details?.diff === "string" ? request.details.diff : undefined,
     request.details?.allowSession === true ? "Type session to trust this destination for this session." : undefined,
     request.details?.allowAlways === true ? "Allow once [y], allow always [always], or deny [N]? " : "Allow this operation? [y/N] "
   ].filter(Boolean);

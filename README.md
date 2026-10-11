@@ -1,5 +1,7 @@
 # Palizade
 
+Select a starter policy with `palizade init --preset coding-agent` or `palizade init --preset research-readonly --output-dir ./output`. Existing preset names also work. Initialization embeds the current policy files, and never overwrites existing files without `--force`. The research preset allows only sources and local output writes inside the selected directory; critical paths and other sinks remain blocked. The coding preset adds shell and tainted critical-write blocks and approval for Git pushes outside the allowlist. These presets are opt-in; ordinary `init` still selects `default`.
+
 **An MCP-native dataflow firewall for AI agents.**
 
 _iptables for agentic tool use._
@@ -43,6 +45,10 @@ Upstream MCP server
 ```
 
 ## Features
+
+Writes to agent/MCP settings, CI definitions, shell startup files, credentials, policy/lock/learned allowlists and package.json require approval in enforcing presets. Strict blocks tainted critical writes. `protectedTargets.criticalPaths` extends built-ins; escaped, size-capped file diffs appear in approvals, with tainted/sensitive text masked. The whole package.json is protected conservatively.
+
+Behavior change: on semi/untrusted servers, `readOnlyHint` no longer turns a name-derived sink into a source (or an unknown tool into a source). Trusted-server annotation behavior and explicit tool-class overrides remain available.
 
 Enforcing presets approval-gate sink loops and rate limits: defaults are 60 sink attempts per minute, 20 distinct destinations per logical session and five identical calls before approval. `limits.historyEntries` bounds shared tracking to 1000 entries. Denied attempts count toward these limits.
 
@@ -175,6 +181,8 @@ Palizade blocked this tool call. Rule: block-tainted-sink. Reason: Tainted conte
 ```
 
 ## Debugging
+
+`palizade taint prune` skips persistent memory provenance. `palizade taint prune --include-persistent` explicitly removes persistent records in the current profile as well as expired normal records. Approved tainted memory writes have no provenance TTL; later reads retain the original source in audit metadata.
 
 Inspect quarantine with `palizade session quarantine`; clear it explicitly with `palizade session quarantine --clear [--session <id>]`. This clears quarantine only; seen-sensitive/untrusted flags and hard blocks remain active. High-score responses and blocked tainted/split/lookalike destinations quarantine the session; enforcing presets approval-gate subsequent sinks until expiry or operator clearance.
 

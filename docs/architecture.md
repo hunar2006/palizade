@@ -34,6 +34,8 @@ palizade lock approve <serverName>
 
 ## Interception Points
 
+Protected writes resolve relative paths against the server working directory, expand home paths, normalize traversal/separators and resolve existing symlink ancestors even when the final file does not exist. Windows/macOS comparisons are case-insensitive. Built-in agent/client config, CI, shell profile, credential, policy/lock/allowlist and package.json targets can be extended with `protectedTargets.criticalPaths`. Uncertain resolution is treated as critical. `protectedTargets.maxDiffBytes` caps current/proposed file reads at 65536 bytes each; known write/edit forms produce escaped approval diffs, with tainted/sensitive content masked. Unknown edit formats explicitly report that a complete replacement was not supplied.
+
 1. `initialize`
    - Forwarded and audited as session setup.
    - Server capability metadata is lock-checked and scanned.
@@ -106,6 +108,12 @@ The interceptor is era aware per message: `_meta["io.modelcontextprotocol/protoc
 
 ## Tool Classification
 
+The coding preset checks Git pushes by resolving simple literal remotes with local `git remote get-url --push --all`, under a one-second/4096-byte bound. It makes no network call. Dynamic, compound or unsupported command forms require approval. Shell network command detection is deliberately conservative, not a complete shell parser.
+
+The research preset checks every normalized/canonical file target against one configured output directory. It blocks critical paths even inside that directory, and rejects tools with network, remote-write, memory, execution or deletion capabilities. Source overrides remain an administrator trust decision.
+
+Annotations from semi/untrusted servers can raise risk but cannot lower it. `readOnlyHint` is ignored for classification/capability derivation on those servers; explicit administrator overrides still take priority. Trusted servers keep the prior annotation behavior, consistent with the 2026-07-28 MCP tools trust requirement.
+
 Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.
 
 Derivation order:
@@ -118,6 +126,8 @@ Derivation order:
 The internal model uses capability flags such as `network_egress`, `sends_message`, `file_write`, `writes_local`, and `executes_code`. `source`, `sink`, `pure`, and `unknown` remain as derived labels for backward-compatible policies. Unknown tools are blocked on untrusted servers, approval-gated on semi-trusted servers, and audit-logged on trusted servers.
 
 ## Shared Taint
+
+Memory/vector writes carry `persists_memory`. When an observable tainted write is approved, its original fingerprints become persistent untrusted provenance with no TTL; transformed written fields also receive persistent fingerprints linked to original IDs. Later matching memory reads retain original source identity and IDs in audit `taintSources`. Persistent records remain within their profile but match across subsequent logical runs. `taint prune` preserves these records unless `--include-persistent` is explicitly supplied.
 
 Sink attempts (including denied attempts) update shared session counters atomically. The rolling minute stores timestamps; distinct destinations and repeated tool/argument signatures are HMACs in SQLite. Tracking is bounded by `limits.historyEntries` (1000); exhaustion gates further sinks rather than dropping evidence. Repeats and destination counts last for the logical session, while call-rate timestamps expire after one minute.
 

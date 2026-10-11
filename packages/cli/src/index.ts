@@ -3,6 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
+import YAML from "yaml";
 import {
   collectToolsFromHttpServer,
   collectToolsFromStdioServer,
@@ -29,9 +30,10 @@ import {
   selectInstallConfigPath
 } from "./install-config.js";
 import { buildStatus, printStatus } from "./status.js";
-import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
+import { DEFAULT_CONFIG } from "./templates.js";
 
 declare const __PKG_VERSION__: string;
+declare const __POLICY_PRESETS__: Record<string, string>;
 
 const program = new Command();
 
@@ -44,13 +46,21 @@ program
 program.command("init")
   .description("Create a starter palizade.yaml, default policy, and state directory")
   .option("--force", "Overwrite existing files", false)
-  .action(async (options: { force: boolean }) => {
+  .option("--preset <name>", "Policy preset", "default")
+  .option("--output-dir <path>", "Permitted output directory for research-readonly")
+  .action(async (options: { force: boolean; preset: string; outputDir?: string }) => {
+    const preset = __POLICY_PRESETS__[options.preset];
+    if (!preset) throw new Error(`Unknown preset '${options.preset}'. Choose ${Object.keys(__POLICY_PRESETS__).join(", ")}.`);
+    const starter = YAML.parse(DEFAULT_CONFIG) as Record<string, unknown>;
+    starter.policy = `policies/${options.preset}.yaml`;
+    if (options.preset === "strict") (starter.egress as Record<string, unknown>).mode = "allowlist_only";
+    if (options.outputDir) starter.protectedTargets = { outputDirectory: options.outputDir };
     // Keep generated paths relative; loadConfig resolves them against palizade.yaml's directory.
-    await writeIfMissing("palizade.yaml", DEFAULT_CONFIG, options.force);
-    await writeIfMissing("policies/default.yaml", DEFAULT_POLICY, options.force);
+    await writeIfMissing("palizade.yaml", YAML.stringify(starter), options.force);
+    await writeIfMissing(`policies/${options.preset}.yaml`, preset, options.force);
     await mkdir(".palizade", { recursive: true });
     const token = await ensureListenerToken(".palizade/listener.token");
-    console.log("Initialized Palizade config, default policy, and .palizade state directory.");
+    console.log(`Initialized Palizade config, ${options.preset} policy, and .palizade state directory.`);
     console.log(`Listener bearer token stored at .palizade/listener.token (first 8 chars: ${token.slice(0, 8)}...).`);
   });
 
@@ -443,7 +453,8 @@ const taint = program.command("taint")
 
 taint.command("prune")
   .description("Prune expired taint records")
-  .action(async () => {
+  .option("--include-persistent", "Also remove persistent memory provenance in this profile", false)
+  .action(async (options: { includePersistent: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const store = new SqliteTaintStore(config.taint.sqlite, {
@@ -453,7 +464,7 @@ taint.command("prune")
       ttlMs: config.taint.ttlMs,
       ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
     });
-    const pruned = store.pruneExpired();
+    const pruned = store.pruneExpired(new Date(), options.includePersistent);
     store.close();
     console.log(`Pruned ${pruned} taint record(s).`);
   });

@@ -259,7 +259,8 @@ function renderApprovalPanel(request: ApprovalRequest, token: string): string {
     ["Method", request.method ?? "-"],
     ["Reason", request.reason],
     ["Taint matches", request.taintIds.length > 0 ? String(request.taintIds.length) : "-"],
-    ["Summary", redactSensitive(request.summary)]
+    ["Summary", redactSensitive(request.summary)],
+    ...(typeof request.details?.diff === "string" ? [["Diff", request.details.diff] as [string, string]] : [])
   ];
   return `<h1>Palizade approval required</h1>
   <table>${rows.map(([key, value]) => `<tr><td>${escapeHtml(key)}</td><td><pre>${escapeHtml(value)}</pre></td></tr>`).join("")}</table>
