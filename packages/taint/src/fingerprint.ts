@@ -1,5 +1,6 @@
 import { sha256 } from "./hash.js";
 import type { TaintFingerprint } from "./types.js";
+import { HIDDEN_UNICODE, tokenViews } from "./unicode.js";
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"')]+/giu;
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
@@ -9,6 +10,7 @@ const HEX_RE = /\b[a-fA-F0-9]{48,}\b/gu;
 export function normalizeText(input: string): string {
   return input
     .normalize("NFKC")
+    .replace(HIDDEN_UNICODE, "")
     .replace(/[\u0000-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2060-\u206F]/gu, "")
     .replace(/\s+/gu, " ")
     .trim()
@@ -17,9 +19,9 @@ export function normalizeText(input: string): string {
 
 export function extractAtomicTokens(input: string): string[] {
   const tokens = new Set<string>();
-  for (const regex of [URL_RE, EMAIL_RE, BASE64_RE, HEX_RE]) {
-    for (const match of input.matchAll(regex)) {
-      tokens.add(match[0]);
+  for (const regex of [URL_RE, EMAIL_RE, BASE64_RE, HEX_RE, /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)+/gu, /\b[A-Z][A-Z0-9_-]*\d[A-Z0-9_-]*\b/gu]) {
+    for (const match of input.normalize("NFKC").replace(HIDDEN_UNICODE, "").matchAll(regex)) {
+      for (const token of tokenViews(match[0])) tokens.add(token);
     }
   }
   return [...tokens];
@@ -30,7 +32,7 @@ export function makeFingerprint(input: string): TaintFingerprint {
   return {
     normalized,
     substrings: makeSubstrings(normalized),
-    tokens: extractAtomicTokens(input),
+    tokens: extractAtomicTokens(input).map(normalizeText),
     simhash: simhash(normalized)
   };
 }
