@@ -19,7 +19,7 @@ export function normalizeText(input: string): string {
 
 export function extractAtomicTokens(input: string): string[] {
   const tokens = new Set<string>();
-  for (const regex of [URL_RE, EMAIL_RE, BASE64_RE, HEX_RE, /[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)+/gu, /\b[A-Z][A-Z0-9_-]*\d[A-Z0-9_-]*\b/gu]) {
+  for (const regex of [URL_RE, EMAIL_RE, BASE64_RE, HEX_RE, /(?<![\p{L}\p{N}@._-])[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)+/gu, /\b[A-Z][A-Z0-9_-]*\d[A-Z0-9_-]*\b/gu]) {
     for (const match of input.normalize("NFKC").replace(HIDDEN_UNICODE, "").matchAll(regex)) {
       for (const token of tokenViews(match[0])) tokens.add(token);
     }

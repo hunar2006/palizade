@@ -5,7 +5,7 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { expandCandidates } from "@palizade/taint";
+import { expandCandidates, canonicalHost, hostSkeleton } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
@@ -165,11 +165,16 @@ export class InterceptionEngine {
     const sensitiveMatches = matches.filter((match) => match.classes?.includes("sensitive"));
     const sensitiveFieldMatches = fieldMatches.filter(({ match }) => match.classes?.includes("sensitive"));
     const taintedArgumentRoles = [...new Set(fieldMatches.map(({ field }) => field.role))];
+    const taintedDestination = fieldMatches.some(({ field, match }) => ["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id"].includes(field.role) && match.reason !== "temporal" && match.classes?.includes("untrusted"));
     const temporal = matches.some((match) => match.reason === "temporal") || this.options.taintStore.hasTemporal(this.options.sessionId);
     const secretDetected = hasSecretLabel(argumentDetection.labels);
     const piiDetected = hasPiiLabel(argumentDetection.labels);
     const sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
     const destination = summarizeDestinations(argumentFields, this.options.config.egress.allowlist);
+    const lookalikeDestination = destination.hosts.some((host) => {
+      const skeleton = hostSkeleton(host);
+      return skeleton !== canonicalHost(host) && (this.options.config.egress.allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
+    });
     const allTaintMatches = [
       ...matches,
       ...fieldMatches.map(({ match }) => match),
@@ -191,6 +196,8 @@ export class InterceptionEngine {
       secret_detected: secretDetected,
       pii_detected: piiDetected,
       destination_allowed: destination.allowed,
+      tainted_destination: taintedDestination,
+      lookalike_destination: lookalikeDestination,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,

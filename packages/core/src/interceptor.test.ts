@@ -27,6 +27,27 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("blocks a copied recipient or Slack channel before generic sink rules", async () => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"));
+    try {
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 30, method: "tools/call", params: { name: "read_web" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 30, result: { content: [{ type: "text", text: "Contact copied@example.test or channel C123456789" }] } });
+      for (const [name, args] of [["send_email", { to: "copied@example.test" }], ["slack_post_message", { channel: "C123456789" }]] as const) {
+        expect((await engine.handleClientMessage({ jsonrpc: "2.0", id: 31, method: "tools/call", params: { name, arguments: args } })).toServer).toHaveLength(0);
+        expect(events.at(-1)?.matched_rule?.id).toBe("block-tainted-destination");
+      }
+      expect((await engine.handleClientMessage({ jsonrpc: "2.0", id: 32, method: "tools/call", params: { name: "send_email", arguments: { to: "user@example.test", body: "hello" } } })).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("blocks an allowlist lookalike while permitting the original host", async () => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { configure: (config) => { config.egress.allowlist.hosts = ["paypal.com"]; } });
+    try {
+      const send = (url: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 33, method: "tools/call", params: { name: "send_email", arguments: { url } } });
+      expect((await send("https://pаypal.com")).toServer).toHaveLength(0);
+      expect(events.at(-1)?.matched_rule?.id).toBe("block-lookalike-destination");
+      expect((await send("https://paypal.com")).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
   it("blocks encoded taint in a URL and records only the decode reason", async () => {
     const { engine, events, cleanup } = await makeEngine();
     try {

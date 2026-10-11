@@ -44,6 +44,8 @@ Upstream MCP server
 
 ## Features
 
+The enforcing presets now block destinations copied from untrusted content before generic sink rules, including configured channel/account IDs. Lookalike hosts are blocked when they collide with an allowlisted or tainted hostname. Matching strips hidden Unicode and expands bounded encodings without rewriting the displayed payload.
+
 Inbound defense:
 
 - Taint tracking for untrusted tool output, resources, prompts, and suspicious content.

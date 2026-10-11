@@ -39,6 +39,8 @@ export const policyConditionSchema = z.object({
   secret_detected: z.boolean().optional(),
   pii_detected: z.boolean().optional(),
   destination_allowed: z.boolean().optional(),
+  tainted_destination: z.boolean().optional(),
+  lookalike_destination: z.boolean().optional(),
   destination_allowlist_configured: z.boolean().optional(),
   detector_score_gte: z.number().min(0).max(1).optional(),
   detector_score_lt: z.number().min(0).max(1).optional(),
