@@ -31,6 +31,8 @@ import {
   selectInstallConfigPath
 } from "./install-config.js";
 import { installHooks, type InstallHooksResult } from "./install-hooks.js";
+import { formatLearnDraft, learnFromAudit } from "./learn.js";
+import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
 
@@ -265,7 +267,7 @@ program.command("wrap")
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
     }
-    const runtime = await createRuntime(config, serverName);
+    const runtime = await createRuntime(config, serverName, { configPath });
     if (server.url) {
       const proxy = new HttpBridgeProxy({
         serverName,
@@ -309,7 +311,7 @@ program.command("serve")
       ...(options.port ? { port: Number(options.port) } : {}),
       ...(options.allowRemote ? { allowRemote: true } : {}),
       onSecurityEvent: (event) => console.warn(`[palizade] ${event.message}`),
-      createRuntime: async (serverName) => createRuntime(config, serverName)
+      createRuntime: async (serverName) => createRuntime(config, serverName, { configPath })
     });
     const bound = await listener.start();
     console.log(`Palizade listener bound to http://${bound.host}:${bound.port}/mcp/<serverName>`);
@@ -317,6 +319,23 @@ program.command("serve")
     console.log(`Listener token: ${config.listener.tokenPath} (send as X-Palizade-Token header)`);
     console.log("RFC 8707 note: Palizade never terminates TLS or rewrites URLs; upstream OAuth tokens are passed through untouched.");
     await new Promise<void>(() => {});
+  });
+
+program.command("policy")
+  .description("Inspect policy files")
+  .command("check")
+  .description("Validate a policy: schema, unknown keys, unreachable rules, impossible conditions, unknown servers and tools")
+  .argument("[file]", "Policy file (defaults to the policy in palizade.yaml)")
+  .option("--json", "Print findings as JSON", false)
+  .option("--strict", "Exit non-zero on warnings too", false)
+  .action(async (file: string | undefined, options: { json: boolean; strict: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const report = await runPolicyCheck({ file, configPath }).catch((error: unknown) => {
+      if (isMissingConfigError(error) && !file) throw new Error(missingConfigMessage(configPath));
+      throw error;
+    });
+    console.log(options.json ? JSON.stringify(report, null, 2) : formatPolicyCheck(report));
+    if (report.errors > 0 || (options.strict && report.warnings > 0)) process.exitCode = 1;
   });
 
 const lock = program.command("lock")
@@ -520,6 +539,21 @@ program.command("doctor")
     if (coverage.nativeToolsNote) {
       console.log(coverage.nativeToolsNote);
     }
+  });
+
+program.command("learn")
+  .description("Print a draft palizade.yaml snippet of observed tool classes and destinations; never writes config")
+  .option("--from-audit", "Learn from the JSONL audit log", false)
+  .option("--since <duration>", "Only events within a duration such as 7d", "7d")
+  .option("--server <server>", "Only this server")
+  .action(async (options: { fromAudit: boolean; since: string; server?: string }) => {
+    if (!options.fromAudit) throw new Error("palizade learn needs a source; use --from-audit.");
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const since = new Date(Date.now() - parseDuration(options.since));
+    // shortcut: loads the whole JSONL audit file into memory like `palizade audit`; stream it line by line if audit files reach hundreds of MB.
+    const events = await new JsonlAuditSink(config.audit.jsonl).query({ since, ...(options.server ? { server: options.server } : {}), limit: Number.MAX_SAFE_INTEGER });
+    const existingToolClasses = Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [name, server.toolClasses]));
+    process.stdout.write(formatLearnDraft(learnFromAudit(events, { since, existingToolClasses }), since));
   });
 
 program.command("status")

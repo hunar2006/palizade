@@ -125,6 +125,18 @@ describe("loadConfig", () => {
     expect(config.listener.host).toBe("127.0.0.1");
     expect(config.listener.allowRemote).toBe(false);
   });
+
+  it("keeps metrics off by default and resolves metrics.jsonl against the config directory", () => {
+    expect(parseConfig("servers: {}\n").metrics).toBeUndefined();
+    expect(parseConfig("metrics: { jsonl: .palizade/metrics.jsonl }\n", resolve("project")).metrics).toEqual({ jsonl: resolve("project", ".palizade/metrics.jsonl"), maxBytes: 64 * 1024 * 1024 });
+  });
+
+  it("reports config problems with the YAML path, line and a fix hint, never the value", () => {
+    const raw = "servers:\n  fs:\n    command: node\n    trsut: trusted\n    headers: { Authorization: 5 }\n";
+    expect(() => parseConfig(raw)).toThrow(/servers\.fs\.trsut \(line 4\): Unknown key 'trsut'\n    fix: Did you mean 'trust'\?/u);
+    expect(() => parseConfig("approvals:\n  mode: termnal\n")).toThrow(/approvals\.mode \(line 2\): .*\n    fix: Use one of: "terminal", "localhost"/u);
+    expect(() => parseConfig("servers:\n  gh:\n    url: https://example.test/mcp\n    headers: { Authorization: 12345678 }\n")).not.toThrow(/12345678/u);
+  });
 });
 
 function relativeConfig(): string {

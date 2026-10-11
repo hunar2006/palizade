@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
-import YAML from "yaml";
+import { parseYamlWithSchema } from "@palizade/policy";
 import { z } from "zod";
 import { normalizeSandbox, sandboxConfigSchema } from "./sandbox.js";
 
@@ -244,6 +244,14 @@ export const palizadeConfigSchema = z.object({
     dangerousDefaults: z.array(z.string()).default([]),
     maxScanBytes: z.number().int().min(1024).max(16 * 1024 * 1024).default(256 * 1024)
   }).strict().optional(),
+  reload: z.object({
+    enabled: z.boolean().default(true),
+    intervalMs: z.number().int().min(100).max(60_000).default(1000)
+  }).strict().optional(),
+  metrics: z.object({
+    jsonl: z.string().min(1),
+    maxBytes: z.number().int().min(1024).default(64 * 1024 * 1024)
+  }).strict().optional(),
   servers: z.record(z.string(), serverConfigSchema).default({})
 }).strict();
 
@@ -253,13 +261,13 @@ export type PalizadeConfig = z.infer<typeof palizadeConfigSchema>;
 export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): Promise<PalizadeConfig> {
   const absolute = resolve(cwd, path);
   const raw = await readFile(absolute, "utf8");
-  const parsed = palizadeConfigSchema.parse(YAML.parse(raw));
+  const parsed = parseYamlWithSchema(palizadeConfigSchema, raw, absolute);
   parsed.protectedTargets.criticalPaths.push(absolute);
   return resolveConfigPaths(parsed, dirname(absolute));
 }
 
 export function parseConfig(raw: string, baseDir = process.cwd()): PalizadeConfig {
-  return resolveConfigPaths(palizadeConfigSchema.parse(YAML.parse(raw)), baseDir);
+  return resolveConfigPaths(parseYamlWithSchema(palizadeConfigSchema, raw, "palizade.yaml"), baseDir);
 }
 
 export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd()): PalizadeConfig {
@@ -292,6 +300,7 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
       ...config.listener,
       tokenPath: resolvePath(baseDir, config.listener.tokenPath)
     },
+    ...(config.metrics ? { metrics: { ...config.metrics, jsonl: resolvePath(baseDir, config.metrics.jsonl) } } : {}),
     servers: Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [
       name,
       {

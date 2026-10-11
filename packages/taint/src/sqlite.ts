@@ -285,6 +285,21 @@ export class SqliteTaintStore implements TaintStore {
     this.db.close();
   }
 
+  /** Record counts for operator status: all stored records, split into expiring and persistent memory provenance. */
+  recordCounts(): { normal: number; persistent: number } {
+    const rows = this.db.prepare("select persistent, count(*) as count from taint_records group by persistent").all() as Array<{ persistent: number; count: number }>;
+    return {
+      normal: rows.find((row) => row.persistent === 0)?.count ?? 0,
+      persistent: rows.find((row) => row.persistent === 1)?.count ?? 0
+    };
+  }
+
+  /** Stored session states across all scopes in this database, at most `limit` rows (unordered). */
+  listSessions(limit = 1000): Array<{ key: string; state: SessionState }> {
+    const rows = this.db.prepare("select scope_id, state_json from session_state limit ?").all(Math.max(1, Math.min(limit, 10_000))) as Array<{ scope_id: string; state_json: string }>;
+    return rows.map((row) => ({ key: row.scope_id, state: { ...emptySession(), ...JSON.parse(row.state_json) as SessionState } }));
+  }
+
   pruneExpired(now = new Date(), includePersistent = false): number {
     const before = this.db.prepare("select count(*) as count from taint_records").get() as { count: number };
     this.db.prepare("delete from taint_records where persistent = 0 and expires_at is not null and expires_at <= ?").run(now.toISOString());

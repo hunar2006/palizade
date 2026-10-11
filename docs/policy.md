@@ -4,6 +4,8 @@ Policy files are YAML documents with `version: 1`, `defaults`, and ordered `rule
 
 Rules use first-match-wins semantics. If no rule matches, `defaults.action` is used. If policy evaluation throws, `defaults.on_error` is used.
 
+Run `palizade policy check [file]` before deploying a policy. It reports schema errors and unknown keys with the YAML path, line and a fix hint; rules after a catch-all (a rule with no `when`, an empty `when`, or only `direction: [request, response]`); conditions that never match (an empty list such as `labels_any: []`, `detector_score_gte` at or above `detector_score_lt`, `detector_score_lt: 0`); an invalid `argument_regex`, which would send every evaluation to `on_error`; duplicate rule ids; and `server` or `tool` values that are not in `palizade.yaml` or `palizade.lock`. Edited policies are hot reloaded by running processes; an invalid edit keeps the previous policy.
+
 ## Match Fields
 
 The `persists_memory` capability marks entity/observation/relation, remember/note and vector/upsert writes. Tainted memory writes require approval in default, interactive and egress; strict blocks them. Rule of Two includes this capability. Hard destination/secret blocks remain ahead of memory approval.
