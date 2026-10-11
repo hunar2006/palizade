@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { normalizeSandbox, sandboxConfigSchema } from "./sandbox.js";
 
 const trustSchema = z.enum(["trusted", "semi", "untrusted"]);
 const toolClassSchema = z.enum(["source", "sink", "pure", "unknown"]);
@@ -36,8 +37,12 @@ export const serverConfigSchema = z.object({
   sensitiveTools: z.record(z.string(), z.boolean()).default({}),
   sensitivePathPatterns: z.array(z.string().refine((pattern) => { try { new RegExp(pattern, "iu"); return true; } catch { return false; } }, "Invalid sensitive path regular expression")).default([]),
   shell: z.boolean().default(false),
-  allowShell: z.boolean().default(false)
+  allowShell: z.boolean().default(false),
+  sandbox: sandboxConfigSchema.optional()
 }).strict().superRefine((server, ctx) => {
+  if (server.sandbox !== undefined && server.url !== undefined && normalizeSandbox(server.sandbox).type !== "none") {
+    ctx.addIssue({ code: "custom", path: ["sandbox"], message: "sandbox applies only to stdio servers (command); remove it from url servers." });
+  }
   const hasCommand = server.command !== undefined && server.command.length > 0;
   const hasUrl = server.url !== undefined && server.url.length > 0;
   if (hasCommand === hasUrl) {
