@@ -94,6 +94,16 @@ The interceptor is era aware per message: `_meta["io.modelcontextprotocol/protoc
 - `subscriptions/listen` responses are scanned through the generic content path.
 - `structuredContent` is scanned and taint-registered like `content` text; sanitize/spotlight applies to string fields only, keeping the result schema valid. `ttlMs`/`cacheScope` on list results are audited; the lockfile is re-verified on every refresh regardless of client caching.
 
+## Sandboxed Launch
+
+`packages/core/src/sandbox.ts` turns `servers.<name>.sandbox` into a launch plan; `packages/core/src/launch.ts` is the only place stdio upstreams are spawned (`wrap`, `lock approve`, `lock diff`). `none` (default) keeps the old behavior. Validation runs before any spawn: on Windows only `docker` is accepted, `bubblewrap` needs Linux and `seatbelt` needs macOS, and a `url` server with a sandbox is a config error.
+
+- `docker`: `run --rm -i --init --security-opt no-new-privileges --cap-drop ALL --read-only --tmpfs /tmp --pids-limit 512`, the server `cwd` bind-mounted read-only at `/workspace`, `writable` paths bind-mounted read-write (`host` or `host::/container`), `HOME=/tmp`. Environment is never copied from the host: only `env` from `palizade.yaml` and `passEnv` names are passed, as `-e NAME` so values never appear in the argument list.
+- `bubblewrap`: `--unshare-all --die-with-parent --new-session --cap-drop ALL`, system directories read-only, `cwd` read-only, `writable` paths bound read-write, filtered environment.
+- `seatbelt`: `sandbox-exec -p <profile>` that denies writes outside `writable` and `/tmp`, and denies network unless allowlisted.
+- `network: none` (default for sandboxed servers) removes networking. `network: allowlist` with `allowHosts` starts a per-launch HTTP/CONNECT egress proxy (`packages/core/src/egress-proxy.ts`): exact hosts or `*.suffix`, at most 64 connections, 120 s idle timeout, and a random proxy credential; every allow/deny is audited as `sandbox/egress`. With docker, `dockerNetwork` can name an internal network whose only route is the proxy.
+- Every spawn is audited (`process/spawn`, action `log_only`) with the full command and arguments, secrets masked, environment as key names only. If the audit write fails the spawn is refused. `palizade doctor` lists unsandboxed servers and fails on an unsupported sandbox.
+
 ## Tool Classification
 
 Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.

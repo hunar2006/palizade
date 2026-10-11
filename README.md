@@ -220,6 +220,7 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
 - The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
 - Tool name collision and shadowing checks only compare servers wrapped by Palizade that share one state directory, and only from the moment each server has answered `tools/list`. The server that lists a shared name first keeps it until that server restarts; after that both copies are withheld until one is renamed or removed from `palizade.yaml`.
+- Sandboxing is opt-in and limited by its backend. The docker `allowlist` mode relies on the server honoring `HTTPS_PROXY` unless `sandbox.dockerNetwork` names an internal network; seatbelt restricts writes and network but not reads; Palizade does not sandbox `url` servers or the client itself, and it does not harden the docker daemon or the image you choose.
 
 These are scope boundaries, not footnotes. Palizade is strongest when sensitive capabilities are exposed through wrapped MCP servers and policy is reviewed for each server.
 
@@ -312,6 +313,26 @@ servers:
 `palizade wrap <server>` bridges the remote server over stdio so existing client integrations keep working. `palizade serve` runs a transparent local listener at `http://127.0.0.1:32146/mcp/<serverName>`: the upstream is always taken from config (never from request input), client `Authorization` headers are forwarded only to the configured upstream origin (never to redirect targets), `401`/`403`/`WWW-Authenticate` pass through untouched for OAuth discovery, and the listener requires Palizade's own bearer token (generated at `init`, stored at `.palizade/listener.token`, sent as `X-Palizade-Token`). Both protocol eras are supported: 2025-11-25 (initialize, sessions, GET SSE streams) and 2026-07-28 (POST only, `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Param-*` headers, request-scoped SSE).
 
 RFC 8707 note: Palizade never terminates TLS or rewrites upstream URLs, so OAuth tokens are passed through untouched — it does not act as an authorization proxy.
+
+### Sandboxed stdio servers
+
+Stdio servers can optionally be launched inside a sandbox. The default is `none` (unchanged behavior):
+
+```yaml
+servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    sandbox:
+      type: docker            # none | docker | bubblewrap (Linux) | seatbelt (macOS); Windows: docker only
+      image: node:22-slim
+      writable: ["out"]       # cwd is mounted read-only; only these paths are writable
+      network: allowlist      # none (default) | allowlist
+      allowHosts: ["registry.npmjs.org"]
+      passEnv: ["LANG"]       # no host environment is passed except these names and `env`
+```
+
+The shorthand `sandbox: docker` uses those defaults with `network: none`. Every spawn is written to audit with secrets masked, and `palizade doctor` lists servers that run unsandboxed.
 
 Development and eval commands:
 
