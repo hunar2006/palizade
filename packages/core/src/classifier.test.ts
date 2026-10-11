@@ -35,4 +35,13 @@ describe("classifyToolDetailed", () => {
       expect(classifyToolDetailed(name, server).toolClass, name).toBe("source");
     }
   });
+
+  it("allows annotations to lower risk only on trusted servers", () => {
+    const tool = { name: "send_email", inputSchema: {}, annotations: { readOnlyHint: true } };
+    expect(classifyToolDetailed(tool.name, { ...server, trust: "untrusted" }, tool).toolClass).toBe("sink");
+    expect(classifyToolDetailed(tool.name, server, tool).toolClass).toBe("sink");
+    expect(classifyToolDetailed(tool.name, { ...server, trust: "trusted" }, tool).toolClass).toBe("source");
+    expect(classifyToolDetailed("read_file", server, { name: "read_file", inputSchema: {}, annotations: { destructiveHint: true } }).toolClass).toBe("sink");
+    expect(classifyToolDetailed("custom", server, { name: "custom", inputSchema: {}, annotations: { readOnlyHint: true } }).toolClass).toBe("unknown");
+  });
 });

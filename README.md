@@ -44,6 +44,8 @@ Upstream MCP server
 
 ## Features
 
+Behavior change: on semi/untrusted servers, `readOnlyHint` no longer turns a name-derived sink into a source (or an unknown tool into a source). Trusted-server annotation behavior and explicit tool-class overrides remain available.
+
 Enforcing presets approval-gate sink loops and rate limits: defaults are 60 sink attempts per minute, 20 distinct destinations per logical session and five identical calls before approval. `limits.historyEntries` bounds shared tracking to 1000 entries. Denied attempts count toward these limits.
 
 Default, strict and interactive now require approval for remote sinks once a session has seen both untrusted and sensitive content, even when no argument text matches. Approval can trust that destination for the current logical session. Use `PALIZADE_RUN_ID` for host-scoped session isolation; otherwise profile-scoped flags conservatively survive wrapper restarts.

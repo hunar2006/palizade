@@ -30,8 +30,9 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
   const configured = server.toolClasses[toolName];
   const capabilities = new Set<ToolCapability>(server.toolCapabilities[toolName] ?? []);
 
-  const annotationClass = classFromAnnotations(tool?.annotations);
+  const annotationClass = server.trust === "trusted" || tool?.annotations?.destructiveHint === true || tool?.annotations?.openWorldHint === true ? classFromAnnotations(tool?.annotations) : undefined;
   for (const capability of capabilitiesFromAnnotations(tool?.annotations)) {
+    if (server.trust !== "trusted" && capability === "reads_untrusted_content" && tool?.annotations?.openWorldHint !== true) continue;
     capabilities.add(capability);
   }
 
