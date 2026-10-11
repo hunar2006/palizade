@@ -404,6 +404,7 @@ export class HttpServeListener {
 }
 
 function validateInboundRequestHeaders(request: IncomingMessage, message: JsonRpcMessage): JsonRpcMessage | undefined {
+  // shortcut: inbound parameter headers are not schema-compared here, add per-client schema-aware checks when full inbound Mcp-Param support is required.
   const bodyVersion = protocolVersionOf(message);
   if (bodyVersion === undefined) {
     return undefined;

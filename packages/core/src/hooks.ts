@@ -23,6 +23,7 @@ export interface HookEngineContext {
 }
 
 const HOOK_SERVER: Omit<ServerConfig, "cwd"> & { cwd?: string } = {
+  // shortcut: native hooks have no tools/list metadata lock, extend native capability mapping when supported clients add tool types.
   command: "native-tools",
   args: [],
   env: {},
@@ -72,6 +73,7 @@ export async function createHookEngine(
   cwd: string,
   capture: AuditEvent[] = []
 ): Promise<HookEngineContext> {
+  // shortcut: each one-shot hook opens a fresh engine/store, use a persistent daemon if hook startup latency or shared split windows are required.
   const server: ServerConfig = { ...HOOK_SERVER, cwd };
   const policy = await loadPolicyFile(config.policy);
   const taintStore = new SqliteTaintStore(config.taint.sqlite, {
@@ -127,6 +129,7 @@ const SUSPICIOUS_RE = /\$\([^)]*\)|`[^`]+`|\beval\b|\bbase64\b|\bpython3?\s+-c\b
 const BASE64ISH_RE = /\b[A-Za-z0-9+/]{40,}={0,2}\b/u;
 
 export function analyzeShellCommand(command: string): ShellAnalysis {
+  // shortcut: heuristic shell extraction misses complex quoting and indirect destinations, use a shell parser if supported command forms require it.
   const tokens = command.split(/\s*[;|&]\s*/u);
   const commandName = tokens[0]?.split(/\s+/u)[0]?.trim() || undefined;
   const urls = [...new Set(command.match(URL_RE) ?? [])];

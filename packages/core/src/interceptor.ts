@@ -698,7 +698,7 @@ export class InterceptionEngine {
       trust: this.options.server.trust
     });
     const { fused: contentFused } = await this.detectContents(visibleMetadataContents(contents));
-    // shortcut: server/discover output is scanned but not locked here; M5 adds lockfile coverage for it.
+    // shortcut: discover shapes without a top-level tools array are scanned but not tool-hashed, extend schema-aware locking when more discover shapes are supported.
     const review = await this.reviewMetadataSafely(message, [{ name: "server/discover", value: result }], false, startedAt);
     if ("blocked" in review) {
       return review.blocked;
@@ -736,6 +736,7 @@ export class InterceptionEngine {
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
     const result = (message as { result: unknown }).result;
+    // shortcut: input-required gating runs only for tools/call results, extend prompt/resource handlers when those result forms are supported.
     const inputRequiredGate = await this.checkInputRequiredRequests(message, pending, result);
     if (inputRequiredGate) {
       return inputRequiredGate;

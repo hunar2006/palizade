@@ -12,7 +12,7 @@ client stdin/stdout
   -> upstream MCP server child process
 ```
 
-The current transport is strict newline-delimited JSON-RPC over stdio, matching the official TypeScript MCP SDK transport. Content-Length framing and JSON-RPC batches are disabled by default and must be enabled with explicit compatibility flags.
+Stdio uses strict newline-delimited JSON-RPC; Content-Length framing and JSON-RPC batches require explicit compatibility flags. URL servers use the Streamable HTTP transport described below. Both feed the same interception engine; native client hooks synthesize events for that engine.
 
 ## Configuration Loading
 
@@ -36,7 +36,7 @@ Bulk install prints lock-approval commands for newly added servers instead of st
 palizade lock approve <serverName>
 ```
 
-`palizade doctor` reports client config coverage by listing every configured MCP server and whether it is routed through Palizade. This coverage is limited to configured MCP servers. Native client tools, including Claude Code's built-in file and shell tools, bypass MCP and are not protected by Palizade.
+`palizade doctor` reports configured MCP server coverage and sandbox state. Native client tools bypass MCP and need the separately installed hooks described below; doctor does not prove that those hooks are active in a live client.
 
 ## Interception Points
 
@@ -89,24 +89,24 @@ Protected writes resolve relative paths against the server working directory, ex
 - 2025-11-25: initialize handshake, `Mcp-Session-Id`, GET SSE stream with `Last-Event-ID` resumability, DELETE on close.
 - Both eras refuse redirects while an `Authorization` header is set (tokens are never forwarded to redirect targets), refuse cross-origin redirects entirely, and mask tokens everywhere: no header value ever reaches audit, stderr, or the detector/taint stores.
 - `palizade wrap <server>` with a `url` server runs the bridge: stdio client in, engine in the middle, HTTP upstream out.
-- `palizade serve` binds `127.0.0.1` (unless `--allow-remote`), validates `Origin` as localhost-only, requires Palizade's own bearer token (`X-Palizade-Token`, generated at `init` into `.palizade/listener.token`), takes the upstream from config only, forwards the client's `Authorization` header unchanged to the configured upstream origin, passes 401/403/`WWW-Authenticate` through untouched for OAuth discovery, and applies the RFC 8707 rule: no TLS termination, no URL rewriting, no token minting.
+- `palizade serve` defaults to loopback, validates localhost origins, requires its own `X-Palizade-Token`, takes upstreams only from config and forwards upstream authorization only to that configured origin. 401/403/challenges pass through. Tokens must have the upstream audience: this is not a validated OAuth-terminating gateway, and no token issuance/audience conversion is implemented. Avoiding TLS termination alone does not prove compliance with the [MCP token-passthrough restriction](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices#token-passthrough).
 
 ## Dual-Era stdio (2026-07-28 MRTR)
 
 The interceptor is era aware per message: `_meta["io.modelcontextprotocol/protocolVersion"]` marks 2026-07-28, `initialize` marks the legacy era. On the 2026-07-28 era:
 
-- `resultType: "input_required"` tool/prompt/resource results are inspected. Each `inputRequests` entry is gated with the same policy methods the legacy server-initiated requests used (`sampling/createMessage`, `elicitation/create`, `roots/list`). Denied requests turn the whole result into a tool error. Form-mode elicitations requesting sensitive fields (passwords, API keys, tokens, payment data) are denied per spec; URL-mode elicitation URLs go through egress allowlist and taint checks. Blocked reasons are audited and never forwarded.
+- `resultType: "input_required"` tool results are inspected. Each `inputRequests` entry is gated with the same policy methods as legacy server requests (`sampling/createMessage`, `elicitation/create`, `roots/list`). Denied requests turn the result into a tool error. Sensitive form fields are denied; URL-mode elicitation URLs receive allowlist and taint checks. Prompt/resource handlers currently scan their content but do not run input-required inspection.
 - The client's retry `inputResponses` are taint-matched like sink arguments.
 - `notifications/tools/list_changed` is forwarded to the client and triggers a proxy-side `tools/list` re-lock: the synthetic response is compared against `palizade.lock`, drifted metadata is approval-gated, and the synthetic response is never forwarded.
-- `server/discover` responses are lock-checked and scanned like `tools/list`.
+- `server/discover` strings are scanned; a top-level `tools` array is also lock-checked like `tools/list`. Other discover result shapes receive metadata scanning without tool hashing.
 - `subscriptions/listen` responses are scanned through the generic content path.
-- `structuredContent` is scanned and taint-registered like `content` text; sanitize/spotlight applies to string fields only, keeping the result schema valid. `ttlMs`/`cacheScope` on list results are audited; the lockfile is re-verified on every refresh regardless of client caching.
+- `structuredContent` is scanned and taint-registered like text content. Spotlighting changes string fields and preserves non-string fields, but can exceed a schema's string length constraint. List `ttlMs`/`cacheScope` are audited; lock verification runs on every refresh.
 
 ## Native Client Tool Hooks
 
 `packages/core/src/hooks.ts` brings native client tools (Claude Code Bash/Read/Write/Edit/WebFetch, Cursor shell and MCP execution, Codex shell/apply_patch) under the same engine as the proxy.
 
-- `normalizeNativeEvent` maps each client's hook JSON into a synthetic `tools/call` request/response pair, so `evaluateHookEvent` runs the real `InterceptionEngine` sink check with a synthetic `native-tools` server: Bash/Shell commands carry the `shell_command` role plus extracted URLs, hosts, redirect targets, and suspicious constructs; Write/Edit carry file paths and content (critical-path rules fire); WebFetch carries the destination URL; PostToolUse of Read/WebFetch/Grep/Glob registers taint into the same SQLite store (profile scope, keyed by the client's `session_id`/`conversation_id`).
+- `normalizeNativeEvent` maps hook JSON to synthetic tool events. Bash/Shell carry commands, extracted destinations/redirects and suspicious constructs; Write/Edit carry paths/content; WebFetch carries a URL. Read/WebFetch/Grep/Glob responses register provenance in the same SQLite store. Client session IDs identify events; the configured taint scope controls matching and session state. Profile scope conservatively shares exposure flags unless `PALIZADE_RUN_ID` isolates a run.
 - Decisions map to each client's output format: Claude Code/Codex `hookSpecificOutput.permissionDecision` (deny/ask), Cursor `permission` (deny/ask). `require_approval` policy decisions become "ask" so the client's own approval flow decides.
 - Hooks fail closed by default (`hooks.failMode: closed`, `hooks.timeoutMs`, `hooks.maxInputBytes`): a crash or timeout exits 2, which blocks in all three clients.
 - `palizade install-hooks <client>` merges hook entries into `~/.claude/settings.json`, `~/.cursor/hooks.json` (`failClosed: true`), or `~/.codex/hooks.json`, backing up and refusing to overwrite malformed JSON.
@@ -151,7 +151,7 @@ High-score source/tool responses (default 0.85) and hard blocks on tainted/split
 
 Session flags `seenUntrusted` and `seenSensitive` persist in SQLite. They follow the configured session scope; profile mode shares one logical session across wrapped processes. When `PALIZADE_RUN_ID` is supplied, flags and session grants are isolated by profile plus run ID, even with profile taint scope. Process scope keeps sessions independent. Without a host run ID, profile flags remain conservative across launches. Session destination grants are bounded to 1024 HMACs and never bypass hard blocks.
 
-Outbound sink calls keep a memory-only rolling payload window for each session and destination. `taint.window` defaults to 12 calls, 900000 ms TTL, 262144 bytes per window and 256 destinations. Concatenated payloads are decoded and matched; only sensitive records gain eight-character shard fingerprints, HMAC-protected in SQLite. Window matches exclude temporal-only hits. The window is process-local and bounded; it cannot correlate shards across distinct wrapper processes.
+Outbound sink calls keep a memory-only rolling payload window for each session and destination. `taint.window` defaults to 12 calls, 900000 ms TTL, 262144 bytes per window and 256 destinations. Body fields and URL query values are concatenated, decoded and matched; only sensitive records gain eight-character shard fingerprints, HMAC-protected in SQLite. Window matches exclude temporal-only hits. The window is process-local and cannot correlate shards across wrapper/hook processes.
 
 Learned egress grants live in the separate `egress.learnedFile` (default `palizade.allow.yaml`, relative to config). It is validated at startup and before each sink call. Remember writes use an exclusive lock and atomic replacement; lock contention fails closed. Hard policy blocks always win over egress approvals. Source-call destinations are not egress-gated.
 
@@ -167,7 +167,7 @@ Sensitive origins can be declared per server, per tool, or by path-pattern hints
 
 ## Audit
 
-Audit events include event ID, timestamp, session/profile/scope/run identifiers where configured, server, tool, direction, method, taint IDs, detector score and labels, matched policy rule, action, reason, latency, payload hash, and a hash-chain pair. Egress metadata includes taint classes, argument roles, redaction status, and allowlist destination status. Raw payload capture is off by default; when enabled, detected secrets/PII are masked before the payload is handed to the audit logger. The hash chain is tamper-evident only if logs are protected; it is not tamper-proof.
+Audit events include identity/scope, tool/method, provenance IDs, detector labels, rule/action/reason, latency, payload hash and a hash chain. Egress metadata includes classes, roles, redaction and destination status, with copied destinations masked. Raw capture is off by default; captured payloads with observable taint are replaced by a redaction marker, and other captured text receives known-secret/PII masking. The chain is tamper-evident only while logs are protected.
 
 ## Simplifications
 

@@ -41,6 +41,7 @@ export function isStructuredContentText(block: TextBlock): boolean {
 }
 
 export function isSpotlightableText(block: TextBlock): boolean {
+  // shortcut: spotlighting can exceed structured string maxLength constraints, use schema-aware wrapping when result schemas are available.
   return isContentText(block) || isStructuredContentText(block);
 }
 

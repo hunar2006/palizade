@@ -2,7 +2,7 @@
 
 Policy files are YAML documents with `version: 1`, `defaults`, and ordered `rules`.
 
-Rules use first-match-wins semantics. If no rule matches, `defaults.action` is used. If policy evaluation throws, `defaults.on_error` is used.
+Rules use first-match-wins semantics. If no rule matches, `defaults.action` is used. If policy evaluation throws, `defaults.on_error` is used. Shipped presets place specific hard blocks ahead of gates and generic rules. Tainted-memory approval and allowlisted egress are explicit exceptions to the generic copied-content block; neither overrides a destination, secret, split or critical-target hard block. Egress allow/redaction exceptions cannot bypass critical-path, temporal, quarantine, rate or loop gates.
 
 Run `palizade policy check [file]` before deploying a policy. It reports schema errors and unknown keys with the YAML path, line and a fix hint; rules after a catch-all (a rule with no `when`, an empty `when`, or only `direction: [request, response]`); conditions that never match (an empty list such as `labels_any: []`, `detector_score_gte` at or above `detector_score_lt`, `detector_score_lt: 0`); an invalid `argument_regex`, which would send every evaluation to `on_error`; duplicate rule ids; and `server` or `tool` values that are not in `palizade.yaml` or `palizade.lock`. Edited policies are hot reloaded by running processes; an invalid edit keeps the previous policy.
 
@@ -38,13 +38,13 @@ The `persists_memory` capability marks entity/observation/relation, remember/not
 - `capabilities_any`: any matching capability flag
 - `capabilities_all`: every listed capability flag
 - `trust`: `trusted`, `semi`, or `untrusted`
-- `taint`: boolean
+- `taint`: boolean, observable copied content matched; temporal-only evidence uses `temporal_taint` separately
 - `sensitive_taint`: boolean, true when an argument contains taint classed as sensitive
 - `temporal_taint`: boolean
 - `secret_detected`: boolean, true when outbound arguments contain a `secret:*` detector label
 - `pii_detected`: boolean, true when outbound arguments contain a `pii:*` detector label
-- `destination_allowed`: boolean, false when an allowlist is configured and a URL/host/email destination is outside it
-- `destination_allowlist_configured`: boolean, true only when `egress.allowlist.hosts` or `egress.allowlist.emails` has entries
+- `destination_allowed`: boolean, false when a configured host/email/typed-ID allowlist excludes any destination
+- `destination_allowlist_configured`: boolean, true when `egress.allowlist.hosts`, `emails` or `destinations` has entries
 - `detector_score_gte`: number from `0` to `1`
 - `detector_score_lt`: number from `0` to `1`
 - `labels_any`: detector labels
@@ -78,11 +78,13 @@ For headless desktop clients, prefer `approvals.mode: localhost`. It serves a pe
 
 - `policies/audit-only.yaml`: log suspicious metadata, tainted sinks, resource/prompt injection, and sampling without enforcement.
 - `policies/interactive.yaml`: same posture as `default`, except `block-tainted-sink` uses `require_approval`. Choose this when legitimate user-authorized writes of tainted content should be possible after confirmation.
-- `policies/default.yaml`: hard-blocks tainted content entering sink tools while keeping suspicious output sanitized.
+- `policies/default.yaml`: hard-blocks copied content entering general sink tools, with explicit approval for tainted memory persistence; suspicious output is sanitized.
 - `policies/strict.yaml`: strictest preset; blocks lock drift, suspicious output, unknown tools, tainted sinks, and secret egress.
 - `policies/egress.yaml`: opt-in preset that keeps the default prompt-injection and taint posture, then adds secret/PII outbound controls and destination allowlists.
 
-Which preset should I use? Start with `audit-only` to learn your traffic. Use `interactive` for desktop/operator workflows where a human can confirm risky writes. Use `default` for unattended agents where tainted sink calls should not have an escape hatch. Use `strict` for the tightest core posture. Use `egress` when protecting secrets, PII, or outbound destinations is part of the goal.
+Start with `audit-only` to observe traffic. Use `interactive` when a human should confirm legitimate copied-content writes, `default` for hard blocks on general copied-content sinks, `strict` for tighter output/metadata/egress controls, or `egress` for secret/PII controls. `coding-agent` adds shell protection; `research-readonly` confines side effects to the output directory. Research output still requires approval while quarantine, rate or loop gates are active. Strict blocks suspicious output at every score above its threshold, including strong injection that formerly reached an earlier sanitization rule.
+
+`egress.mode` defaults to `open`. With `approve_new`, destinations outside configured/learned allowlists require approval; allow always writes the separate `egress.learnedFile`. `allowlist_only` blocks them, and the strict preset blocks new destinations regardless of mode. Default users can opt into `approve_new`. Explicit session grants suppress only Rule of Two and approve-new, never hard blocks or other session gates.
 
 ## Egress Preset
 
@@ -91,7 +93,7 @@ Which preset should I use? Start with `audit-only` to learn your traffic. Use `i
 - `block-secret-egress`: sensitive-class taint entering egress tools is blocked.
 - `block-secret-detected-egress`: directly detected secrets in outbound arguments are blocked even if they were not previously tainted.
 - `block-sensitive-into-untrusted-destination`: tainted sink calls are blocked when URL, host, or email destinations are outside `egress.allowlist`.
-- `allow-tainted-allowed-egress-destination`: lets tainted network/message egress proceed only when an allowlist is configured and the destination matches it.
+- `allow-tainted-allowed-egress-destination`: permits copied network/message content only to configured destinations, with no active critical/temporal/quarantine/rate/loop gate; detected PII takes the guarded redaction path instead.
 - `redact-pii-egress`: detected PII in message/network egress is redacted before forwarding.
 
 The allowlist rule is structural: with an allowlist configured, tainted data must flow only to allowed hosts/domains/emails. Secret and PII detection is pattern-based and intentionally high precision; it can miss custom, transformed, split, or obfuscated secrets.
@@ -101,10 +103,10 @@ The allowlist rule is structural: with an allowlist configured, tainted data mus
 Servers on the 2026-07-28 protocol request sampling, elicitation, and roots inside tool results (`resultType: "input_required"`). Palizade gates each request with the same policy methods the legacy server-initiated requests used:
 
 - `sampling/createMessage` requests are matched by the existing `deny-server-sampling` rule (block in `default`, `strict`, `interactive`, `egress`).
-- `elicitation/create` requests are matched by the new `approve-elicitation` rule in `default` and `interactive` (`strict` requires approval through its default action). Form-mode elicitations that request sensitive fields (passwords, API keys, tokens, payment data) are denied regardless of policy, per the spec. URL-mode elicitation URLs are checked against the egress allowlist and taint records.
+- `elicitation/create` requests require approval in every enforcing preset. Form-mode elicitations that request sensitive fields (passwords, API keys, tokens, payment data) are denied regardless of policy. URL-mode elicitation URLs are checked against the egress allowlist and taint records.
 - `roots/list` requests pass through like the legacy safe list.
 
-The client's retry `inputResponses` are checked for tainted or sensitive content like any sink argument.
+The client's retry `inputResponses` are checked for observable tainted or sensitive content like sink arguments. Input-required inspection currently applies to `tools/call` results; prompt/resource input-required results do not enter that handler. See the integration report for the lane-reported protocol limits.
 
 ## Default Unknown Tool Behavior
 
@@ -117,4 +119,4 @@ The client's retry `inputResponses` are checked for tainted or sensitive content
 
 Detector-based response rules are trust-agnostic in the shipped presets. Semi-trusted servers such as filesystem and fetch still have suspicious `tools/call` output spotlighted or escalated when detector scores cross policy thresholds. Trust affects unknown-tool handling and taint registration, but it does not suppress detector-score rules by default.
 
-Secret and PII detectors are disabled in the default config surface until explicitly enabled. `policies/default.yaml` does not add egress-blocking behavior; use `policies/egress.yaml` or `policies/strict.yaml` when you want secret/PII egress enforcement.
+Secret and PII detectors remain disabled until explicitly enabled. Default blocks untrusted destinations and uses session/egress-mode gates, but does not add direct secret/PII egress blocks; use `egress` or `strict` for those rules.

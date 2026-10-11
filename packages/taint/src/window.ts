@@ -1,6 +1,7 @@
 export interface WindowLimits { calls: number; ttlMs: number; maxBytes: number; maxDestinations: number }
 
 export class OutboundWindow {
+  // shortcut: independently padded encoded shards may obscure concatenation, add per-shard decoded windows when adaptive evaluation requires them.
   // shortcut: outbound windows are process-local memory only, use an authenticated encrypted shared store for cross-process split correlation.
   private readonly windows = new Map<string, Array<{ text: string; at: number }>>();
 
