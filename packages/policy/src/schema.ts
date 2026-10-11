@@ -55,7 +55,10 @@ export const policyConditionSchema = z.object({
   argument_regex: z.string().optional(),
   argument_role_any: z.array(z.string()).optional(),
   tainted_argument_role_any: z.array(z.string()).optional(),
-  session_quarantined: z.boolean().optional()
+  session_quarantined: z.boolean().optional(),
+  tool_shadowing_detected: z.boolean().optional(),
+  name_collision_detected: z.boolean().optional(),
+  hidden_unicode_detected: z.boolean().optional()
 }).strict();
 
 export const policyRuleSchema = z.object({

@@ -58,6 +58,9 @@ export interface PolicyCondition {
   argument_role_any?: string[] | undefined;
   tainted_argument_role_any?: string[] | undefined;
   session_quarantined?: boolean | undefined;
+  tool_shadowing_detected?: boolean | undefined;
+  name_collision_detected?: boolean | undefined;
+  hidden_unicode_detected?: boolean | undefined;
 }
 
 export interface PolicyDocument {
@@ -99,6 +102,9 @@ export interface PolicyContext {
   argument_roles?: string[] | undefined;
   tainted_argument_roles?: string[] | undefined;
   session_quarantined?: boolean | undefined;
+  tool_shadowing_detected?: boolean | undefined;
+  name_collision_detected?: boolean | undefined;
+  hidden_unicode_detected?: boolean | undefined;
 }
 
 export interface PolicyDecision {

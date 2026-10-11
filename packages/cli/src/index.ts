@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import {
   collectToolsFromHttpServer,
   collectToolsFromStdioServer,
   createRuntime,
+  diffToolsAgainstLock,
   ensureListenerToken,
+  formatToolDiff,
   HttpBridgeProxy,
   HttpServeListener,
   loadConfig,
@@ -310,7 +313,8 @@ lock.command("approve")
   .description("Approve current tools/list metadata for a configured server")
   .argument("<serverName>", "Server name from palizade.yaml")
   .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
-  .action(async (serverName: string, options: { timeout: string }) => {
+  .option("-y, --yes", "Approve without the interactive confirmation", false)
+  .action(async (serverName: string, options: { timeout: string; yes: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const server = config.servers[serverName];
@@ -321,11 +325,46 @@ lock.command("approve")
     const tools = server.url
       ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
       : await collectToolsFromStdioServer(server, timeoutMs) as McpTool[];
-    const checks = await new LockfileStore(config.lockfile).approveTools(serverName, tools);
+    const lockStore = new LockfileStore(config.lockfile);
+    const diff = diffToolsAgainstLock(await lockStore.read(), serverName, tools);
+    console.log(formatToolDiff(serverName, diff));
+    const hasChanges = diff.some((entry) => entry.status !== "unchanged");
+    if (hasChanges && !options.yes && process.stdin.isTTY) {
+      const prompt = createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await prompt.question("Approve these changes? [y/N] ");
+      prompt.close();
+      if (!/^y(es)?$/iu.test(answer.trim())) {
+        console.log("Lock approval cancelled.");
+        process.exitCode = 1;
+        return;
+      }
+    }
+    const checks = await lockStore.approveTools(serverName, tools);
     for (const check of checks) {
       console.log(`${check.status}\t${serverName}/${check.tool}\t${check.hash}`);
     }
     console.log(`Approved ${checks.length} tool(s) in ${config.lockfile}.`);
+  });
+
+lock.command("diff")
+  .description("Show a field by field diff between a server's current tools and the lockfile, with non printing characters escaped")
+  .argument("<serverName>", "Server name from palizade.yaml")
+  .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
+  .option("--json", "Print the diff as JSON", false)
+  .action(async (serverName: string, options: { timeout: string; json: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const config = await loadConfigForCli(configPath);
+    const server = config.servers[serverName];
+    if (!server) {
+      throw new Error(`Unknown server '${serverName}'.`);
+    }
+    const timeoutMs = parseDuration(options.timeout);
+    const tools = server.url
+      ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
+      : await collectToolsFromStdioServer(server, timeoutMs) as McpTool[];
+    const diff = diffToolsAgainstLock(await new LockfileStore(config.lockfile).read(), serverName, tools);
+    console.log(options.json ? JSON.stringify(diff, null, 2) : formatToolDiff(serverName, diff));
+    if (diff.some((entry) => entry.status !== "unchanged")) process.exitCode = 2;
   });
 
 const audit = program.command("audit")

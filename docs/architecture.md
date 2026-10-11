@@ -43,6 +43,8 @@ palizade lock approve <serverName>
    - Compares hashes against `palizade.lock`.
    - Scans tool descriptions.
    - Policy can block, log, require approval, or sanitize suspicious metadata.
+   - Metadata review (`metadata-guard.ts`): every string and property name in each tool, including schema `description`, `default`, `enum` and `examples`, is checked for hidden Unicode (TAG characters are also decoded back to ASCII and run through the detectors), dangerous defaults, cross-server name collisions and shadowing. Tool names of every wrapped server are kept in `<stateDir>/tool-registry.sqlite`, shared by all Palizade processes using that state directory; only servers present in `palizade.yaml` are compared. Flagged tools get their own policy decision, so one bad tool is withheld without hiding the rest of the server. A registry or review error applies `defaults.on_error`.
+   - `palizade lock approve` stores a canonical snapshot of each tool next to its hash, so `palizade lock diff` and `lock approve` can print a field by field diff with byte offsets and every non printing character escaped as `\u{XXXX}`.
 
 3. `tools/call` request
    - Classifies target tool as `source`, `sink`, `pure`, or `unknown`.
@@ -63,7 +65,7 @@ palizade lock approve <serverName>
    - The default policy blocks it.
 
 6. Resources and prompts
-   - Resource/prompt descriptors are lock-checked and scanned.
+   - Resource/prompt descriptors are lock-checked and scanned, including the hidden Unicode and shadowing checks; `server/discover` metadata gets the same scan.
    - `resources/read` and `prompts/get` content is scanned, tainted, sanitized, and audited through the same content-security path as tool results.
 
 7. Elicitation and other server requests

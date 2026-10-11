@@ -43,6 +43,11 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 - `argument_regex`: JavaScript regular expression applied to flattened arguments
 - `argument_role_any`: roles found in outgoing arguments, such as `url`, `email_recipient`, `file_path`, `shell_command`, or `http_query`
 - `tainted_argument_role_any`: argument roles where taint matched
+- `tool_shadowing_detected`: boolean, set on `tools/list` (per tool), prompt/resource lists and `server/discover` when metadata names an exact tool that belongs to a different wrapped server (for example `github.create_issue`, or a compound name such as `create_issue`; plain words such as `search` are ignored)
+- `name_collision_detected`: boolean, set per tool on `tools/list` when another wrapped server in the same state directory already exposes the same tool name
+- `hidden_unicode_detected`: boolean, set when descriptions, titles, schema property names, descriptions, `default`, `enum`, `examples` or `const` contain Unicode TAG characters, variation selectors, soft hyphens, zero width or bidi controls outside valid emoji sequences
+
+On `tools/list`, the three metadata conditions are evaluated once per flagged tool with `tool` set to that tool's name. `block` removes the tool from the list returned to the client and blocks later `tools/call` requests for it; `sanitize` strips hidden characters from that tool; `require_approval` asks first. The enforcing presets block collisions and shadowing and sanitize hidden Unicode. Tools that reuse well known built in names (`metadata.builtinNames`, default `read_file`, `write_file`, `bash`, `fetch`) get the detector label `builtin_tool_name` but are not blocked, because the reference filesystem and fetch servers legitimately use those names. Dangerous schema defaults such as `--no-sandbox`, `--dangerously-skip-permissions`, `--yolo` or `autoApprove: true` get the label `dangerous_default` and raise the tool's detector score to 0.4, which spotlights its description under the default presets.
 
 ## Actions
 
