@@ -550,6 +550,7 @@ program.command("learn")
     if (!options.fromAudit) throw new Error("palizade learn needs a source; use --from-audit.");
     const config = await loadConfigForCli(program.opts<{ config: string }>().config);
     const since = new Date(Date.now() - parseDuration(options.since));
+    // shortcut: loads the whole JSONL audit file into memory like `palizade audit`; stream it line by line if audit files reach hundreds of MB.
     const events = await new JsonlAuditSink(config.audit.jsonl).query({ since, ...(options.server ? { server: options.server } : {}), limit: Number.MAX_SAFE_INTEGER });
     const existingToolClasses = Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [name, server.toolClasses]));
     process.stdout.write(formatLearnDraft(learnFromAudit(events, { since, existingToolClasses }), since));

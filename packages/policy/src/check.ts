@@ -82,6 +82,7 @@ export function checkPolicy(raw: string, file: string, context: PolicyCheckConte
 }
 
 export function isCatchAll(rule: PolicyRule): boolean {
+  // shortcut: only syntactic catch-alls are detected, not a later rule fully covered by earlier narrower rules; add condition subsumption if users hit that.
   const when = rule.when;
   if (!when) return true;
   const keys = Object.keys(when).filter((key) => when[key as keyof PolicyCondition] !== undefined);
