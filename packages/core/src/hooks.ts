@@ -81,6 +81,7 @@ export async function createHookEngine(
     profileId: config.taint.profileId,
     keyPath: config.taint.keyPath,
     ttlMs: config.taint.ttlMs,
+    sessionScope: "client",
     ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
   });
   const captureSink = {
@@ -333,7 +334,7 @@ async function withHookTimeout<T>(timeoutMs: number, run: () => Promise<T>): Pro
   }
 }
 
-function buildDenyOutput(client: NativeClient, event: string, reason: string): HookDecisionOutput {
+export function buildDenyOutput(client: NativeClient, event: string, reason: string): HookDecisionOutput {
   if (client === "claude-code") {
     return {
       exitCode: 0,

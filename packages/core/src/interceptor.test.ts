@@ -183,6 +183,37 @@ describe("InterceptionEngine", () => {
       expect(approvals.requests).toHaveLength(0);
     } finally { await cleanup(); }
   });
+  it("expires Rule of Two exposure, refreshes it on new reads and keeps copied-content protection", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const approvals = new RecordingApprovalProvider({ approved: false, reason: "deny" });
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, configure: (config) => {
+      config.taint.exposure.ttlMs = 1000;
+      config.taint.temporal.enabled = false;
+      config.servers.toy!.sensitiveTools.read_secret = true;
+      config.servers.toy!.toolClasses.read_secret = "source";
+    } });
+    const source = async (name: string, text: string) => {
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 63, method: "tools/call", params: { name } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 63, result: { content: [{ type: "text", text }] } });
+    };
+    const send = (body = "An independently phrased note.") => engine.handleClientMessage({ jsonrpc: "2.0", id: 64, method: "tools/call", params: { name: "send_email", arguments: { to: "person@company.test", body } } });
+    try {
+      await source("read_secret", "Private sensitive source credentials.");
+      expect((await send()).toServer).toHaveLength(0);
+      expect(approvals.requests.at(-1)?.details?.matchedRuleId).toBe("approve-rule-of-two");
+      now += 800;
+      await source("read_web", "A public weather report from the source.");
+      now += 300;
+      expect((await send()).toServer).toHaveLength(0);
+      now += 700;
+      expect((await send()).toServer).toHaveLength(1);
+      await source("read_web", "A separate ordinary public article.");
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(2);
+      expect((await send("Private sensitive source credentials.")).toServer).toHaveLength(0);
+    } finally { clock.mockRestore(); await cleanup(); }
+  });
   it("catches a sensitive key split across four calls and passes unrelated chunks", async () => {
     const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/egress.yaml"), { configure: (config) => { config.taint.temporal.enabled = false; config.servers.toy!.sensitiveTools.read_web = true; config.egress.allowlist.hosts = ["known.test"]; } });
     try {
@@ -869,6 +900,7 @@ async function makeEngine(
     listener: { host: "127.0.0.1", port: 32_146, tokenPath: join(dir, "listener.token"), allowRemote: false },
     hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
     taint: {
+      exposure: { ttlMs: 7_200_000 },
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 256 * 1024 },

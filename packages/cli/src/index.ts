@@ -11,6 +11,7 @@ import {
   diffToolsAgainstLock,
   ensureListenerToken,
   evaluateHookEvent,
+  buildDenyOutput,
   formatToolDiff,
   HttpBridgeProxy,
   HttpServeListener,
@@ -22,7 +23,7 @@ import {
 } from "@palizade/core";
 import { AuditLogger, JsonlAuditSink, SqliteAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
-import { SqliteTaintStore } from "@palizade/taint";
+import { emptySession, SqliteTaintStore } from "@palizade/taint";
 import {
   getRunningCliPath,
   inspectClientCoverage,
@@ -169,14 +170,14 @@ program.command("install-config")
 const detectors = program.command("detectors")
   .description("Manage optional detector models");
 
-program.command("session").description("Manage shared security session state")
-  .command("quarantine")
+const sessions = program.command("session").description("Manage security session state");
+sessions.command("quarantine")
   .description("Inspect or explicitly clear session quarantine")
   .option("--clear", "Clear quarantine", false)
-  .option("--session <id>", "Session identifier (uses configured profile/run scope)")
+  .option("--session <id>", "Native client session identifier (otherwise configured profile/run scope)")
   .action(async (options: { clear: boolean; session?: string }) => {
     const config = await loadConfigForCli(program.opts<{ config: string }>().config);
-    const store = new SqliteTaintStore(config.taint.sqlite, { scope: config.taint.scope, profileId: config.taint.profileId, keyPath: config.taint.keyPath, ttlMs: config.taint.ttlMs, ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {}) });
+    const store = new SqliteTaintStore(config.taint.sqlite, { scope: config.taint.scope, profileId: config.taint.profileId, keyPath: config.taint.keyPath, ttlMs: config.taint.ttlMs, ...(options.session ? { sessionScope: "client" as const } : {}), ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {}) });
     const session = options.session ?? process.env.PALIZADE_RUN_ID ?? config.taint.profileId;
     try {
       if (options.clear) {
@@ -186,6 +187,21 @@ program.command("session").description("Manage shared security session state")
         console.log("Session quarantine cleared.");
       } else console.log(JSON.stringify(store.getSession(session).quarantine ?? null, null, 2));
     } finally { store.close(); }
+  });
+
+sessions.command("reset")
+  .description("Reset exposure, quarantine, grants and counters without deleting taint records")
+  .option("--session <id>", "Native client session identifier (otherwise configured profile/run scope)")
+  .action(async (options: { session?: string }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const store = new SqliteTaintStore(config.taint.sqlite, { scope: config.taint.scope, profileId: config.taint.profileId, keyPath: config.taint.keyPath, ...(options.session ? { sessionScope: "client" as const } : {}), ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {}) });
+    const session = options.session ?? process.env.PALIZADE_RUN_ID ?? config.taint.profileId;
+    const audit = new AuditLogger([new JsonlAuditSink(config.audit.jsonl), new SqliteAuditSink(config.audit.sqlite)]);
+    try {
+      store.updateSession(session, () => emptySession());
+      await audit.write({ session, direction: "internal", method: "session/reset", action: "log_only", reason: "Security session explicitly reset by operator." });
+      console.log("Security session reset; taint records preserved.");
+    } finally { store.close(); await audit.close(); }
   });
 
 detectors.command("install")
@@ -569,26 +585,22 @@ program.command("hook")
   .description("Evaluate a native client hook event (JSON on stdin) and print the client's decision format")
   .argument("<client>", "claude-code, cursor, or codex")
   .argument("[event]", "Hook event name (read from stdin hook_event_name when omitted)")
-  .option("--session <id>", "Override the session id used for taint scoping")
+  .option("--session <id>", "Override the native client session identifier")
   .option("--cwd <dir>", "Override the working directory used for path checks")
   .action(async (client: string, event: string | undefined, options: { session?: string; cwd?: string }) => {
-    const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfigForCli(configPath);
-    const raw = await readStdinBounded(config.hooks.maxInputBytes);
-    let payload: unknown;
+    let failMode: "closed" | "open" = "closed";
+    let hookEvent = event ?? "PreToolUse";
     try {
-      payload = JSON.parse(raw);
-    } catch {
-      throw new Error("Hook stdin is not valid JSON.");
-    }
-    const hookEvent = event
-      ?? (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).hook_event_name === "string"
-        ? (payload as Record<string, unknown>).hook_event_name as string
-        : undefined);
-    if (!hookEvent) {
-      throw new Error("No hook event name: pass it as an argument or include hook_event_name in the stdin payload.");
-    }
-    try {
+      const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+      failMode = config.hooks.failMode;
+      const raw = await readStdinBounded(config.hooks.maxInputBytes);
+      const payload: unknown = JSON.parse(raw);
+      const payloadEvent = event
+        ?? (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).hook_event_name === "string"
+          ? (payload as Record<string, unknown>).hook_event_name as string
+          : undefined);
+      if (!payloadEvent) throw new Error("Missing hook event name.");
+      hookEvent = payloadEvent;
       const result = await evaluateHookEvent({
         config,
         client: client as "claude-code" | "cursor" | "codex",
@@ -603,9 +615,10 @@ program.command("hook")
       if (result.exitCode !== 0) {
         process.exitCode = result.exitCode;
       }
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      if (config.hooks.failMode === "closed") {
+    } catch {
+      const reason = "Hook evaluation failed; check the local configuration and input.";
+      if (failMode === "closed") {
+        console.log(JSON.stringify(buildDenyOutput(client as "claude-code" | "cursor" | "codex", hookEvent, reason).output));
         console.error(`Palizade hook failed closed: ${reason}`);
         process.exitCode = 2;
         return;

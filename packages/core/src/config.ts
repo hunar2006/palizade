@@ -197,6 +197,7 @@ export const palizadeConfigSchema = z.object({
     maxInputBytes: 1024 * 1024
   }),
   taint: z.object({
+    exposure: z.object({ ttlMs: z.number().int().positive().default(7_200_000) }).default({ ttlMs: 7_200_000 }),
     quarantine: z.object({
       scoreGte: z.number().min(0).max(1).default(0.85),
       turns: z.number().int().positive().default(20),
@@ -227,6 +228,7 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    exposure: { ttlMs: 7_200_000 },
     quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
     window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
     decode: { maxDepth: 2, maxBytes: 256 * 1024 },

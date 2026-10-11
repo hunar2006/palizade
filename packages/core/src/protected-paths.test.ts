@@ -36,6 +36,12 @@ it("renders capped escaped diffs and masks tainted proposals", async () => {
     const diff = protectedWriteDiff(file, { content: '{"enabled":true}\u{E0041}' }, 1024, false, () => false);
     expect(diff).toContain('-{"enabled":false}');
     expect(diff).toContain('+{"enabled":true}\\u{E0041}');
+    expect(protectedWriteDiff(file, { edits: [{ old_string: "false", new_string: "true" }, { old_string: "enabled", new_string: "active" }] }, 1024, false, () => false)).toContain('+{"active":true}');
+    expect(protectedWriteDiff(file, { edits: [{ oldText: "false", newText: "true" }] }, 1024, false, () => false)).toContain('+{"enabled":true}');
+    expect(protectedWriteDiff(file, { edits: [{ old_string: "false", new_string: "$&" }] }, 1024, false, () => false)).toContain('+{"enabled":$&}');
+    expect(protectedWriteDiff(file, { edits: [{ old_string: "e", new_string: "X", replace_all: true }] }, 1024, false, () => false)).toContain('+{"XnablXd":falsX}');
+    expect(() => protectedWriteDiff(file, { edits: [{ old_string: "missing", new_string: "true" }] }, 1024, false, () => false)).toThrow("does not match");
+    expect(() => protectedWriteDiff(file, { edits: [{ old_string: "false" }] }, 1024, false, () => false)).toThrow("Invalid critical edit");
     expect(protectedWriteDiff(file, { content: "hidden tainted proposal" }, 1024, true, () => false)).not.toContain("hidden tainted proposal");
     expect(() => protectedWriteDiff(file, { content: "x".repeat(1025) }, 1024, false, () => false)).toThrow("limit");
   } finally { await rm(dir, { recursive: true, force: true }); }

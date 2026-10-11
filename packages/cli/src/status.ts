@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { JsonlAuditSink, type AuditEvent } from "@palizade/audit";
 import { loadConfig, LockfileStore, type PalizadeLock } from "@palizade/core";
-import { SqliteTaintStore } from "@palizade/taint";
+import { expireExposure, SqliteTaintStore } from "@palizade/taint";
 
 export interface StatusRow {
   name: string;
@@ -64,7 +64,8 @@ export async function buildStatus(configPath: string, now = Date.now()): Promise
   let sessions: SessionStatus[];
   try {
     counts = taintStore.recordCounts();
-    sessions = taintStore.listSessions(MAX_LISTED_SESSIONS).map(({ key, state }) => {
+    sessions = taintStore.listSessions(MAX_LISTED_SESSIONS).map(({ key, state: stored }) => {
+      const state = expireExposure(stored, config.taint.exposure.ttlMs, now);
       const quarantine = state.quarantine && state.quarantine.expiresAt > now && state.quarantine.remainingTurns > 0 ? state.quarantine : undefined;
       return {
         session: key,

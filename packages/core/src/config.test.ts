@@ -33,6 +33,7 @@ describe("loadConfig", () => {
       expect(config.approvals.openBrowser).toBe(true);
       expect(config.egress.allowlist.hosts).toEqual([]);
       expect(config.egress.allowlist.emails).toEqual([]);
+      expect(config.taint.exposure.ttlMs).toBe(7_200_000);
       expect(config.servers.filesystem?.cwd).toBe(join(configDir, "servers"));
       expect(config.servers.filesystem?.command).toBe("node");
       expect(config.servers.filesystem?.args).toEqual(["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "."]);
