@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
-import YAML from "yaml";
+import { parseYamlWithSchema } from "@palizade/policy";
 import { z } from "zod";
 import { normalizeSandbox, sandboxConfigSchema } from "./sandbox.js";
 
@@ -253,13 +253,13 @@ export type PalizadeConfig = z.infer<typeof palizadeConfigSchema>;
 export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): Promise<PalizadeConfig> {
   const absolute = resolve(cwd, path);
   const raw = await readFile(absolute, "utf8");
-  const parsed = palizadeConfigSchema.parse(YAML.parse(raw));
+  const parsed = parseYamlWithSchema(palizadeConfigSchema, raw, absolute);
   parsed.protectedTargets.criticalPaths.push(absolute);
   return resolveConfigPaths(parsed, dirname(absolute));
 }
 
 export function parseConfig(raw: string, baseDir = process.cwd()): PalizadeConfig {
-  return resolveConfigPaths(palizadeConfigSchema.parse(YAML.parse(raw)), baseDir);
+  return resolveConfigPaths(parseYamlWithSchema(palizadeConfigSchema, raw, "palizade.yaml"), baseDir);
 }
 
 export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd()): PalizadeConfig {
