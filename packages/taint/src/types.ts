@@ -29,7 +29,7 @@ export interface TaintRecord {
 
 export interface TaintMatch {
   taintId: string;
-  reason: "substring" | "token" | "fuzzy" | "temporal";
+  reason: "substring" | "token" | "fuzzy" | "temporal" | `decoded:${string}`;
   classes?: TaintClass[] | undefined;
   token?: string;
   score?: number;

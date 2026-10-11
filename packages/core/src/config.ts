@@ -128,6 +128,10 @@ export const palizadeConfigSchema = z.object({
     allowContentLength: false
   }),
   taint: z.object({
+    decode: z.object({
+      maxDepth: z.number().int().min(0).max(8).default(2),
+      maxBytes: z.number().int().positive().default(256 * 1024)
+    }).default({ maxDepth: 2, maxBytes: 256 * 1024 }),
     sqlite: z.string().default(".palizade/taint.sqlite"),
     keyPath: z.string().default(".palizade/taint.key"),
     scope: z.enum(["process", "profile", "external_run_id"]).default("profile"),
@@ -143,6 +147,7 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    decode: { maxDepth: 2, maxBytes: 256 * 1024 },
     keyPath: ".palizade/taint.key",
     scope: "profile",
     profileId: "default",

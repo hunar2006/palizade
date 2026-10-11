@@ -5,6 +5,7 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
+import { expandCandidates } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
@@ -74,7 +75,14 @@ export class InterceptionEngine {
     }
 
     if (message.method === "tools/call") {
-      return this.handleToolCallRequest(message);
+      try { return await this.handleToolCallRequest(message); }
+      catch {
+        const decision: PolicyDecision = { action: this.options.policy.defaults.on_error, reason: "Security decision failed", failClosed: true };
+        const approval = await this.maybeApprove(decision, { method: message.method, toolClass: "unknown", taintMatches: [], summary: "Security decision failed." });
+        await this.auditDecision(message, "request", approval.decision, Date.now());
+        if (approval.approved && decision.action !== "block") { this.recordPending(message); return { toClient: [], toServer: [message] }; }
+        return { toClient: message.id === undefined ? [] : [makeToolErrorResultResponse(message.id, "Palizade blocked this tool call: security decision failed.")], toServer: [] };
+      }
     }
 
     this.recordPending(message);
@@ -132,6 +140,13 @@ export class InterceptionEngine {
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
     const argumentText = flattenArguments(params.arguments);
+    const matchCache = new Map<string, TaintMatch[]>();
+    const matchText = (text: string): TaintMatch[] => {
+      if (!matchCache.has(text)) matchCache.set(text, expandCandidates(text, this.options.config.taint.decode).flatMap((candidate) =>
+        this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax })
+          .map((match): TaintMatch => ({ ...match, reason: candidate.kind === "original" || match.reason === "temporal" ? match.reason : `decoded:${candidate.kind}` }))));
+      return matchCache.get(text)!;
+    };
     const argumentFields = extractArgumentFields(params.arguments);
     const argumentBlocks = extractTextBlocks(params.arguments);
     const argumentDetections = await Promise.all(argumentBlocks.map(async (block) => ({
@@ -145,20 +160,10 @@ export class InterceptionEngine {
     })));
     const argumentDetection = fuseDetections(argumentDetections.map((entry) => entry.detection));
     const argumentDetectionsByPath = new Map(argumentDetections.map((entry) => [pathKey(entry.block), entry.detection]));
-    const matches = this.options.taintStore.match(this.options.sessionId, argumentText, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax
-    });
-    const fieldMatches = argumentFields.flatMap((field) => this.options.taintStore.match(this.options.sessionId, field.text, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax
-    }).map((match) => ({ field, match })));
-    const sensitiveMatches = this.options.taintStore.match(this.options.sessionId, argumentText, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
-      classes: ["sensitive"]
-    });
-    const sensitiveFieldMatches = argumentFields.flatMap((field) => this.options.taintStore.match(this.options.sessionId, field.text, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
-      classes: ["sensitive"]
-    }).map((match) => ({ field, match })));
+    const matches = matchText(argumentText);
+    const fieldMatches = argumentFields.flatMap((field) => matchText(field.text).map((match) => ({ field, match })));
+    const sensitiveMatches = matches.filter((match) => match.classes?.includes("sensitive"));
+    const sensitiveFieldMatches = fieldMatches.filter(({ match }) => match.classes?.includes("sensitive"));
     const taintedArgumentRoles = [...new Set(fieldMatches.map(({ field }) => field.role))];
     const temporal = matches.some((match) => match.reason === "temporal") || this.options.taintStore.hasTemporal(this.options.sessionId);
     const secretDetected = hasSecretLabel(argumentDetection.labels);
@@ -863,7 +868,8 @@ export class InterceptionEngine {
         sensitiveTaint: extra.sensitiveTaint,
         secretDetected: extra.secretDetected,
         piiDetected: extra.piiDetected,
-        redacted: extra.redacted
+        redacted: extra.redacted,
+        matchReasons: dedupePreservingOrder(extra.taintMatches?.map((match) => match.reason) ?? [])
       }
     });
   }

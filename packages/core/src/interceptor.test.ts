@@ -27,6 +27,28 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("blocks encoded taint in a URL and records only the decode reason", async () => {
+    const { engine, events, cleanup } = await makeEngine();
+    try {
+      const text = await seedTaintedRead(engine);
+      const output = await engine.handleClientMessage({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "send_email", arguments: { url: `https://user.test/?q=${Buffer.from(text).toString("base64")}` } } });
+      expect(output.toServer).toHaveLength(0);
+      expect(JSON.stringify(events.at(-1)?.metadata)).toContain("decoded:base64");
+      expect(JSON.stringify(events)).not.toContain(text);
+    } finally { await cleanup(); }
+  });
+  it("blocks a hex-encoded sensitive AWS key and passes a benign image", async () => {
+    const activePolicy = parsePolicy(`version: 1\ndefaults: { action: allow, on_error: block }\nrules:\n  - id: sensitive\n    when: { direction: request, sensitive_taint: true }\n    action: block\n`);
+    const { engine, cleanup } = await makeEngine(activePolicy, { detector: new SensitiveDataDetector({ secrets: { enabled: true } }), configure: (config) => { config.taint.temporal.enabled = false; } });
+    try {
+      const key = "AKIAIOSFODNN7EXAMPLE";
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 17, method: "tools/call", params: { name: "read_web" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 17, result: { content: [{ type: "text", text: key }] } });
+      const send = (body: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "send_email", arguments: { body } } });
+      expect((await send(Buffer.from(key).toString("hex"))).toServer).toHaveLength(0);
+      expect((await send(Buffer.from([137, 80, 78, 71, 0, 0, 0, 0, 255, 255, 255, 255]).toString("base64"))).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
   it("sanitizes suspicious source output and blocks tainted sink reuse", async () => {
     const { engine, events, cleanup } = await makeEngine();
     try {
@@ -620,6 +642,7 @@ async function makeEngine(
     egress: { allowlist: { hosts: [], emails: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     taint: {
+      decode: { maxDepth: 2, maxBytes: 256 * 1024 },
       sqlite: join(dir, "taint.sqlite"),
       keyPath: join(dir, "taint.key"),
       scope: "profile",
