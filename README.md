@@ -211,7 +211,8 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - Taint matching is containment-by-observables: exact fragments, atomic tokens, fuzzy SimHash, and temporal taint. It does not defeat full semantic paraphrase laundering.
 - Substring fingerprints cover roughly the first 17 KB of each tool response. An injection past that point is caught only by token, fuzzy, or temporal matching.
 - The benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive.
-- Streamable HTTP transport is not implemented yet; stdio MCP is the current transport.
+- Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
+- The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
 
 These are scope boundaries, not footnotes. Palizade is strongest when sensitive capabilities are exposed through wrapped MCP servers and policy is reviewed for each server.
 
@@ -274,6 +275,8 @@ palizade init
 palizade install-config <serverName>
 palizade install-config --all
 palizade wrap <serverName>
+palizade serve
+palizade status [--json]
 palizade lock approve <serverName>
 palizade detectors install promptguard2
 palizade detectors verify heuristic
@@ -283,6 +286,22 @@ palizade audit prune --older-than 30d
 palizade taint prune
 palizade doctor
 ```
+
+### Remote (HTTP) MCP servers
+
+Palizade proxies remote MCP servers declared with `url` instead of `command` in `palizade.yaml`:
+
+```yaml
+servers:
+  remote:
+    url: https://example.com/mcp
+    headers:
+      Authorization: "${GITHUB_TOKEN}"
+```
+
+`palizade wrap <server>` bridges the remote server over stdio so existing client integrations keep working. `palizade serve` runs a transparent local listener at `http://127.0.0.1:32146/mcp/<serverName>`: the upstream is always taken from config (never from request input), client `Authorization` headers are forwarded only to the configured upstream origin (never to redirect targets), `401`/`403`/`WWW-Authenticate` pass through untouched for OAuth discovery, and the listener requires Palizade's own bearer token (generated at `init`, stored at `.palizade/listener.token`, sent as `X-Palizade-Token`). Both protocol eras are supported: 2025-11-25 (initialize, sessions, GET SSE streams) and 2026-07-28 (POST only, `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Param-*` headers, request-scoped SSE).
+
+RFC 8707 note: Palizade never terminates TLS or rewrites upstream URLs, so OAuth tokens are passed through untouched — it does not act as an authorization proxy.
 
 Development and eval commands:
 

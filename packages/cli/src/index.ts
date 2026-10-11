@@ -3,8 +3,12 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { Command } from "commander";
 import {
+  collectToolsFromHttpServer,
   collectToolsFromStdioServer,
   createRuntime,
+  ensureListenerToken,
+  HttpBridgeProxy,
+  HttpServeListener,
   loadConfig,
   LockfileStore,
   StdioMcpProxy,
@@ -20,6 +24,7 @@ import {
   installClientConfig,
   selectInstallConfigPath
 } from "./install-config.js";
+import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG, DEFAULT_POLICY } from "./templates.js";
 
 declare const __PKG_VERSION__: string;
@@ -40,7 +45,9 @@ program.command("init")
     await writeIfMissing("palizade.yaml", DEFAULT_CONFIG, options.force);
     await writeIfMissing("policies/default.yaml", DEFAULT_POLICY, options.force);
     await mkdir(".palizade", { recursive: true });
+    const token = await ensureListenerToken(".palizade/listener.token");
     console.log("Initialized Palizade config, default policy, and .palizade state directory.");
+    console.log(`Listener bearer token stored at .palizade/listener.token (first 8 chars: ${token.slice(0, 8)}...).`);
   });
 
 program.command("install-config")
@@ -136,7 +143,7 @@ program.command("install-config")
     }
     console.log(`Updated ${result.clientConfigPath}`);
     console.log(`Entry: ${result.entryName}`);
-    console.log(`Command: ${result.entry.command} ${result.entry.args.join(" ")}`);
+    console.log(`Command: ${result.entry.command ?? "node"} ${(result.entry.args ?? []).join(" ")}`);
     console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new config file)");
     console.log("Fully quit and reopen Claude Desktop for the change to take effect.");
   });
@@ -214,7 +221,7 @@ detectors.command("verify")
   });
 
 program.command("wrap")
-  .description("Wrap an upstream MCP server over stdio")
+  .description("Wrap an upstream MCP server over stdio (command servers) or HTTP (url servers)")
   .argument("<serverName>", "Server name from palizade.yaml")
   .action(async (serverName: string) => {
     const configPath = program.opts<{ config: string }>().config;
@@ -224,8 +231,57 @@ program.command("wrap")
       throw new Error(`Unknown server '${serverName}'.`);
     }
     const runtime = await createRuntime(config, serverName);
+    if (server.url) {
+      const proxy = new HttpBridgeProxy({
+        serverName,
+        server,
+        config,
+        engine: runtime.engine,
+        onSecurityEvent: (event) => {
+          console.warn(`[palizade:${serverName}] ${event.message}`);
+          void runtime.audit.write({
+            session: runtime.sessionId,
+            server: serverName,
+            direction: "internal",
+            action: "log_only",
+            reason: `[http] ${event.kind}: ${event.message}`,
+            metadata: { httpSecurity: event.kind }
+          });
+        }
+      });
+      await proxy.run();
+      return;
+    }
     const proxy = new StdioMcpProxy({ serverName, server, transport: config.transport, engine: runtime.engine });
     await proxy.run();
+  });
+
+program.command("serve")
+  .description("Run a local HTTP listener exposing configured url servers at /mcp/<serverName>")
+  .option("--port <port>", "Override the listener port")
+  .option("--host <host>", "Override the listener bind address")
+  .option("--allow-remote", "Allow binding to non-localhost addresses", false)
+  .action(async (options: { port?: string; host?: string; allowRemote: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const config = await loadConfigForCli(configPath);
+    const urlServers = Object.entries(config.servers).filter(([, server]) => server.url);
+    if (urlServers.length === 0) {
+      throw new Error("No url servers in palizade.yaml; the listener only serves remote HTTP servers.");
+    }
+    const listener = new HttpServeListener({
+      config,
+      ...(options.host ? { host: options.host } : {}),
+      ...(options.port ? { port: Number(options.port) } : {}),
+      ...(options.allowRemote ? { allowRemote: true } : {}),
+      onSecurityEvent: (event) => console.warn(`[palizade] ${event.message}`),
+      createRuntime: async (serverName) => createRuntime(config, serverName)
+    });
+    const bound = await listener.start();
+    console.log(`Palizade listener bound to http://${bound.host}:${bound.port}/mcp/<serverName>`);
+    console.log(`Serving: ${urlServers.map(([name]) => name).join(", ")}`);
+    console.log(`Listener token: ${config.listener.tokenPath} (send as X-Palizade-Token header)`);
+    console.log("RFC 8707 note: Palizade never terminates TLS or rewrites URLs; upstream OAuth tokens are passed through untouched.");
+    await new Promise<void>(() => {});
   });
 
 const lock = program.command("lock")
@@ -242,7 +298,10 @@ lock.command("approve")
     if (!server) {
       throw new Error(`Unknown server '${serverName}'.`);
     }
-    const tools = await collectToolsFromStdioServer(server, parseDuration(options.timeout)) as McpTool[];
+    const timeoutMs = parseDuration(options.timeout);
+    const tools = server.url
+      ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
+      : await collectToolsFromStdioServer(server, timeoutMs) as McpTool[];
     const checks = await new LockfileStore(config.lockfile).approveTools(serverName, tools);
     for (const check of checks) {
       console.log(`${check.status}\t${serverName}/${check.tool}\t${check.hash}`);
@@ -352,7 +411,11 @@ program.command("doctor")
     console.log(`Lockfile: ${config.lockfile}`);
     console.log(`Audit JSONL: ${config.audit.jsonl}`);
     for (const [name, server] of Object.entries(config.servers)) {
-      console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+      if (server.url) {
+        console.log(`Server ${name}: url=${server.url} [trust=${server.trust}] [protocolVersion=${server.protocolVersion ?? "auto"}]`);
+      } else {
+        console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+      }
     }
     const coverage = await inspectClientCoverage({
       client: options.client,
@@ -377,6 +440,15 @@ program.command("doctor")
     if (coverage.nativeToolsNote) {
       console.log(coverage.nativeToolsNote);
     }
+  });
+
+program.command("status")
+  .description("Report per-server transport, era, policy hash, and taint record counts")
+  .option("--json", "Emit JSON", false)
+  .action(async (options: { json: boolean }) => {
+    const configPath = program.opts<{ config: string }>().config;
+    const report = await buildStatus(configPath);
+    printStatus(report, options.json);
   });
 
 program.parseAsync().catch((error: unknown) => {

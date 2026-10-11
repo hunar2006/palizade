@@ -21,10 +21,13 @@ const capabilitySchema = z.enum([
 ]);
 
 export const serverConfigSchema = z.object({
-  command: z.string().min(1),
+  command: z.string().min(1).optional(),
+  url: z.string().min(1).optional(),
   args: z.array(z.string()).default([]),
   cwd: z.string().optional(),
   env: z.record(z.string(), z.string()).default({}),
+  headers: z.record(z.string(), z.string()).default({}),
+  protocolVersion: z.enum(["auto", "2026-07-28", "2025-11-25"]).default("auto"),
   trust: trustSchema.default("untrusted"),
   toolClasses: z.record(z.string(), toolClassSchema).default({}),
   toolCapabilities: z.record(z.string(), z.array(capabilitySchema)).default({}),
@@ -34,7 +37,16 @@ export const serverConfigSchema = z.object({
   sensitivePathPatterns: z.array(z.string()).default([]),
   shell: z.boolean().default(false),
   allowShell: z.boolean().default(false)
-}).strict();
+}).strict().superRefine((server, ctx) => {
+  const hasCommand = server.command !== undefined && server.command.length > 0;
+  const hasUrl = server.url !== undefined && server.url.length > 0;
+  if (hasCommand === hasUrl) {
+    ctx.addIssue({
+      code: "custom",
+      message: `Server config must define exactly one of 'command' (stdio transport) or 'url' (remote HTTP transport). Found command=${hasCommand ? "set" : "unset"}, url=${hasUrl ? "set" : "unset"}.`
+    });
+  }
+});
 
 const secretDetectorConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -132,6 +144,32 @@ export const palizadeConfigSchema = z.object({
     allowBatches: false,
     allowContentLength: false
   }),
+  http: z.object({
+    requestTimeoutMs: z.number().int().min(1000).default(30_000),
+    maxBodyBytes: z.number().int().min(1024).default(64 * 1024 * 1024),
+    maxSseLineBytes: z.number().int().min(1024).default(1024 * 1024),
+    maxSseEventBytes: z.number().int().min(1024).default(16 * 1024 * 1024),
+    maxConcurrentStreams: z.number().int().min(1).default(8),
+    maxRedirects: z.number().int().min(0).max(10).default(5)
+  }).default({
+    requestTimeoutMs: 30_000,
+    maxBodyBytes: 64 * 1024 * 1024,
+    maxSseLineBytes: 1024 * 1024,
+    maxSseEventBytes: 16 * 1024 * 1024,
+    maxConcurrentStreams: 8,
+    maxRedirects: 5
+  }),
+  listener: z.object({
+    host: z.string().default("127.0.0.1"),
+    port: z.number().int().min(0).max(65_535).default(32_146),
+    tokenPath: z.string().default(".palizade/listener.token"),
+    allowRemote: z.boolean().default(false)
+  }).default({
+    host: "127.0.0.1",
+    port: 32_146,
+    tokenPath: ".palizade/listener.token",
+    allowRemote: false
+  }),
   taint: z.object({
     window: z.object({
       calls: z.number().int().min(1).max(100).default(12),
@@ -209,6 +247,10 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
       ...config.taint,
       sqlite: resolvePath(baseDir, config.taint.sqlite),
       keyPath: resolvePath(baseDir, config.taint.keyPath)
+    },
+    listener: {
+      ...config.listener,
+      tokenPath: resolvePath(baseDir, config.listener.tokenPath)
     },
     servers: Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [
       name,

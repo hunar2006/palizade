@@ -70,6 +70,17 @@ palizade lock approve <serverName>
    - `elicitation/*` is treated as privileged user interaction.
    - Non-allowlisted server-initiated requests are blocked.
 
+## Streamable HTTP Transport
+
+`packages/core/src/http.ts` implements an upstream HTTP client for both protocol eras; `packages/core/src/http-listener.ts` implements the transparent listener.
+
+- Era detection is per message: `_meta["io.modelcontextprotocol/protocolVersion"]` marks the 2026-07-28 era, `initialize` marks the 2025-11-25 era. For `url` servers with `protocolVersion: auto`, a legacy POST that gets a 404/400 with a recognized modern JSON-RPC error (`-32601`, `-32020`, `-32000`, `-32001`) switches the transport to the modern era and synthesizes the initialize response for the stdio client.
+- 2026-07-28: every message is its own POST with `Accept: application/json, text/event-stream`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, and `Mcp-Param-{Name}` headers (values base64-sentinel encoded via `=?base64?…?=` when not ASCII-safe). Responses are JSON or request-scoped SSE streams; notifications return 202. Servers pushing JSON-RPC requests on SSE are flagged as protocol violations and the message is dropped. Upstream header/body disagreements (`MCP-Protocol-Version`, `Mcp-Method`) are flagged and the response is rejected. Closing the SSE stream cancels the request.
+- 2025-11-25: initialize handshake, `Mcp-Session-Id`, GET SSE stream with `Last-Event-ID` resumability, DELETE on close.
+- Both eras refuse redirects while an `Authorization` header is set (tokens are never forwarded to redirect targets), refuse cross-origin redirects entirely, and mask tokens everywhere: no header value ever reaches audit, stderr, or the detector/taint stores.
+- `palizade wrap <server>` with a `url` server runs the bridge: stdio client in, engine in the middle, HTTP upstream out.
+- `palizade serve` binds `127.0.0.1` (unless `--allow-remote`), validates `Origin` as localhost-only, requires Palizade's own bearer token (`X-Palizade-Token`, generated at `init` into `.palizade/listener.token`), takes the upstream from config only, forwards the client's `Authorization` header unchanged to the configured upstream origin, passes 401/403/`WWW-Authenticate` through untouched for OAuth discovery, and applies the RFC 8707 rule: no TLS termination, no URL rewriting, no token minting.
+
 ## Tool Classification
 
 Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.
@@ -105,7 +116,7 @@ Audit events include event ID, timestamp, session/profile/scope/run identifiers 
 
 ## Simplifications
 
-- Stdio is implemented first; streamable HTTP is left for a later transport.
+- Stdio and Streamable HTTP are both implemented; the transparent listener shares one upstream session per served server (use the stdio bridge for per-client legacy sessions).
 - Optional model support is externally configured and must pass `palizade detectors verify` before being described as active.
 - Secret and PII detection is pattern-based and high-precision by design; custom, transformed, split, or obfuscated secrets can be missed. Egress allowlists and taint/provenance rules are the structural controls.
 - Fuzzy matching is lightweight SimHash, not semantic equivalence.

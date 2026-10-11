@@ -128,7 +128,8 @@ export class StdioMcpProxy {
 
   async run(): Promise<void> {
     assertSafeSpawn(this.options.server);
-    const child = spawn(resolveCommandForPlatform(this.options.server.command), this.options.server.args, {
+    const command = requireCommand(this.options.server);
+    const child = spawn(resolveCommandForPlatform(command), this.options.server.args, {
       cwd: this.options.server.cwd,
       env: { ...process.env, ...this.options.server.env },
       stdio: ["pipe", "pipe", "pipe"],
@@ -186,7 +187,8 @@ export class StdioMcpProxy {
 
 export async function collectToolsFromStdioServer(server: ServerConfig, timeoutMs = 5_000): Promise<unknown[]> {
   assertSafeSpawn(server);
-  const child = spawn(resolveCommandForPlatform(server.command), server.args, {
+  const command = requireCommand(server);
+  const child = spawn(resolveCommandForPlatform(command), server.args, {
     cwd: server.cwd,
     env: { ...process.env, ...server.env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -250,6 +252,13 @@ function assertSafeSpawn(server: ServerConfig): void {
   if (server.shell && !server.allowShell) {
     throw new Error("Unsafe server config: shell execution requires allowShell: true");
   }
+}
+
+function requireCommand(server: ServerConfig): string {
+  if (!server.command) {
+    throw new Error(`Server config has no 'command'; url servers must use the HTTP transport instead of stdio.`);
+  }
+  return server.command;
 }
 
 export function resolveCommandForPlatform(command: string): string {

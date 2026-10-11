@@ -46,8 +46,9 @@ export interface InstallConfigResult {
 }
 
 export interface ClientMcpServerEntry {
-  command: string;
-  args: string[];
+  command?: string;
+  args?: string[];
+  url?: string;
   cwd?: string;
   env?: Record<string, string>;
 }
@@ -300,7 +301,11 @@ export async function inspectClientCoverage(options: {
   const mcpServers = ensureMcpServers(config, clientConfigPath);
   const rows = Object.entries(mcpServers).map(([name, rawEntry]): ClientCoverageRow => {
     const wrapped = isPalizadeWrapper(rawEntry);
-    const command = isRecord(rawEntry) && typeof rawEntry.command === "string" ? rawEntry.command : "<invalid>";
+    const command = isRecord(rawEntry) && typeof rawEntry.command === "string"
+      ? rawEntry.command
+      : isRecord(rawEntry) && typeof rawEntry.url === "string"
+        ? `url=${rawEntry.url}`
+        : "<invalid>";
     return {
       name,
       wrapped,
@@ -441,6 +446,11 @@ function normalizeClientEntry(name: string, value: unknown, path: string): Clien
   if (!isRecord(value)) {
     throw new Error(`Expected mcpServers.${name} in ${path} to be an object.`);
   }
+  const entry: ClientMcpServerEntry = {};
+  if (typeof value.url === "string" && value.url.trim() !== "") {
+    entry.url = value.url;
+    return entry;
+  }
   if (typeof value.command !== "string" || value.command.trim() === "") {
     throw new Error(`Expected mcpServers.${name}.command in ${path} to be a non-empty string.`);
   }
@@ -448,10 +458,8 @@ function normalizeClientEntry(name: string, value: unknown, path: string): Clien
   if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) {
     throw new Error(`Expected mcpServers.${name}.args in ${path} to be an array of strings.`);
   }
-  const entry: ClientMcpServerEntry = {
-    command: value.command,
-    args: [...args]
-  };
+  entry.command = value.command;
+  entry.args = [...args];
   if (typeof value.cwd === "string") {
     entry.cwd = value.cwd;
   }
@@ -465,9 +473,17 @@ function normalizeClientEntry(name: string, value: unknown, path: string): Clien
 }
 
 function makeAutoServerConfig(entry: ClientMcpServerEntry): JsonRecord {
+  if (entry.url) {
+    return {
+      url: entry.url,
+      headers: {},
+      trust: "untrusted",
+      toolClasses: {}
+    };
+  }
   return {
     command: entry.command,
-    args: entry.args,
+    args: entry.args ?? [],
     ...(entry.cwd ? { cwd: entry.cwd } : {}),
     ...(entry.env ? { env: entry.env } : {}),
     trust: "untrusted",

@@ -8,4 +8,6 @@ export * from "./text.js";
 export * from "./lockfile.js";
 export * from "./interceptor.js";
 export * from "./stdio.js";
+export * from "./http.js";
+export * from "./http-listener.js";
 export * from "./factory.js";
