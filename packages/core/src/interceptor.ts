@@ -27,7 +27,8 @@ import {
   type ToolsCallParams,
   type ToolsListResult
 } from "./mcp.js";
-import { applyTextTransforms, extractTextBlocks, flattenArguments, isContentText, redactSpans, spotlightText, type TextBlock } from "./text.js";
+import { applyTextTransforms, extractTextBlocks, flattenArguments, isSpotlightableText, redactSpans, spotlightText, type TextBlock } from "./text.js";
+import { detectEra, isServerNotification, isToolsListChanged, SENSITIVE_FIELD_NAME_RE, type McpEra } from "./era.js";
 
 export interface InterceptionEngineOptions {
   config: PalizadeConfig;
@@ -60,6 +61,7 @@ interface PendingClientRequest {
   method: string;
   tool?: string | undefined;
   startedAt: number;
+  relock?: boolean;
 }
 
 export class InterceptionEngine {
@@ -67,6 +69,9 @@ export class InterceptionEngine {
   private readonly knownTools = new Map<string, McpTool>();
   private readonly learnedEgress: LearnedEgress;
   private readonly outboundWindow = new OutboundWindow();
+  private clientEra: McpEra | undefined;
+  private serverEra: McpEra | undefined;
+  private relockCounter = 0;
 
   constructor(private readonly options: InterceptionEngineOptions) {
     const config = palizadeConfigSchema.parse(options.config);
@@ -78,6 +83,11 @@ export class InterceptionEngine {
   async handleClientMessage(message: JsonRpcMessage): Promise<EngineOutput> {
     if (!isRequest(message)) {
       return { toClient: [], toServer: [message] };
+    }
+
+    const detectedEra = detectEra(message);
+    if (detectedEra !== undefined) {
+      this.clientEra = detectedEra;
     }
 
     if (message.method === "initialize") {
@@ -114,6 +124,15 @@ export class InterceptionEngine {
   }
 
   private async processServerMessage(message: JsonRpcMessage): Promise<EngineOutput> {
+    const detectedEra = detectEra(message);
+    if (detectedEra !== undefined) {
+      this.serverEra = detectedEra;
+    }
+
+    if (isServerNotification(message)) {
+      return this.handleServerNotification(message);
+    }
+
     if (isRequest(message)) {
       return this.handleServerInitiatedRequest(message);
     }
@@ -129,7 +148,10 @@ export class InterceptionEngine {
     this.pendingClient.delete(String(message.id));
 
     if (pending.method === "tools/list") {
-      return this.handleToolsListResponse(message);
+      return this.handleToolsListResponse(message, pending);
+    }
+    if (pending.method === "server/discover") {
+      return this.handleServerDiscoverResponse(message);
     }
     if (pending.method === "tools/call") {
       return this.handleToolCallResponse(message, pending);
@@ -148,6 +170,9 @@ export class InterceptionEngine {
     }
     if (pending.method === "prompts/get") {
       return this.handleGenericContentResponse(message, pending, "prompt_content");
+    }
+    if (pending.method === "subscriptions/listen") {
+      return this.handleGenericContentResponse(message, pending, "notification");
     }
     if (pending.method === "initialize") {
       return this.handleInitializeResponse(message);
@@ -223,6 +248,27 @@ export class InterceptionEngine {
       ...splitMatches
     ];
 
+    const inputResponses = (params as { inputResponses?: unknown }).inputResponses;
+    let inputResponseTaint = false;
+    let inputResponseSensitive = false;
+    const inputResponseMatches: TaintMatch[] = [];
+    if (inputResponses !== undefined && inputResponses !== null) {
+      const responseText = flattenArguments(inputResponses);
+      const responseFields = extractArgumentFields(inputResponses, tool, this.options.server.argumentRoles?.[tool]);
+      const rawMatches = [...matchText(responseText), ...responseFields.flatMap((field) => matchText(field.text))];
+      const seen = new Set<string>();
+      for (const match of rawMatches) {
+        if (seen.has(match.taintId)) {
+          continue;
+        }
+        seen.add(match.taintId);
+        inputResponseMatches.push(match);
+      }
+      inputResponseTaint = inputResponseMatches.some((match) => match.reason !== "temporal");
+      inputResponseSensitive = inputResponseMatches.some((match) => match.classes?.includes("sensitive"));
+      allTaintMatches.push(...inputResponseMatches);
+    }
+
     const policyDecision = evaluatePolicy(this.options.policy, {
       direction: "request",
       method: message.method,
@@ -231,8 +277,8 @@ export class InterceptionEngine {
       tool_class: toolClass,
       capabilities: classification.capabilities,
       trust: this.options.server.trust,
-      taint: matches.length > 0 || fieldMatches.length > 0,
-      sensitive_taint: sensitiveTaint,
+      taint: matches.length > 0 || fieldMatches.length > 0 || inputResponseTaint,
+      sensitive_taint: sensitiveTaint || inputResponseSensitive,
       temporal_taint: temporal,
       secret_detected: secretDetected,
       pii_detected: piiDetected,
@@ -338,9 +384,10 @@ export class InterceptionEngine {
     return { toClient: [], toServer: [message] };
   }
 
-  private async handleToolsListResponse(message: JsonRpcResponse): Promise<EngineOutput> {
+  private async handleToolsListResponse(message: JsonRpcResponse, pending?: PendingClientRequest): Promise<EngineOutput> {
     const startedAt = Date.now();
     const result = (message as { result: ToolsListResult }).result;
+    const relock = pending?.relock === true;
     const tools = Array.isArray(result.tools) ? result.tools : [];
     const lockChecks = await this.options.lockfile.checkTools(this.options.serverName, tools);
     const contents = tools.flatMap((tool) => extractContent(tool, {
@@ -353,7 +400,7 @@ export class InterceptionEngine {
     const { fused, detections } = await this.detectContents(contents);
     const lockStatus = worstLockStatus(lockChecks);
 
-    const decision = evaluatePolicy(this.options.policy, {
+    let decision = evaluatePolicy(this.options.policy, {
       direction: "response",
       method: "tools/list",
       server: this.options.serverName,
@@ -363,37 +410,50 @@ export class InterceptionEngine {
       lock_status: lockStatus
     });
 
+    if (relock && lockStatus !== "approved" && (decision.action === "allow" || decision.action === "log_only")) {
+      decision = {
+        action: "require_approval",
+        matchedRuleId: "m5-relock-gate",
+        reason: "tools/list_changed: tool metadata drifted from palizade.lock; approval required."
+      };
+    }
+
     const approval = await this.maybeApprove(decision, {
       method: "tools/list",
       toolClass: "unknown",
       taintMatches: [],
-      summary: `tools/list returned ${tools.length} tool(s); lock status ${lockStatus}; detector score ${fused.score.toFixed(2)}.`
+      summary: `tools/list returned ${tools.length} tool(s); lock status ${lockStatus}; detector score ${fused.score.toFixed(2)}.${relock ? " Triggered by tools/list_changed." : ""}`
     });
 
+    const cacheMetadata = extractCacheMetadata(result);
     await this.auditDecision(message, "response", approval.decision, startedAt, {
       method: "tools/list",
       detector: fused,
       lockChecks,
       lockStatus,
       approved: approval.approved,
-      payload: result
+      payload: result,
+      relock,
+      cacheMetadata
     });
 
     if (!approval.approved || decision.action === "block") {
-      return {
-        toClient: [
-          makeErrorResponse(message.id, -32021, "Palizade blocked tools/list metadata", {
-            decision,
-            lockChecks,
-            detector: fused
-          })
-        ],
-        toServer: []
-      };
+      const error = makeErrorResponse(message.id, -32021, "Palizade blocked tools/list metadata", {
+        decision,
+        lockChecks,
+        detector: fused
+      });
+      return relock
+        ? { toClient: [], toServer: [] }
+        : { toClient: [error], toServer: [] };
     }
 
     for (const tool of tools) {
       this.knownTools.set(tool.name, tool);
+    }
+
+    if (relock) {
+      return { toClient: [], toServer: [] };
     }
 
     if (decision.action === "sanitize" || fused.score >= 0.35) {
@@ -426,6 +486,10 @@ export class InterceptionEngine {
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
     const result = (message as { result: unknown }).result;
+    const inputRequiredGate = await this.checkInputRequiredRequests(message, pending, result);
+    if (inputRequiredGate) {
+      return inputRequiredGate;
+    }
     const contents = extractContent(result, {
       origin: "tool_result",
       sourceServer: this.options.serverName,
@@ -497,7 +561,7 @@ export class InterceptionEngine {
       return {
         toClient: [{
           ...message,
-          result: applyTextTransforms(result, (text, block) => !isContentText(block) ? text : spotlightText(text, {
+          result: applyTextTransforms(result, (text, block) => !isSpotlightableText(block) ? text : spotlightText(text, {
             server: this.options.serverName,
             tool,
             taintIds: taintRecords.map((record) => record.id)
@@ -518,6 +582,147 @@ export class InterceptionEngine {
     }
 
     return { toClient: [message], toServer: [] };
+  }
+
+  private async checkInputRequiredRequests(
+    message: JsonRpcResponse,
+    pending: PendingClientRequest,
+    result: unknown
+  ): Promise<EngineOutput | undefined> {
+    const inputRequests = inspectInputRequired(result);
+    if (!inputRequests) {
+      return undefined;
+    }
+    const startedAt = Date.now();
+    const tool = pending.tool ?? "unknown";
+    const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
+    const failures: string[] = [];
+    const decisions: PolicyDecision[] = [];
+
+    for (const [key, request] of Object.entries(inputRequests)) {
+      const method = typeof request.method === "string" ? request.method : "unknown";
+      const params = (request.params ?? {}) as { mode?: string; url?: string; requestedSchema?: unknown };
+
+      if (method === "sampling/createMessage" || method.startsWith("sampling/")) {
+        const decision = evaluatePolicy(this.options.policy, {
+          direction: "request",
+          method: "sampling/createMessage",
+          server: this.options.serverName,
+          trust: this.options.server.trust,
+          tool_class: "unknown",
+          capabilities: ["invokes_model"]
+        });
+        decisions.push(decision);
+        if (decision.action === "block") {
+          failures.push(`Sampling request '${key}' was blocked: ${decision.reason}`);
+          continue;
+        }
+        if (decision.action === "require_approval") {
+          const approval = await this.maybeApprove(decision, {
+            method: "sampling/createMessage",
+            toolClass: "unknown",
+            classification: { toolClass: "unknown", capabilities: ["invokes_model"] },
+            taintMatches: [],
+            summary: `${this.options.serverName} requested model access through an input_required result (${key}).`
+          });
+          if (!approval.approved) {
+            failures.push(`Sampling request '${key}' was not approved.`);
+          }
+        }
+        continue;
+      }
+
+      if (method.startsWith("elicitation/")) {
+        if (params.mode !== "url") {
+          if (elicitationRequestsSensitiveFields(params.requestedSchema)) {
+            failures.push(`Elicitation request '${key}' uses form mode to request sensitive fields (passwords, API keys, tokens, payment data); the spec forbids this.`);
+            continue;
+          }
+        } else if (typeof params.url === "string") {
+          const urlFields = extractArgumentFields({ url: params.url }, tool, this.options.server.argumentRoles?.[tool]);
+          const entries = destinationEntries(urlFields);
+          if (entries.length > 0 && !destinationsAllowed(entries, allowlist)) {
+            failures.push(`Elicitation URL '${params.url}' is not in the egress allowlist.`);
+            continue;
+          }
+          const urlTaint = this.options.taintStore.match(this.options.sessionId, params.url, {
+            fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
+            classes: ["untrusted"]
+          }).filter((match) => match.reason !== "temporal");
+          if (urlTaint.length > 0) {
+            failures.push(`Elicitation URL '${params.url}' came from untrusted content.`);
+            continue;
+          }
+        }
+        const decision = evaluatePolicy(this.options.policy, {
+          direction: "request",
+          method: "elicitation/create",
+          server: this.options.serverName,
+          trust: this.options.server.trust,
+          tool_class: "unknown",
+          capabilities: ["user_interaction"]
+        });
+        decisions.push(decision);
+        if (decision.action === "block") {
+          failures.push(`Elicitation request '${key}' was blocked: ${decision.reason}`);
+          continue;
+        }
+        if (decision.action === "require_approval") {
+          const approval = await this.maybeApprove(decision, {
+            method: "elicitation/create",
+            toolClass: "unknown",
+            classification: { toolClass: "unknown", capabilities: ["user_interaction"] },
+            taintMatches: [],
+            summary: `${this.options.serverName} requested user input through an input_required result (${key}).`
+          });
+          if (!approval.approved) {
+            failures.push(`Elicitation request '${key}' was not approved.`);
+          }
+        }
+        continue;
+      }
+
+      if (method === "roots/list") {
+        continue;
+      }
+
+      failures.push(`Input request '${key}' uses unsupported method '${method}'.`);
+    }
+
+    if (failures.length > 0) {
+      const decision: PolicyDecision = {
+        action: "block",
+        matchedRuleId: "m5-input-required-gate",
+        reason: failures.join("; ")
+      };
+      await this.auditDecision(message, "response", decision, startedAt, {
+        method: "tools/call",
+        tool,
+        metadata: { inputRequests: Object.keys(inputRequests), failures }
+      });
+      return {
+        toClient: [{
+          ...message,
+          result: {
+            content: [{
+              type: "text",
+              text: failures.length === 1 ? `Palizade blocked an input request: ${failures[0]}` : `Palizade blocked ${failures.length} input requests:\n${failures.map((failure) => `- ${failure}`).join("\n")}`
+            }],
+            isError: true
+          }
+        }],
+        toServer: []
+      };
+    }
+
+    for (const decision of decisions) {
+      await this.auditDecision(message, "response", decision, startedAt, {
+        method: "tools/call",
+        tool,
+        metadata: { inputRequests: Object.keys(inputRequests) }
+      });
+    }
+    return undefined;
   }
 
   private async handleServerInitiatedRequest(message: JsonRpcRequest): Promise<EngineOutput> {
@@ -588,6 +793,78 @@ export class InterceptionEngine {
       };
     }
 
+    return { toClient: [message], toServer: [] };
+  }
+
+  private async handleServerNotification(message: JsonRpcMessage): Promise<EngineOutput> {
+    const startedAt = Date.now();
+    const method = (message as { method: string }).method;
+    if (isToolsListChanged(message)) {
+      const relockId = `palizade-relock-${++this.relockCounter}`;
+      this.pendingClient.set(relockId, { method: "tools/list", startedAt, relock: true });
+      const decision: PolicyDecision = {
+        action: "allow",
+        reason: "tools/list_changed: re-locking and re-verifying tool metadata against palizade.lock."
+      };
+      await this.auditDecision(message, "response", decision, startedAt, { method });
+      return {
+        toClient: [message],
+        toServer: [{ jsonrpc: "2.0", id: relockId, method: "tools/list", params: {} }]
+      };
+    }
+    await this.auditDecision(message, "response", { action: "allow", reason: `notification forwarded: ${method}` }, startedAt, { method });
+    return { toClient: [message], toServer: [] };
+  }
+
+  private async handleServerDiscoverResponse(message: JsonRpcResponse): Promise<EngineOutput> {
+    const startedAt = Date.now();
+    const result = (message as { result: unknown }).result;
+    const tools = Array.isArray((result as { tools?: unknown })?.tools)
+      ? ((result as { tools: McpTool[] }).tools as McpTool[])
+      : [];
+    const lockChecks = tools.length > 0
+      ? await this.options.lockfile.checkTools(this.options.serverName, tools)
+      : [];
+    const contents = extractContent(result, {
+      origin: "tool_metadata",
+      sourceServer: this.options.serverName,
+      sourceMethod: "server/discover",
+      trust: this.options.server.trust
+    });
+    const { fused } = await this.detectContents(contents);
+    const lockStatus = tools.length > 0 ? worstLockStatus(lockChecks) : "unknown";
+    const decision = evaluatePolicy(this.options.policy, {
+      direction: "response",
+      method: "server/discover",
+      server: this.options.serverName,
+      trust: this.options.server.trust,
+      detector_score: fused.score,
+      labels: fused.labels,
+      lock_status: lockStatus
+    });
+    const approval = await this.maybeApprove(decision, {
+      method: "server/discover",
+      toolClass: "unknown",
+      taintMatches: [],
+      summary: `server/discover returned ${tools.length} tool(s); lock status ${lockStatus}; detector score ${fused.score.toFixed(2)}.`
+    });
+    await this.auditDecision(message, "response", approval.decision, startedAt, {
+      method: "server/discover",
+      detector: fused,
+      lockChecks,
+      lockStatus,
+      approved: approval.approved,
+      payload: result
+    });
+    if (!approval.approved || decision.action === "block") {
+      return {
+        toClient: [makeErrorResponse(message.id, -32021, "Palizade blocked server/discover metadata", { decision, lockChecks, detector: fused })],
+        toServer: []
+      };
+    }
+    for (const tool of tools) {
+      this.knownTools.set(tool.name, tool);
+    }
     return { toClient: [message], toServer: [] };
   }
 
@@ -754,7 +1031,7 @@ export class InterceptionEngine {
       return {
         toClient: [{
           ...message,
-          result: applyTextTransforms(result, (text, block) => !isContentText(block) ? text : spotlightText(text, {
+          result: applyTextTransforms(result, (text, block) => !isSpotlightableText(block) ? text : spotlightText(text, {
             server: this.options.serverName,
             tool: pending.method,
             taintIds: taintRecords.map((record) => record.id)
@@ -939,6 +1216,9 @@ export class InterceptionEngine {
       secretDetected?: boolean;
       piiDetected?: boolean;
       redacted?: boolean;
+      relock?: boolean;
+      cacheMetadata?: { ttlMs?: number; cacheScope?: string } | undefined;
+      metadata?: Record<string, unknown>;
     } = {}
   ): Promise<void> {
     await this.options.audit.write({
@@ -977,6 +1257,10 @@ export class InterceptionEngine {
         secretDetected: extra.secretDetected,
         piiDetected: extra.piiDetected,
         redacted: extra.redacted,
+        relock: extra.relock,
+        cacheMetadata: extra.cacheMetadata,
+        era: this.serverEra ?? this.clientEra,
+        ...extra.metadata,
         matchReasons: dedupePreservingOrder(extra.taintMatches?.map((match) => match.reason) ?? [])
       }
     });
@@ -1172,6 +1456,76 @@ function worstLockStatus(checks: ToolLockCheck[]): "approved" | "new" | "changed
   if (checks.some((check) => check.status === "new")) return "new";
   if (checks.some((check) => check.status === "missing")) return "missing";
   return "approved";
+}
+
+function inspectInputRequired(result: unknown): Record<string, { method?: unknown; params?: unknown }> | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  if (record.resultType !== "input_required") {
+    return undefined;
+  }
+  const inputRequests = record.inputRequests;
+  if (!inputRequests || typeof inputRequests !== "object" || Array.isArray(inputRequests)) {
+    return undefined;
+  }
+  const output: Record<string, { method?: unknown; params?: unknown }> = {};
+  for (const [key, value] of Object.entries(inputRequests)) {
+    if (value && typeof value === "object") {
+      const request = value as Record<string, unknown>;
+      output[key] = { method: request.method, params: request.params };
+    }
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function elicitationRequestsSensitiveFields(requestedSchema: unknown): boolean {
+  if (!requestedSchema || typeof requestedSchema !== "object") {
+    return false;
+  }
+  const searchable = JSON.stringify(requestedSchema);
+  const properties = (requestedSchema as Record<string, unknown>).properties;
+  if (properties && typeof properties === "object") {
+    for (const [name, schema] of Object.entries(properties)) {
+      if (SENSITIVE_FIELD_NAME_RE.test(name)) {
+        return true;
+      }
+      if (schema && typeof schema === "object") {
+        const descriptor = schema as Record<string, unknown>;
+        const strings = [descriptor.title, descriptor.description, descriptor.default].filter((value): value is string => typeof value === "string");
+        if (strings.some((value) => SENSITIVE_FIELD_NAME_RE.test(value))) {
+          return true;
+        }
+      }
+    }
+  }
+  return SENSITIVE_FIELD_NAME_RE.test(searchable);
+}
+
+function extractCacheMetadata(result: unknown): { ttlMs?: number; cacheScope?: string } | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const meta = record._meta;
+  const scope = typeof record.cacheScope === "string"
+    ? record.cacheScope
+    : meta && typeof meta === "object" && typeof (meta as Record<string, unknown>).cacheScope === "string"
+      ? (meta as Record<string, unknown>).cacheScope as string
+      : undefined;
+  const ttl = typeof record.ttlMs === "number"
+    ? record.ttlMs
+    : meta && typeof meta === "object" && typeof (meta as Record<string, unknown>).ttlMs === "number"
+      ? (meta as Record<string, unknown>).ttlMs as number
+      : undefined;
+  if (scope === undefined && ttl === undefined) {
+    return undefined;
+  }
+  return {
+    ...(scope !== undefined ? { cacheScope: scope } : {}),
+    ...(ttl !== undefined ? { ttlMs: ttl } : {})
+  };
 }
 
 function descriptorName(item: unknown, fallback: string): string {

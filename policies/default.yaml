@@ -23,6 +23,15 @@ rules:
     action: block
     reason: MCP server attempted to access the model through sampling.
 
+  # --- M5: MRTR input requests ---
+  - id: approve-elicitation
+    name: Require approval for elicitation requests
+    when:
+      direction: request
+      method: elicitation/create
+    action: require_approval
+    reason: Server requested user input through elicitation.
+
   - id: block-poisoned-tool-metadata
     name: Block poisoned tool metadata
     when:

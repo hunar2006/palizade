@@ -81,6 +81,17 @@ palizade lock approve <serverName>
 - `palizade wrap <server>` with a `url` server runs the bridge: stdio client in, engine in the middle, HTTP upstream out.
 - `palizade serve` binds `127.0.0.1` (unless `--allow-remote`), validates `Origin` as localhost-only, requires Palizade's own bearer token (`X-Palizade-Token`, generated at `init` into `.palizade/listener.token`), takes the upstream from config only, forwards the client's `Authorization` header unchanged to the configured upstream origin, passes 401/403/`WWW-Authenticate` through untouched for OAuth discovery, and applies the RFC 8707 rule: no TLS termination, no URL rewriting, no token minting.
 
+## Dual-Era stdio (2026-07-28 MRTR)
+
+The interceptor is era aware per message: `_meta["io.modelcontextprotocol/protocolVersion"]` marks 2026-07-28, `initialize` marks the legacy era. On the 2026-07-28 era:
+
+- `resultType: "input_required"` tool/prompt/resource results are inspected. Each `inputRequests` entry is gated with the same policy methods the legacy server-initiated requests used (`sampling/createMessage`, `elicitation/create`, `roots/list`). Denied requests turn the whole result into a tool error. Form-mode elicitations requesting sensitive fields (passwords, API keys, tokens, payment data) are denied per spec; URL-mode elicitation URLs go through egress allowlist and taint checks. Blocked reasons are audited and never forwarded.
+- The client's retry `inputResponses` are taint-matched like sink arguments.
+- `notifications/tools/list_changed` is forwarded to the client and triggers a proxy-side `tools/list` re-lock: the synthetic response is compared against `palizade.lock`, drifted metadata is approval-gated, and the synthetic response is never forwarded.
+- `server/discover` responses are lock-checked and scanned like `tools/list`.
+- `subscriptions/listen` responses are scanned through the generic content path.
+- `structuredContent` is scanned and taint-registered like `content` text; sanitize/spotlight applies to string fields only, keeping the result schema valid. `ttlMs`/`cacheScope` on list results are audited; the lockfile is re-verified on every refresh regardless of client caching.
+
 ## Tool Classification
 
 Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.
