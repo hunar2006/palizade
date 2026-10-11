@@ -187,6 +187,15 @@ export const palizadeConfigSchema = z.object({
     tokenPath: ".palizade/listener.token",
     allowRemote: false
   }),
+  hooks: z.object({
+    failMode: z.enum(["closed", "open"]).default("closed"),
+    timeoutMs: z.number().int().min(1000).default(30_000),
+    maxInputBytes: z.number().int().min(1024).default(1024 * 1024)
+  }).default({
+    failMode: "closed",
+    timeoutMs: 30_000,
+    maxInputBytes: 1024 * 1024
+  }),
   taint: z.object({
     quarantine: z.object({
       scoreGte: z.number().min(0).max(1).default(0.85),
