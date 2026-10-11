@@ -5,7 +5,7 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText, stripHiddenUnicode } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
+import { expireExposure, expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
@@ -250,7 +250,10 @@ export class InterceptionEngine {
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
     await this.expireQuarantine();
-    const session = this.options.taintStore.getSession(this.options.sessionId);
+    let session = this.options.taintStore.getSession(this.options.sessionId);
+    if (expireExposure(session, this.options.config.taint.exposure.ttlMs) !== session) {
+      session = this.options.taintStore.updateSession(this.options.sessionId, (state) => expireExposure(state, this.options.config.taint.exposure.ttlMs));
+    }
     const ruleOfTwo = session.seenUntrusted && session.seenSensitive;
     const argumentText = flattenArguments(params.arguments);
     const matchCache = new Map<string, TaintMatch[]>();
@@ -1147,11 +1150,12 @@ export class InterceptionEngine {
       if (!provenanceCache.has(text)) provenanceCache.set(text, this.options.taintStore.match(this.options.sessionId, text, { persistentOnly: true }).filter((match) => match.reason !== "temporal").map((match) => this.options.taintStore.get(match.taintId)).filter((record): record is TaintRecord => Boolean(record?.persistent)));
       return provenanceCache.get(text)!;
     };
-    if (contents.some((content) => Boolean(content.text))) this.options.taintStore.updateSession(this.options.sessionId, (state) => ({
-      ...state,
-      seenUntrusted: state.seenUntrusted || highRiskSource || contents.some((content) => persistentSources(content.text ?? "").length > 0) || detection.score >= this.options.config.taint.suspiciousScore,
-      seenSensitive: state.seenSensitive || sensitivePath || classification.capabilities.includes("reads_sensitive_data") || contents.some((content) => this.isSensitiveOrigin(sourceName, content) || persistentSources(content.text ?? "").some((record) => record.classes.includes("sensitive"))) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels)
-    }));
+    if (contents.some((content) => Boolean(content.text))) this.options.taintStore.updateSession(this.options.sessionId, (previous) => {
+      const state = expireExposure(previous, this.options.config.taint.exposure.ttlMs);
+      const untrusted = highRiskSource || contents.some((content) => persistentSources(content.text ?? "").length > 0) || detection.score >= this.options.config.taint.suspiciousScore;
+      const sensitive = sensitivePath || classification.capabilities.includes("reads_sensitive_data") || contents.some((content) => this.isSensitiveOrigin(sourceName, content) || persistentSources(content.text ?? "").some((record) => record.classes.includes("sensitive"))) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
+      return { ...state, seenUntrusted: state.seenUntrusted || untrusted, seenSensitive: state.seenSensitive || sensitive, exposureExpiresAt: untrusted || sensitive ? Date.now() + this.options.config.taint.exposure.ttlMs : state.exposureExpiresAt };
+    });
     return contents
       .filter((content) => content.text && content.text.trim().length >= 8 && content.kind !== "binary")
       .flatMap((content) => {

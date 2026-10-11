@@ -155,6 +155,8 @@ Palizade blocked this tool call. Rule: block-tainted-sink. Reason: Tainted conte
 
 Inspect quarantine with `palizade session quarantine`; clear it explicitly with `palizade session quarantine --clear [--session <id>]`. This clears quarantine only; seen-sensitive/untrusted flags and hard blocks remain active. High-score responses and blocked tainted/split/lookalike destinations quarantine the session; enforcing presets approval-gate subsequent sinks until expiry or operator clearance.
 
+Exposure flags expire after `taint.exposure.ttlMs` (default 7200000, two hours), refreshed on each new untrusted or sensitive exposure. Native hooks isolate flags, quarantine, grants and counters by the client's `session_id` (Cursor's `conversation_id`), while profile-scoped taint records remain shared. `palizade session reset [--session <id>]` clears session flags, quarantine, grants and counters without deleting taint records. With `--session`, reset/quarantine target that native client session; without it, they target the configured wrapper profile/run scope.
+
 Check local config and MCP coverage:
 
 ```bash
@@ -304,6 +306,7 @@ palizade audit verify
 palizade audit prune --older-than 30d
 palizade taint prune [--include-persistent]
 palizade session quarantine --clear [--session <id>]
+palizade session reset [--session <id>]
 palizade doctor
 ```
 

@@ -121,7 +121,7 @@ async function makeContext(fixture, mode) {
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
-    approvals: { mode: "static-approve", timeoutMs: 10, default: "approve" },
+    approvals: { mode: "static-allow", timeoutMs: 10, default: "allow" },
     detectors: {
       heuristic: true,
       promptGuard2: { enabled: false, model: "sinatras/Llama-Prompt-Guard-2-86M-ONNX", device: "cpu" },

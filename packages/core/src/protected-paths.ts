@@ -75,16 +75,18 @@ export function protectedWriteDiff(path: string, args: unknown, maxBytes: number
   if (Array.isArray(value.edits)) {
     after = before;
     for (const edit of value.edits) {
-      if (!edit || typeof edit.oldText !== "string" || typeof edit.newText !== "string") throw new Error("Invalid critical edit");
-      if (!after.includes(edit.oldText)) throw new Error("Critical edit does not match current content");
-      after = after.replace(edit.oldText, edit.newText);
+      const oldText = typeof edit?.old_string === "string" ? edit.old_string : edit?.oldText;
+      const newText = typeof edit?.new_string === "string" ? edit.new_string : edit?.newText;
+      if (typeof oldText !== "string" || typeof newText !== "string") throw new Error("Invalid critical edit");
+      if (!after.includes(oldText)) throw new Error("Critical edit does not match current content");
+      after = edit.replace_all ? after.replaceAll(oldText, () => newText) : after.replace(oldText, () => newText);
     }
   }
   const oldText = typeof value.old_string === "string" ? value.old_string : typeof value.oldText === "string" ? value.oldText : undefined;
   const newText = typeof value.new_string === "string" ? value.new_string : typeof value.newText === "string" ? value.newText : undefined;
   if (oldText !== undefined && newText !== undefined) {
     if (!before.includes(oldText)) throw new Error("Critical edit does not match current content");
-    after = before.replace(oldText, newText);
+    after = before.replace(oldText, () => newText);
   }
   // shortcut: unfamiliar edit formats cannot produce a full diff, add adapters when a supported tool supplies another edit format.
   if (after === undefined) return "No complete replacement content was supplied; review the critical target operation.";

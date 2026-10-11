@@ -50,6 +50,7 @@ export interface SqliteTaintStoreOptions {
   runId?: string;
   keyPath?: string;
   ttlMs?: number;
+  sessionScope?: "client";
 }
 
 export class SqliteTaintStore implements TaintStore {
@@ -58,6 +59,7 @@ export class SqliteTaintStore implements TaintStore {
   private readonly profileId: string;
   private readonly runId: string | undefined;
   private readonly ttlMs: number;
+  private readonly sessionScope: "client" | undefined;
   private readonly hmacKey: Buffer;
 
   constructor(private readonly path: string, options: SqliteTaintStoreOptions = {}) {
@@ -65,6 +67,7 @@ export class SqliteTaintStore implements TaintStore {
     this.profileId = options.profileId ?? "default";
     this.runId = options.runId;
     this.ttlMs = options.ttlMs ?? 86_400_000;
+    this.sessionScope = options.sessionScope;
     mkdirSync(dirname(path), { recursive: true });
     this.hmacKey = loadOrCreateHmacKey(options.keyPath ?? resolve(dirname(path), "taint.key"));
     const sqlite = requireNodeSqlite();
@@ -184,6 +187,7 @@ export class SqliteTaintStore implements TaintStore {
   }
 
   private sessionKey(sessionId: string): string {
+    if (this.sessionScope === "client") return `client:${JSON.stringify([this.profileId, sessionId])}`;
     if (this.runId) return `session:profile:${this.profileId}:run:${this.runId}`;
     return `session:${this.scopeId(sessionId)}`;
   }
