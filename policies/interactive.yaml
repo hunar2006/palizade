@@ -140,6 +140,12 @@ rules:
     action: sanitize
     reason: Strong injection signal in tool output.
 
+  # --- M3: persistent memory provenance ---
+  - id: approve-tainted-memory
+    when: { direction: request, capabilities_any: [persists_memory], taint: true }
+    action: require_approval
+    reason: Tainted content is being persisted into memory.
+
   - id: block-tainted-sink
     name: Require approval for tainted content entering sinks
     when:
@@ -181,7 +187,7 @@ rules:
     when:
       direction: request
       tool_class: sink
-      capabilities_any: [network_egress, sends_message, writes_remote]
+      capabilities_any: [network_egress, sends_message, writes_remote, persists_memory]
       rule_of_two: true
       destination_session_trusted: false
     action: require_approval

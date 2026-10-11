@@ -20,6 +20,14 @@ export class InMemoryTaintStore implements TaintStore {
 
   destinationKey(text: string): string { return sha256(text); }
 
+  promotePersistent(id: string): void {
+    const record = this.records.get(id);
+    if (!record) throw new Error("Missing taint provenance record");
+    record.persistent = true;
+    record.expiresAt = undefined;
+    record.classes = [...new Set<TaintClass>([...record.classes, "untrusted"])];
+  }
+
   add(input: AddTaintInput): TaintRecord {
     const record: TaintRecord = {
       id: newTaintId(),
@@ -29,6 +37,8 @@ export class InMemoryTaintStore implements TaintStore {
       trust: input.trust,
       createdAt: new Date().toISOString(),
       payloadHash: sha256(input.text),
+      persistent: input.persistent ?? false,
+      provenanceIds: input.provenanceIds ?? [],
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
@@ -54,7 +64,8 @@ export class InMemoryTaintStore implements TaintStore {
     const matches: TaintMatch[] = [];
 
     for (const record of this.records.values()) {
-      if (record.sessionId !== sessionId) {
+      if (options.persistentOnly && !record.persistent) continue;
+      if (record.sessionId !== sessionId && !record.persistent) {
         continue;
       }
       if (!matchesClassFilter(record.classes, options.classes)) {

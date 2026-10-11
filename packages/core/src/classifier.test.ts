@@ -44,4 +44,11 @@ describe("classifyToolDetailed", () => {
     expect(classifyToolDetailed("read_file", server, { name: "read_file", inputSchema: {}, annotations: { destructiveHint: true } }).toolClass).toBe("sink");
     expect(classifyToolDetailed("custom", server, { name: "custom", inputSchema: {}, annotations: { readOnlyHint: true } }).toolClass).toBe("unknown");
   });
+  it("classifies memory and vector writes as persistent sinks", () => {
+    for (const name of ["create_entities", "add_observations", "create_relations", "add_memory", "store_memory", "remember", "save_note", "upsert", "write_vector_store"]) {
+      expect(classifyToolDetailed(name, server).capabilities, name).toContain("persists_memory");
+      expect(classifyToolDetailed(name, server).toolClass, name).toBe("sink");
+    }
+    expect(classifyToolDetailed("get_memory", server).capabilities).not.toContain("persists_memory");
+  });
 });

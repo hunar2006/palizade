@@ -6,6 +6,8 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 
 ## Match Fields
 
+The `persists_memory` capability marks entity/observation/relation, remember/note and vector/upsert writes. Tainted memory writes require approval in default, interactive and egress; strict blocks them. Rule of Two includes this capability. Hard destination/secret blocks remain ahead of memory approval.
+
 - `critical_path`: a logical or symlink-resolved file argument matches a built-in/configured protected target or cannot be resolved safely. Enforcing presets require approval for writes; strict blocks tainted critical writes.
 - `argument_path_glob`: any configured glob matches a normalized logical/canonical argument path. Relative patterns match at any directory depth; `~` expands to the current user's home.
 - `output_path_allowed`: every file argument resolves within `protectedTargets.outputDirectory`; used by the research preset. Symlink/traversal escapes are excluded.

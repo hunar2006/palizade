@@ -184,6 +184,12 @@ rules:
     action: block
     reason: Split outbound calls reconstruct tainted content.
 
+  # --- M3: persistent memory provenance ---
+  - id: approve-tainted-memory
+    when: { direction: request, capabilities_any: [persists_memory], taint: true }
+    action: require_approval
+    reason: Tainted content is being persisted into memory.
+
   - id: allow-tainted-allowed-egress-destination
     name: Allow tainted data only to explicitly allowlisted egress destinations
     when:
@@ -202,6 +208,7 @@ rules:
         - writes_remote
     action: allow
     reason: Tainted egress destination is explicitly allowlisted.
+
 
   - id: block-tainted-sink
     name: Block tainted content entering sinks

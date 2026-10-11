@@ -147,6 +147,12 @@ rules:
     action: block
     reason: Split outbound calls reconstruct tainted content.
 
+  # --- M3: persistent memory provenance ---
+  - id: block-tainted-memory
+    when: { direction: request, capabilities_any: [persists_memory], taint: true }
+    action: block
+    reason: Tainted content is being persisted into memory.
+
   - id: block-tainted-sink
     when:
       direction: request
@@ -179,7 +185,7 @@ rules:
     when:
       direction: request
       tool_class: sink
-      capabilities_any: [network_egress, sends_message, writes_remote]
+      capabilities_any: [network_egress, sends_message, writes_remote, persists_memory]
       rule_of_two: true
       destination_session_trusted: false
     action: require_approval

@@ -11,6 +11,7 @@ export type ToolCapability =
   | "file_write"
   | "writes_local"
   | "writes_remote"
+  | "persists_memory"
   | "deletes_data"
   | "executes_code"
   | "sends_message"

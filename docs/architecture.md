@@ -123,6 +123,8 @@ The internal model uses capability flags such as `network_egress`, `sends_messag
 
 ## Shared Taint
 
+Memory/vector writes carry `persists_memory`. When an observable tainted write is approved, its original fingerprints become persistent untrusted provenance with no TTL; transformed written fields also receive persistent fingerprints linked to original IDs. Later matching memory reads retain original source identity and IDs in audit `taintSources`. Persistent records remain within their profile but match across subsequent logical runs. `taint prune` preserves these records unless `--include-persistent` is explicitly supplied.
+
 Sink attempts (including denied attempts) update shared session counters atomically. The rolling minute stores timestamps; distinct destinations and repeated tool/argument signatures are HMACs in SQLite. Tracking is bounded by `limits.historyEntries` (1000); exhaustion gates further sinks rather than dropping evidence. Repeats and destination counts last for the logical session, while call-rate timestamps expire after one minute.
 
 High-score source/tool responses (default 0.85) and hard blocks on tainted/split/lookalike destinations start shared quarantine. It expires after `taint.quarantine.turns` (20 sink attempts) or `ttlMs` (1800000), whichever occurs first. Start/end/clear events are audited separately. Session destination grants do not suppress quarantine. Expiry is evaluated on the next sink attempt.

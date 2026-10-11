@@ -180,6 +180,8 @@ Palizade blocked this tool call. Rule: block-tainted-sink. Reason: Tainted conte
 
 ## Debugging
 
+`palizade taint prune` skips persistent memory provenance. `palizade taint prune --include-persistent` explicitly removes persistent records in the current profile as well as expired normal records. Approved tainted memory writes have no provenance TTL; later reads retain the original source in audit metadata.
+
 Inspect quarantine with `palizade session quarantine`; clear it explicitly with `palizade session quarantine --clear [--session <id>]`. This clears quarantine only; seen-sensitive/untrusted flags and hard blocks remain active. High-score responses and blocked tainted/split/lookalike destinations quarantine the session; enforcing presets approval-gate subsequent sinks until expiry or operator clearance.
 
 Check local config and MCP coverage:

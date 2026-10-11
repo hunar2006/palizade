@@ -443,7 +443,8 @@ const taint = program.command("taint")
 
 taint.command("prune")
   .description("Prune expired taint records")
-  .action(async () => {
+  .option("--include-persistent", "Also remove persistent memory provenance in this profile", false)
+  .action(async (options: { includePersistent: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const store = new SqliteTaintStore(config.taint.sqlite, {
@@ -453,7 +454,7 @@ taint.command("prune")
       ttlMs: config.taint.ttlMs,
       ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
     });
-    const pruned = store.pruneExpired();
+    const pruned = store.pruneExpired(new Date(), options.includePersistent);
     store.close();
     console.log(`Pruned ${pruned} taint record(s).`);
   });

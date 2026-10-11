@@ -5,7 +5,7 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText, stripHiddenUnicode } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { expandCandidates, canonicalHost, hostSkeleton, OutboundWindow } from "@palizade/taint";
+import { expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
@@ -239,6 +239,7 @@ export class InterceptionEngine {
     let sensitiveTaint = sensitiveMatches.some((match) => match.reason !== "temporal") || sensitiveFieldMatches.some(({ match }) => match.reason !== "temporal");
     const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
     const entries = destinationEntries(argumentFields);
+    if (classification.capabilities.includes("persists_memory") && entries.length === 0) entries.push(`memory:${this.options.serverName}`);
     const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
     const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
     const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
@@ -384,6 +385,16 @@ export class InterceptionEngine {
         ],
         toServer: []
       };
+    }
+
+    if (classification.capabilities.includes("persists_memory")) {
+      for (const taintId of dedupePreservingOrder(allTaintMatches.filter((match) => match.reason !== "temporal").map((match) => match.taintId))) this.options.taintStore.promotePersistent(taintId);
+      for (const block of argumentBlocks) {
+        const sources = matchText(block.text).filter((match) => match.reason !== "temporal").map((match) => this.options.taintStore.get(match.taintId)).filter((record): record is TaintRecord => Boolean(record));
+        if (!sources.length || sources.some((source) => source.persistent && source.payloadHash === sha256(block.text))) continue;
+        const source = sources[0]!;
+        this.options.taintStore.add({ sessionId: this.options.sessionId, sourceServer: source.sourceServer, sourceTool: source.sourceTool, trust: source.trust, text: block.text, detectorScore: source.detectorScore, labels: source.labels, classes: dedupePreservingOrder<TaintClass>(["untrusted", ...sources.flatMap((record) => record.classes)]), persistent: true, provenanceIds: sources.map((record) => record.id) });
+      }
     }
 
     if (policyDecision.action === "redact_secrets") {
@@ -1073,29 +1084,37 @@ export class InterceptionEngine {
 
   private registerTaintFromContents(sourceName: string, classification: ToolClassification, contents: ExtractedContent[], detection: DetectionResult, sensitivePath = false): TaintRecord[] {
     const highRiskSource = this.options.server.trust === "untrusted" || classification.toolClass === "source" || classification.capabilities.includes("reads_untrusted_content");
+    const provenanceCache = new Map<string, TaintRecord[]>();
+    const persistentSources = (text: string): TaintRecord[] => {
+      if (!provenanceCache.has(text)) provenanceCache.set(text, this.options.taintStore.match(this.options.sessionId, text, { persistentOnly: true }).filter((match) => match.reason !== "temporal").map((match) => this.options.taintStore.get(match.taintId)).filter((record): record is TaintRecord => Boolean(record?.persistent)));
+      return provenanceCache.get(text)!;
+    };
     if (contents.some((content) => Boolean(content.text))) this.options.taintStore.updateSession(this.options.sessionId, (state) => ({
       ...state,
-      seenUntrusted: state.seenUntrusted || highRiskSource || detection.score >= this.options.config.taint.suspiciousScore,
-      seenSensitive: state.seenSensitive || sensitivePath || classification.capabilities.includes("reads_sensitive_data") || contents.some((content) => this.isSensitiveOrigin(sourceName, content)) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels)
+      seenUntrusted: state.seenUntrusted || highRiskSource || contents.some((content) => persistentSources(content.text ?? "").length > 0) || detection.score >= this.options.config.taint.suspiciousScore,
+      seenSensitive: state.seenSensitive || sensitivePath || classification.capabilities.includes("reads_sensitive_data") || contents.some((content) => this.isSensitiveOrigin(sourceName, content) || persistentSources(content.text ?? "").some((record) => record.classes.includes("sensitive"))) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels)
     }));
     return contents
       .filter((content) => content.text && content.text.trim().length >= 8 && content.kind !== "binary")
       .flatMap((content) => {
-        const untrusted = highRiskSource || detection.score >= this.options.config.taint.suspiciousScore;
-        const sensitive = sensitivePath || classification.capabilities.includes("reads_sensitive_data") || this.isSensitiveOrigin(sourceName, content) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
+        const provenance = persistentSources(content.text ?? "");
+        const untrusted = provenance.length > 0 || highRiskSource || detection.score >= this.options.config.taint.suspiciousScore;
+        const sensitive = provenance.some((record) => record.classes.includes("sensitive")) || sensitivePath || classification.capabilities.includes("reads_sensitive_data") || this.isSensitiveOrigin(sourceName, content) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
         const classes = taintClasses({ untrusted, sensitive });
         if (classes.length === 0) {
           return [];
         }
         return [this.options.taintStore.add({
           sessionId: this.options.sessionId,
-          sourceServer: this.options.serverName,
-          sourceTool: content.sourceToolOrResource ?? sourceName,
+          sourceServer: provenance[0]?.sourceServer ?? this.options.serverName,
+          sourceTool: provenance[0]?.sourceTool ?? content.sourceToolOrResource ?? sourceName,
           trust: this.options.server.trust,
           text: content.text ?? "",
           detectorScore: detection.score,
           labels: detection.labels,
-          classes
+          classes,
+          persistent: provenance.length > 0,
+          provenanceIds: dedupePreservingOrder(provenance.flatMap((record) => [record.id, ...(record.provenanceIds ?? [])]))
         })];
       });
   }
@@ -1457,7 +1476,8 @@ export class InterceptionEngine {
         era: this.serverEra ?? this.clientEra,
         ...extra.metadata,
         matchReasons: dedupePreservingOrder(extra.taintMatches?.map((match) => match.reason) ?? []),
-        metadataReview: extra.metadataReview
+        metadataReview: extra.metadataReview,
+        taintSources: (extra.taintIds ?? extra.taintMatches?.map((match) => match.taintId) ?? []).map((id) => this.options.taintStore.get(id)).filter((record): record is TaintRecord => Boolean(record)).map((record) => ({ id: record.id, server: record.sourceServer, tool: record.sourceTool, persistent: record.persistent ?? false, provenanceIds: record.provenanceIds ?? [] }))
       }
     });
   }

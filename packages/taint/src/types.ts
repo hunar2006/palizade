@@ -23,6 +23,8 @@ export interface TaintRecord {
   createdAt: string;
   expiresAt?: string | undefined;
   payloadHash: string;
+  persistent?: boolean;
+  provenanceIds?: string[];
   detectorScore: number;
   labels: string[];
   classes: TaintClass[];
@@ -38,6 +40,8 @@ export interface TaintMatch {
 }
 
 export interface AddTaintInput {
+  persistent?: boolean;
+  provenanceIds?: string[];
   profileId?: string | undefined;
   scopeId?: string | undefined;
   runId?: string | undefined;
@@ -52,6 +56,7 @@ export interface AddTaintInput {
 }
 
 export interface TaintMatchOptions {
+  persistentOnly?: boolean;
   sensitiveFragments?: boolean;
   fuzzyHammingMax?: number;
   minNormalizedLength?: number;
@@ -59,6 +64,7 @@ export interface TaintMatchOptions {
 }
 
 export interface TaintStore {
+  promotePersistent(id: string): void;
   getSession(sessionId: string): SessionState;
   updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState;
   destinationKey(text: string): string;

@@ -5,7 +5,7 @@ import { StaticApprovalProvider, type ApprovalDecision, type ApprovalProvider, t
 import { AuditLogger, type AuditEvent } from "@palizade/audit";
 import { DetectorPipeline, HeuristicDetector, SensitiveDataDetector, type Detector } from "@palizade/detectors";
 import { loadPolicyFile, parsePolicy } from "@palizade/policy";
-import { InMemoryTaintStore } from "@palizade/taint";
+import { InMemoryTaintStore, type TaintStore } from "@palizade/taint";
 import { describe, expect, it, vi } from "vitest";
 import type { PalizadeConfig } from "./config.js";
 import { InterceptionEngine } from "./interceptor.js";
@@ -27,6 +27,26 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("approval-gates memory writes and carries durable original provenance on a later read", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "save it" });
+    const store = new InMemoryTaintStore();
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, taintStore: store });
+    try {
+      const text = await seedTaintedRead(engine);
+      const original = store.all()[0]!;
+      const write = (observation: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 100, method: "tools/call", params: { name: "create_entities", arguments: { entities: [{ name: "note", entityType: "page", observations: [observation] }] } } });
+      expect((await write("A user-authored note.")).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(0);
+      expect((await write(text)).toServer).toHaveLength(1);
+      expect(approvals.requests.at(-1)?.details?.matchedRuleId).toBe("approve-tainted-memory");
+      expect(store.get(original.id)?.persistent).toBe(true);
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 101, method: "tools/call", params: { name: "get_memory" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 101, result: { content: [{ type: "text", text }] } });
+      expect(JSON.stringify(events.at(-1)?.metadata)).toContain("read_web");
+      expect(JSON.stringify(events.at(-1)?.metadata)).toContain(original.id);
+      expect(events.at(-1)?.taint_ids).not.toHaveLength(0);
+    } finally { await cleanup(); }
+  });
   it("asks for an untainted critical write with a diff and passes a normal source write", async () => {
     const approvals = new RecordingApprovalProvider({ approved: true, reason: "reviewed" });
     let cwd = "";
@@ -748,6 +768,7 @@ async function makeEngine(
     detector?: Detector;
     captureRawPayloads?: boolean;
     approvals?: ApprovalProvider;
+    taintStore?: TaintStore;
     configure?: (config: PalizadeConfig) => void;
   } = {}
 ): Promise<{ engine: InterceptionEngine; events: AuditEvent[]; cleanup: () => Promise<void> }> {
@@ -820,7 +841,7 @@ async function makeEngine(
       sessionId: "test-session",
       policy: activePolicy,
       detector: options.detector ?? new HeuristicDetector(),
-      taintStore: new InMemoryTaintStore(),
+      taintStore: options.taintStore ?? new InMemoryTaintStore(),
       audit: new AuditLogger([{ write: async (event) => { events.push(event); } }], { captureRawPayloads: options.captureRawPayloads ?? false }),
       approvals: options.approvals ?? new StaticApprovalProvider(false, "test denies approval"),
       lockfile: new LockfileStore(config.lockfile)
