@@ -44,6 +44,12 @@ Upstream MCP server
 
 ## Features
 
+Split outbound payloads are correlated per session/destination in a bounded memory window. Default requires approval for reconstructed taint; strict and egress block it. Eight-character sensitive shard fingerprints are stored as HMACs. This covers bounded observable encodings and fragments; custom transformations and cross-process splits remain limitations.
+
+`egress.mode` defaults to `open` for compatibility. Use `approve_new` with the default preset: new destinations offer allow once, allow always, or deny. Allow always writes `palizade.allow.yaml` beside the config and reloads it on the next call. `allowlist_only` blocks unknown destinations; the strict preset enforces this even with mode `open`. Additional ID destinations can be listed in `egress.allowlist.destinations` as `channel_id:<id>`, `account_id:<id>` or `repository_destination:<id>`.
+
+The enforcing presets now block destinations copied from untrusted content before generic sink rules, including configured channel/account IDs. Lookalike hosts are blocked when they collide with an allowlisted or tainted hostname. Matching strips hidden Unicode and expands bounded encodings without rewriting the displayed payload.
+
 Inbound defense:
 
 - Taint tracking for untrusted tool output, resources, prompts, and suspicious content.

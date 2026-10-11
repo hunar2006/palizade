@@ -4,6 +4,23 @@ defaults:
   on_error: block
 
 rules:
+  # --- M1: strict default deny egress ---
+  - id: block-new-destination
+    when: { direction: request, tool_class: sink, new_destination: true }
+    action: block
+    reason: Strict mode allows only allowlisted egress destinations.
+
+  # --- M1: destination provenance ---
+  - id: block-tainted-destination
+    when: { direction: request, tool_class: sink, tainted_destination: true }
+    action: block
+    reason: Destination came from untrusted content.
+
+  - id: block-lookalike-destination
+    when: { direction: request, tool_class: sink, lookalike_destination: true }
+    action: block
+    reason: Destination is a lookalike of a known host.
+
   - id: deny-server-sampling
     when:
       direction: request
@@ -90,6 +107,12 @@ rules:
         - network_egress
     action: redact_secrets
     reason: PII-like content should be redacted before egress.
+
+  # --- M1: split-call correlation ---
+  - id: block-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: block
+    reason: Split outbound calls reconstruct tainted content.
 
   - id: block-tainted-sink
     when:

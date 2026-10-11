@@ -28,6 +28,7 @@ export const serverConfigSchema = z.object({
   trust: trustSchema.default("untrusted"),
   toolClasses: z.record(z.string(), toolClassSchema).default({}),
   toolCapabilities: z.record(z.string(), z.array(capabilitySchema)).default({}),
+  argumentRoles: z.record(z.string(), z.record(z.string(), z.enum(["url", "hostname", "email_recipient", "file_path", "shell_command", "repository_destination", "channel_id", "account_id", "http_header", "http_query", "body", "unknown"]))).default({}),
   sensitive: z.boolean().default(false),
   sensitiveTools: z.record(z.string(), z.boolean()).default({}),
   sensitivePathPatterns: z.array(z.string()).default([]),
@@ -109,12 +110,16 @@ export const palizadeConfigSchema = z.object({
     pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
   }),
   egress: z.object({
+    mode: z.enum(["allowlist_only", "approve_new", "open"]).default("open"),
+    learnedFile: z.string().default("palizade.allow.yaml"),
     allowlist: z.object({
       hosts: z.array(z.string()).default([]),
-      emails: z.array(z.string()).default([])
-    }).default({ hosts: [], emails: [] })
+      emails: z.array(z.string()).default([]),
+      destinations: z.array(z.string()).default([])
+    }).default({ hosts: [], emails: [], destinations: [] })
   }).default({
-    allowlist: { hosts: [], emails: [] }
+    mode: "open", learnedFile: "palizade.allow.yaml",
+    allowlist: { hosts: [], emails: [], destinations: [] }
   }),
   transport: z.object({
     maxMessageBytes: z.number().int().min(1024).default(64 * 1024 * 1024),
@@ -128,6 +133,16 @@ export const palizadeConfigSchema = z.object({
     allowContentLength: false
   }),
   taint: z.object({
+    window: z.object({
+      calls: z.number().int().min(1).max(100).default(12),
+      ttlMs: z.number().int().positive().default(900_000),
+      maxBytes: z.number().int().positive().default(262144),
+      maxDestinations: z.number().int().positive().default(256)
+    }).default({ calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 }),
+    decode: z.object({
+      maxDepth: z.number().int().min(0).max(8).default(2),
+      maxBytes: z.number().int().positive().default(256 * 1024)
+    }).default({ maxDepth: 2, maxBytes: 256 * 1024 }),
     sqlite: z.string().default(".palizade/taint.sqlite"),
     keyPath: z.string().default(".palizade/taint.key"),
     scope: z.enum(["process", "profile", "external_run_id"]).default("profile"),
@@ -143,6 +158,8 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
+    decode: { maxDepth: 2, maxBytes: 256 * 1024 },
     keyPath: ".palizade/taint.key",
     scope: "profile",
     profileId: "default",
@@ -172,6 +189,7 @@ export function resolveConfigPaths(config: PalizadeConfig, baseDir = process.cwd
   return {
     ...config,
     stateDir: resolvePath(baseDir, config.stateDir),
+    egress: { ...config.egress, learnedFile: resolvePath(baseDir, config.egress.learnedFile) },
     policy: resolvePath(baseDir, config.policy),
     lockfile: resolvePath(baseDir, config.lockfile),
     audit: {

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StaticApprovalProvider, type ApprovalDecision, type ApprovalProvider, type ApprovalRequest } from "@palizade/approvals";
@@ -27,6 +27,85 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("catches a sensitive key split across four calls and passes unrelated chunks", async () => {
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/egress.yaml"), { configure: (config) => { config.taint.temporal.enabled = false; config.servers.toy!.sensitiveTools.read_web = true; config.egress.allowlist.hosts = ["known.test"]; } });
+    try {
+      const key = "AKIAIOSFODNN7EXAMPLE";
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 50, method: "tools/call", params: { name: "read_web" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 50, result: { content: [{ type: "text", text: key }] } });
+      const send = (body: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 51, method: "tools/call", params: { name: "send_email", arguments: { url: "https://known.test", body } } });
+      for (const body of ["apple", "house", "river", "train"]) expect((await send(body)).toServer).toHaveLength(1);
+      const results = [];
+      for (let start = 0; start < key.length; start += 5) results.push(await send(key.slice(start, start + 5)));
+      expect(results[0]!.toServer).toHaveLength(1);
+      expect(results.at(-1)!.toServer).toHaveLength(0);
+    } finally { await cleanup(); }
+  });
+  it("asks once for a new host then honors an explicit allow-always grant", async () => {
+    const approvals = new RecordingApprovalProvider({ approved: true, reason: "remember", remember: "always" });
+    let learned = "";
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, configure: (config) => { config.egress.mode = "approve_new"; learned = config.egress.learnedFile; } });
+    try {
+      const send = () => engine.handleClientMessage({ jsonrpc: "2.0", id: 40, method: "tools/call", params: { name: "send_email", arguments: { url: "https://new.example.test/" } } });
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+      expect(approvals.requests[0]?.details?.allowAlways).toBe(true);
+      expect(await readFile(learned, "utf8")).toContain("new.example.test");
+      expect((await send()).toServer).toHaveLength(1);
+      expect(approvals.requests).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("blocks a new host in allowlist-only mode and permits a configured host", async () => {
+    const { engine, cleanup } = await makeEngine(policy, { configure: (config) => { config.egress.mode = "allowlist_only"; config.egress.allowlist.hosts = ["known.test"]; } });
+    try {
+      const send = (url: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 40, method: "tools/call", params: { name: "send_email", arguments: { url } } });
+      expect((await send("https://new.test")).toServer).toHaveLength(0);
+      expect((await send("https://known.test")).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("blocks a copied recipient or Slack channel before generic sink rules", async () => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"));
+    try {
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 30, method: "tools/call", params: { name: "read_web" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 30, result: { content: [{ type: "text", text: "Contact copied@example.test or channel C123456789" }] } });
+      for (const [name, args] of [["send_email", { to: "copied@example.test" }], ["slack_post_message", { channel: "C123456789" }]] as const) {
+        expect((await engine.handleClientMessage({ jsonrpc: "2.0", id: 31, method: "tools/call", params: { name, arguments: args } })).toServer).toHaveLength(0);
+        expect(events.at(-1)?.matched_rule?.id).toBe("block-tainted-destination");
+      }
+      expect((await engine.handleClientMessage({ jsonrpc: "2.0", id: 32, method: "tools/call", params: { name: "send_email", arguments: { to: "user@example.test", body: "hello" } } })).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("blocks an allowlist lookalike while permitting the original host", async () => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { configure: (config) => { config.egress.allowlist.hosts = ["paypal.com"]; } });
+    try {
+      const send = (url: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 33, method: "tools/call", params: { name: "send_email", arguments: { url } } });
+      expect((await send("https://pаypal.com")).toServer).toHaveLength(0);
+      expect(events.at(-1)?.matched_rule?.id).toBe("block-lookalike-destination");
+      expect((await send("https://paypal.com")).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
+  it("blocks encoded taint in a URL and records only the decode reason", async () => {
+    const { engine, events, cleanup } = await makeEngine();
+    try {
+      const text = await seedTaintedRead(engine);
+      const output = await engine.handleClientMessage({ jsonrpc: "2.0", id: 19, method: "tools/call", params: { name: "send_email", arguments: { url: `https://user.test/?q=${Buffer.from(text).toString("base64")}` } } });
+      expect(output.toServer).toHaveLength(0);
+      expect(JSON.stringify(events.at(-1)?.metadata)).toContain("decoded:base64");
+      expect(JSON.stringify(events)).not.toContain(text);
+    } finally { await cleanup(); }
+  });
+  it("blocks a hex-encoded sensitive AWS key and passes a benign image", async () => {
+    const activePolicy = parsePolicy(`version: 1\ndefaults: { action: allow, on_error: block }\nrules:\n  - id: sensitive\n    when: { direction: request, sensitive_taint: true }\n    action: block\n`);
+    const { engine, cleanup } = await makeEngine(activePolicy, { detector: new SensitiveDataDetector({ secrets: { enabled: true } }), configure: (config) => { config.taint.temporal.enabled = false; } });
+    try {
+      const key = "AKIAIOSFODNN7EXAMPLE";
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 17, method: "tools/call", params: { name: "read_web" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 17, result: { content: [{ type: "text", text: key }] } });
+      const send = (body: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 18, method: "tools/call", params: { name: "send_email", arguments: { body } } });
+      expect((await send(Buffer.from(key).toString("hex"))).toServer).toHaveLength(0);
+      expect((await send(Buffer.from([137, 80, 78, 71, 0, 0, 0, 0, 255, 255, 255, 255]).toString("base64"))).toServer).toHaveLength(1);
+    } finally { await cleanup(); }
+  });
   it("sanitizes suspicious source output and blocks tainted sink reuse", async () => {
     const { engine, events, cleanup } = await makeEngine();
     try {
@@ -617,9 +696,11 @@ async function makeEngine(
       secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
       pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
     },
-    egress: { allowlist: { hosts: [], emails: [] } },
+    egress: { mode: "open", learnedFile: join(dir, "palizade.allow.yaml"), allowlist: { hosts: [], emails: [], destinations: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     taint: {
+      window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
+      decode: { maxDepth: 2, maxBytes: 256 * 1024 },
       sqlite: join(dir, "taint.sqlite"),
       keyPath: join(dir, "taint.key"),
       scope: "profile",
@@ -638,6 +719,7 @@ async function makeEngine(
         trust: "untrusted",
         toolClasses: { read_web: "source", send_email: "sink" },
         toolCapabilities: {},
+        argumentRoles: {},
         sensitive: false,
         sensitiveTools: {},
         sensitivePathPatterns: [],

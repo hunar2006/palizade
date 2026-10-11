@@ -5,11 +5,15 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
+import { expandCandidates, canonicalHost, hostSkeleton, OutboundWindow } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
+import { palizadeConfigSchema, serverConfigSchema } from "./config.js";
+import { dirname, resolve } from "node:path";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
+import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
 import {
   isRequest,
   isSuccess,
@@ -59,8 +63,15 @@ interface PendingClientRequest {
 export class InterceptionEngine {
   private readonly pendingClient = new Map<string, PendingClientRequest>();
   private readonly knownTools = new Map<string, McpTool>();
+  private readonly learnedEgress: LearnedEgress;
+  private readonly outboundWindow = new OutboundWindow();
 
-  constructor(private readonly options: InterceptionEngineOptions) {}
+  constructor(private readonly options: InterceptionEngineOptions) {
+    const config = palizadeConfigSchema.parse(options.config);
+    if (!options.config.egress.learnedFile) config.egress.learnedFile = resolve(dirname(config.lockfile), "palizade.allow.yaml");
+    this.options = { ...options, config, server: serverConfigSchema.parse(options.server) };
+    this.learnedEgress = new LearnedEgress(config.egress.learnedFile);
+  }
 
   async handleClientMessage(message: JsonRpcMessage): Promise<EngineOutput> {
     if (!isRequest(message)) {
@@ -74,7 +85,14 @@ export class InterceptionEngine {
     }
 
     if (message.method === "tools/call") {
-      return this.handleToolCallRequest(message);
+      try { return await this.handleToolCallRequest(message); }
+      catch {
+        const decision: PolicyDecision = { action: this.options.policy.defaults.on_error, reason: "Security decision failed", failClosed: true };
+        const approval = await this.maybeApprove(decision, { method: message.method, toolClass: "unknown", taintMatches: [], summary: "Security decision failed." });
+        await this.auditDecision(message, "request", approval.decision, Date.now());
+        if (approval.approved && decision.action !== "block") { this.recordPending(message); return { toClient: [], toServer: [message] }; }
+        return { toClient: message.id === undefined ? [] : [makeToolErrorResultResponse(message.id, "Palizade blocked this tool call: security decision failed.")], toServer: [] };
+      }
     }
 
     this.recordPending(message);
@@ -132,7 +150,14 @@ export class InterceptionEngine {
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
     const argumentText = flattenArguments(params.arguments);
-    const argumentFields = extractArgumentFields(params.arguments);
+    const matchCache = new Map<string, TaintMatch[]>();
+    const matchText = (text: string): TaintMatch[] => {
+      if (!matchCache.has(text)) matchCache.set(text, expandCandidates(text, this.options.config.taint.decode).flatMap((candidate) =>
+        this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax })
+          .map((match): TaintMatch => ({ ...match, reason: candidate.kind === "original" || match.reason === "temporal" ? match.reason : `decoded:${candidate.kind}` }))));
+      return matchCache.get(text)!;
+    };
+    const argumentFields = extractArgumentFields(params.arguments, tool, this.options.server.argumentRoles?.[tool]);
     const argumentBlocks = extractTextBlocks(params.arguments);
     const argumentDetections = await Promise.all(argumentBlocks.map(async (block) => ({
       block,
@@ -145,34 +170,40 @@ export class InterceptionEngine {
     })));
     const argumentDetection = fuseDetections(argumentDetections.map((entry) => entry.detection));
     const argumentDetectionsByPath = new Map(argumentDetections.map((entry) => [pathKey(entry.block), entry.detection]));
-    const matches = this.options.taintStore.match(this.options.sessionId, argumentText, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax
-    });
-    const fieldMatches = argumentFields.flatMap((field) => this.options.taintStore.match(this.options.sessionId, field.text, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax
-    }).map((match) => ({ field, match })));
-    const sensitiveMatches = this.options.taintStore.match(this.options.sessionId, argumentText, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
-      classes: ["sensitive"]
-    });
-    const sensitiveFieldMatches = argumentFields.flatMap((field) => this.options.taintStore.match(this.options.sessionId, field.text, {
-      fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax,
-      classes: ["sensitive"]
-    }).map((match) => ({ field, match })));
+    const matches = matchText(argumentText);
+    const fieldMatches = argumentFields.flatMap((field) => matchText(field.text).map((match) => ({ field, match })));
+    const sensitiveMatches = matches.filter((match) => match.classes?.includes("sensitive"));
+    const sensitiveFieldMatches = fieldMatches.filter(({ match }) => match.classes?.includes("sensitive"));
     const taintedArgumentRoles = [...new Set(fieldMatches.map(({ field }) => field.role))];
+    const taintedDestination = fieldMatches.some(({ field, match }) => ["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id"].includes(field.role) && match.reason !== "temporal" && match.classes?.includes("untrusted"));
     const temporal = matches.some((match) => match.reason === "temporal") || this.options.taintStore.hasTemporal(this.options.sessionId);
     const secretDetected = hasSecretLabel(argumentDetection.labels);
     const piiDetected = hasPiiLabel(argumentDetection.labels);
-    const sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
-    const destination = summarizeDestinations(argumentFields, this.options.config.egress.allowlist);
+    let sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
+    const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
+    const entries = destinationEntries(argumentFields);
+    const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
+    const splitMatches = toolClass !== "sink" ? [] : entries.flatMap((entry) => {
+      const payload = argumentFields.filter((field) => !field.path.includes("<") && !["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role)).map((field) => field.text).join("");
+      const combined = this.outboundWindow.append(this.options.sessionId, entry, payload || argumentText, this.options.config.taint.window);
+      return combined === undefined ? [] : expandCandidates(combined, this.options.config.taint.decode).flatMap((candidate) => this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax, sensitiveFragments: true }).filter((match) => match.reason !== "temporal"));
+    });
+    const splitMatch = splitMatches.some((match) => !matches.some((current) => current.reason !== "temporal" && current.taintId === match.taintId));
+    sensitiveTaint ||= splitMatches.some((match) => match.classes?.includes("sensitive"));
+    const destination = summarizeDestinations(argumentFields, allowlist);
+    const lookalikeDestination = destination.hosts.some((host) => {
+      const skeleton = hostSkeleton(host);
+      return skeleton !== canonicalHost(host) && (allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
+    });
     const allTaintMatches = [
       ...matches,
       ...fieldMatches.map(({ match }) => match),
       ...sensitiveMatches,
-      ...sensitiveFieldMatches.map(({ match }) => match)
+      ...sensitiveFieldMatches.map(({ match }) => match),
+      ...splitMatches
     ];
 
-    const decision = evaluatePolicy(this.options.policy, {
+    const policyDecision = evaluatePolicy(this.options.policy, {
       direction: "request",
       method: message.method,
       server: this.options.serverName,
@@ -186,6 +217,10 @@ export class InterceptionEngine {
       secret_detected: secretDetected,
       pii_detected: piiDetected,
       destination_allowed: destination.allowed,
+      tainted_destination: taintedDestination,
+      lookalike_destination: lookalikeDestination,
+      new_destination: newDestination,
+      split_match: splitMatch,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,
@@ -194,12 +229,20 @@ export class InterceptionEngine {
       tainted_argument_roles: taintedArgumentRoles
     });
 
+    const egressGate = toolClass === "sink" && newDestination && this.options.config.egress.mode !== "open";
+    const decision: PolicyDecision = policyDecision.action === "block" || !egressGate ? policyDecision : {
+      action: this.options.config.egress.mode === "allowlist_only" ? "block" : "require_approval",
+      matchedRuleId: "egress-new-destination",
+      reason: "Destination is not in the egress allowlist."
+    };
+
     const approval = await this.maybeApprove(decision, {
       method: message.method,
       tool,
       toolClass,
       classification,
       taintMatches: allTaintMatches,
+      rememberDestinations: egressGate && decision.action === "require_approval" ? entries : [],
       summary: formatToolCallApprovalSummary({
         tool,
         toolClass,
@@ -225,7 +268,7 @@ export class InterceptionEngine {
       secretDetected,
       piiDetected,
       taintClasses: classesFromMatches(allTaintMatches),
-      redacted: decision.action === "redact_secrets"
+      redacted: policyDecision.action === "redact_secrets"
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);
@@ -242,7 +285,7 @@ export class InterceptionEngine {
       };
     }
 
-    if (decision.action === "redact_secrets") {
+    if (policyDecision.action === "redact_secrets") {
       const redactedArguments = applyTextTransforms(params.arguments, (text, block) => maskSensitiveText(text, argumentDetectionsByPath.get(pathKey(block))?.spans));
       this.recordPending(message, tool);
       return {
@@ -761,6 +804,7 @@ export class InterceptionEngine {
       classification?: ToolClassification;
       taintMatches: Array<TaintMatch | { taintId: string; reason: string }>;
       summary: string;
+      rememberDestinations?: string[];
     }
   ): Promise<{ approved: boolean; decision: PolicyDecision }> {
     if (decision.action !== "require_approval") {
@@ -778,9 +822,11 @@ export class InterceptionEngine {
       details: {
         toolClass: input.toolClass,
         capabilities: input.classification?.capabilities,
-        matchedRuleId: decision.matchedRuleId
+        matchedRuleId: decision.matchedRuleId,
+        allowAlways: Boolean(input.rememberDestinations?.length)
       }
     }));
+    if (approval.approved && approval.remember === "always" && input.rememberDestinations?.length) this.learnedEgress.remember(input.rememberDestinations);
     return {
       approved: approval.approved,
       decision: {
@@ -863,7 +909,8 @@ export class InterceptionEngine {
         sensitiveTaint: extra.sensitiveTaint,
         secretDetected: extra.secretDetected,
         piiDetected: extra.piiDetected,
-        redacted: extra.redacted
+        redacted: extra.redacted,
+        matchReasons: dedupePreservingOrder(extra.taintMatches?.map((match) => match.reason) ?? [])
       }
     });
   }

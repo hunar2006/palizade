@@ -18,7 +18,7 @@ export class InMemoryTaintStore implements TaintStore {
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
-      fingerprint: makeFingerprint(input.text)
+      fingerprint: makeFingerprint(input.text, input.classes?.includes("sensitive"))
     };
     this.records.set(record.id, record);
     return record;
@@ -44,6 +44,10 @@ export class InMemoryTaintStore implements TaintStore {
         continue;
       }
       if (!matchesClassFilter(record.classes, options.classes)) {
+        continue;
+      }
+      if (options.sensitiveFragments && record.classes.includes("sensitive") && record.fingerprint.sensitiveFragments?.some((fragment) => normalized.includes(fragment))) {
+        matches.push({ taintId: record.id, reason: "substring", classes: record.classes });
         continue;
       }
 

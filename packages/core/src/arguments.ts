@@ -5,6 +5,8 @@ export type ArgumentRole =
   | "file_path"
   | "shell_command"
   | "repository_destination"
+  | "channel_id"
+  | "account_id"
   | "http_header"
   | "http_query"
   | "body"
@@ -19,9 +21,19 @@ export interface ArgumentField {
 const URL_RE = /\bhttps?:\/\/[^\s<>"')]+/giu;
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 
-export function extractArgumentFields(value: unknown): ArgumentField[] {
+export function extractArgumentFields(value: unknown, tool = "", mappings: Record<string, ArgumentRole> = {}): ArgumentField[] {
   const fields: ArgumentField[] = [];
   visit(value, "$", fields);
+  const builtins: Record<string, ArgumentRole> = {};
+  if (/slack|message|post.*channel/iu.test(tool)) Object.assign(builtins, { channel: "channel_id", channel_id: "channel_id" });
+  if (/github|issue|pull_request|repository|push_files/iu.test(tool)) Object.assign(builtins, { owner: "account_id", repo: "repository_destination" });
+  if (/gmail|email|mail|send_message/iu.test(tool)) Object.assign(builtins, { to: "email_recipient", cc: "email_recipient", bcc: "email_recipient" });
+  if (/fetch|http/iu.test(tool)) builtins.url = "url";
+  for (const field of fields) {
+    if (field.path.includes("<")) continue;
+    const path = field.path.replace(/\[\d+\]/gu, "[*]");
+    field.role = mappings[field.path] ?? mappings[path] ?? mappings[field.path.slice(2)] ?? mappings[path.slice(2)] ?? builtins[path.slice(2).replace(/\[\*\]$/u, "")] ?? field.role;
+  }
   return fields;
 }
 

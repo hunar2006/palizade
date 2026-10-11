@@ -6,6 +6,13 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 
 ## Match Fields
 
+- `split_match`: the destination's recent outbound window matches observable taint that is absent from the current call. Default requires approval; strict and egress block.
+
+- `new_destination`: a destination is absent from configured and learned allowlists, including IDs. Strict mode blocks it.
+
+- `tainted_destination`: untrusted observable taint matched a URL, host, mail recipient, repository, channel or account ID after matching normalization/decoding. Temporal taint alone does not set this flag.
+- `lookalike_destination`: a Unicode/punycode host skeleton collides with an allowlisted or untrusted-tainted host. Matching does not authorize the lookalike host.
+
 - `direction`: `request` or `response`
 - `method`: JSON-RPC method such as `tools/call`
 - `server`: configured server name

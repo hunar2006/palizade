@@ -72,6 +72,8 @@ palizade lock approve <serverName>
 
 ## Tool Classification
 
+Argument roles can be overridden by `servers.<name>.argumentRoles.<tool>.<jsonPath>`. Paths use `$.field`, nested properties and `[*]` array members (the leading `$.` is optional). Built-in mappings recognize GitHub owner/repo, Slack channel/channel_id, mail to/cc/bcc and fetch/http URL fields by tool name. `channel_id` and `account_id` are destination roles.
+
 Derivation order:
 
 1. `palizade.yaml` tool-class and capability overrides.
@@ -82,6 +84,14 @@ Derivation order:
 The internal model uses capability flags such as `network_egress`, `sends_message`, `file_write`, `writes_local`, and `executes_code`. `source`, `sink`, `pure`, and `unknown` remain as derived labels for backward-compatible policies. Unknown tools are blocked on untrusted servers, approval-gated on semi-trusted servers, and audit-logged on trusted servers.
 
 ## Shared Taint
+
+Outbound sink calls keep a memory-only rolling payload window for each session and destination. `taint.window` defaults to 12 calls, 900000 ms TTL, 262144 bytes per window and 256 destinations. Concatenated payloads are decoded and matched; only sensitive records gain eight-character shard fingerprints, HMAC-protected in SQLite. Window matches exclude temporal-only hits. The window is process-local and bounded; it cannot correlate shards across distinct wrapper processes.
+
+Learned egress grants live in the separate `egress.learnedFile` (default `palizade.allow.yaml`, relative to config). It is validated at startup and before each sink call. Remember writes use an exclusive lock and atomic replacement; lock contention fails closed. Hard policy blocks always win over egress approvals. Source-call destinations are not egress-gated.
+
+Sink fields and the flattened argument text are expanded into bounded decoded candidates before matching both taint classes. Original payloads are retained, and ingestion never decodes. `taint.decode.maxDepth` defaults to 2 and `maxBytes` to 262144 total decoded bytes; exceeding the budget follows policy `on_error`. Supported views include base64/base64url, hex, percent encoding, common HTML entities, JS escapes, UTF-8 RFC 2047 B/Q and punycode. Audit `matchReasons` records `decoded:<kind>` without payloads.
+
+Matching strips TAG characters, variation selectors, soft hyphens and invisible operators in a separate view. Display content stays unchanged unless policy sanitizes it. Common Cyrillic/Greek lookalikes and fullwidth forms are folded only for domain and identifier tokens; prose is not folded. Host tokens include ASCII and skeleton views. The heuristic detector scans the stripped view with original span offsets and reports `hidden_unicode` counts and escaped code points.
 
 Runtime taint uses `.palizade/taint.sqlite` by default. The store scope defaults to `profile`, so separate wrapped processes using the same profile can match observable taint until TTL expiry. `PALIZADE_RUN_ID` enables stronger host-provided run correlation. Raw exact fragments and tokens are HMAC-protected with `.palizade/taint.key`; SimHash is retained for fuzzy comparison.
 

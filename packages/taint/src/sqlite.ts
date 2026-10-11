@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { extractAtomicTokens, hammingDistanceHex, makeFingerprint, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
+import { extractAtomicTokens, hammingDistanceHex, makeSensitiveFragments, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
 import { hmacSha256Hex, newTaintId, sha256 } from "./hash.js";
 import type { AddTaintInput, TaintClass, TaintFingerprint, TaintMatch, TaintMatchOptions, TaintRecord, TaintScope, TaintStore, TemporalTaintConfig } from "./types.js";
 
@@ -124,7 +124,7 @@ export class SqliteTaintStore implements TaintStore {
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
-      fingerprint: makeProtectedFingerprint(input.text, this.hmacKey)
+      fingerprint: makeProtectedFingerprint(input.text, this.hmacKey, input.classes?.includes("sensitive"))
     };
     this.db.prepare(
       `insert into taint_records
@@ -161,7 +161,9 @@ export class SqliteTaintStore implements TaintStore {
 
   match(sessionId: string, text: string, options: TaintMatchOptions = {}): TaintMatch[] {
     this.pruneExpired();
-    const incoming = makeProtectedFingerprint(text, this.hmacKey);
+    const incoming = makeProtectedFingerprint(text, this.hmacKey, options.sensitiveFragments);
+    const sensitiveFragments = new Set(incoming.sensitiveFragments);
+    const incomingFragments = new Set(incoming.substrings);
     const minNormalizedLength = options.minNormalizedLength ?? 16;
     const fuzzyHammingMax = options.fuzzyHammingMax ?? 7;
     const records = this.recordsForScope(sessionId);
@@ -171,7 +173,10 @@ export class SqliteTaintStore implements TaintStore {
       if (!matchesClassFilter(record.classes, options.classes)) {
         continue;
       }
-      const incomingFragments = new Set(incoming.substrings);
+      if (options.sensitiveFragments && record.classes.includes("sensitive") && record.fingerprint.sensitiveFragments?.some((fragment) => sensitiveFragments.has(fragment))) {
+        matches.push({ taintId: record.id, reason: "substring", classes: record.classes });
+        continue;
+      }
       const substring = record.fingerprint.substrings.find((candidate) => candidate.length >= minNormalizedLength && incomingFragments.has(candidate));
       if (substring) {
         matches.push({ taintId: record.id, reason: "substring", token: substring, classes: record.classes });
@@ -324,7 +329,7 @@ function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefi
   return !filter || filter.some((taintClass) => classes.includes(taintClass));
 }
 
-function makeProtectedFingerprint(input: string, key: Buffer): TaintFingerprint {
+function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false): TaintFingerprint {
   const normalized = normalizeText(input);
   const fragments = makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment));
   const tokens = extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token)));
@@ -332,7 +337,8 @@ function makeProtectedFingerprint(input: string, key: Buffer): TaintFingerprint 
     normalized: hmacSha256Hex(key, normalized),
     substrings: fragments,
     tokens,
-    simhash: simhash(normalized)
+    simhash: simhash(normalized),
+    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized).map((fragment) => hmacSha256Hex(key, fragment)) } : {})
   };
 }
 

@@ -4,6 +4,17 @@ defaults:
   on_error: block
 
 rules:
+  # --- M1: destination provenance ---
+  - id: block-tainted-destination
+    when: { direction: request, tool_class: sink, tainted_destination: true }
+    action: block
+    reason: Destination came from untrusted content.
+
+  - id: block-lookalike-destination
+    when: { direction: request, tool_class: sink, lookalike_destination: true }
+    action: block
+    reason: Destination is a lookalike of a known host.
+
   - id: deny-server-sampling
     name: Deny server-initiated model access
     when:
@@ -138,6 +149,12 @@ rules:
       detector_score_gte: 0.75
     action: sanitize
     reason: Strong injection signal in tool output.
+
+  # --- M1: split-call correlation ---
+  - id: block-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: block
+    reason: Split outbound calls reconstruct tainted content.
 
   - id: allow-tainted-allowed-egress-destination
     name: Allow tainted data only to explicitly allowlisted egress destinations

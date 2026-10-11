@@ -41,6 +41,10 @@ export interface PolicyCondition {
   secret_detected?: boolean | undefined;
   pii_detected?: boolean | undefined;
   destination_allowed?: boolean | undefined;
+  tainted_destination?: boolean | undefined;
+  lookalike_destination?: boolean | undefined;
+  new_destination?: boolean | undefined;
+  split_match?: boolean | undefined;
   destination_allowlist_configured?: boolean | undefined;
   detector_score_gte?: number | undefined;
   detector_score_lt?: number | undefined;
@@ -75,6 +79,10 @@ export interface PolicyContext {
   secret_detected?: boolean | undefined;
   pii_detected?: boolean | undefined;
   destination_allowed?: boolean | undefined;
+  tainted_destination?: boolean | undefined;
+  lookalike_destination?: boolean | undefined;
+  new_destination?: boolean | undefined;
+  split_match?: boolean | undefined;
   destination_allowlist_configured?: boolean | undefined;
   detector_score?: number | undefined;
   labels?: string[] | undefined;

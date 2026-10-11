@@ -91,7 +91,8 @@ const RULES: PatternRule[] = [
   }
 ];
 
-const INVISIBLE_OR_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2060-\u206F]/gu;
+const INVISIBLE_OR_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+const IS_HIDDEN = new RegExp(INVISIBLE_OR_CONTROL.source, "u");
 
 export class HeuristicDetector implements Detector {
   readonly name = "heuristic";
@@ -104,12 +105,26 @@ export class HeuristicDetector implements Detector {
     const labels = new Set<string>();
     const spans: DetectionSpan[] = [];
     let score = 0;
+    const positions: number[] = [];
+    const emojiOffsets = new Set<number>();
+    for (const sequence of text.matchAll(/\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F}|\p{Extended_Pictographic}[\uFE0E\uFE0F]/gu)) {
+      for (let offset = sequence.index!; offset < sequence.index! + sequence[0].length; offset++) emojiOffsets.add(offset);
+    }
+    let matchingText = "";
+    for (let index = 0; index < text.length;) {
+      const char = String.fromCodePoint(text.codePointAt(index)!);
+      if (!IS_HIDDEN.test(char)) {
+        for (let offset = 0; offset < char.length; offset++) positions.push(index + offset);
+        matchingText += char;
+      }
+      index += char.length;
+    }
 
     for (const rule of RULES) {
       let hits = 0;
-      for (const match of text.matchAll(rule.regex)) {
-        const start = match.index ?? 0;
-        const end = start + match[0].length;
+      for (const match of matchingText.matchAll(rule.regex)) {
+        const start = positions[match.index ?? 0] ?? 0;
+        const end = (positions[(match.index ?? 0) + match[0].length - 1] ?? start) + 1;
         labels.add(rule.label);
         spans.push({ start, end, label: rule.label });
         hits += 1;
@@ -120,11 +135,13 @@ export class HeuristicDetector implements Detector {
     for (const match of text.matchAll(INVISIBLE_OR_CONTROL)) {
       const start = match.index ?? 0;
       labels.add("invisible-control-unicode");
+      labels.add("hidden_unicode");
       spans.push({ start, end: start + match[0].length, label: "invisible-control-unicode" });
-      score += 0.2;
+      // Valid emoji tags and selectors are still reported, but are not an attack signal alone.
+      if (!emojiOffsets.has(start)) score += 0.2;
     }
 
-    const imperativeDensity = countImperatives(text);
+    const imperativeDensity = countImperatives(matchingText);
     if (imperativeDensity >= 4) {
       labels.add("high-imperative-density");
       score += Math.min(0.25, imperativeDensity * 0.025);
@@ -137,7 +154,13 @@ export class HeuristicDetector implements Detector {
       score: clampScore(score + diversityBonus),
       labels: uniqueLabels,
       spans: mergeOverlappingSpans(spans),
-      detector: this.name
+      detector: this.name,
+      metadata: {
+        hiddenUnicode: {
+          count: [...text.matchAll(INVISIBLE_OR_CONTROL)].length,
+          codePoints: [...new Set([...text.matchAll(INVISIBLE_OR_CONTROL)].map((match) => `\\u{${match[0].codePointAt(0)!.toString(16).toUpperCase()}}`))]
+        }
+      }
     };
   }
 }
