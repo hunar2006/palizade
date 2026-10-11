@@ -6,6 +6,9 @@ Rules use first-match-wins semantics. If no rule matches, `defaults.action` is u
 
 ## Match Fields
 
+- `rate_limited`: per-minute sink attempts exceed `limits.sinkCallsPerMinute` (60), session destinations exceed `distinctDestinations` (20), or bounded history overflows.
+- `loop_detected`: an identical tool/argument HMAC repeats more than `limits.repeatThreshold` (5) times in the session. Enforcing presets require approval for these gates.
+
 - `session_quarantined`: shared session quarantine remains within both TTL and turn bounds. Every enforcing preset requires approval for sinks after hard blocks.
 
 - `rule_of_two`: session has seen both untrusted/suspicious and sensitive content; default, strict and interactive approval-gate network, message and remote-write sinks even for paraphrased arguments. Specific hard blocks run first.

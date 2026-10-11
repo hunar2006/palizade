@@ -34,7 +34,7 @@ export const serverConfigSchema = z.object({
   argumentRoles: z.record(z.string(), z.record(z.string(), z.enum(["url", "hostname", "email_recipient", "file_path", "shell_command", "repository_destination", "channel_id", "account_id", "http_header", "http_query", "body", "unknown"]))).default({}),
   sensitive: z.boolean().default(false),
   sensitiveTools: z.record(z.string(), z.boolean()).default({}),
-  sensitivePathPatterns: z.array(z.string()).default([]),
+  sensitivePathPatterns: z.array(z.string().refine((pattern) => { try { new RegExp(pattern, "iu"); return true; } catch { return false; } }, "Invalid sensitive path regular expression")).default([]),
   shell: z.boolean().default(false),
   allowShell: z.boolean().default(false)
 }).strict().superRefine((server, ctx) => {
@@ -88,6 +88,12 @@ const piiDetectorConfigSchema = z.object({
 
 export const palizadeConfigSchema = z.object({
   stateDir: z.string().default(".palizade"),
+  limits: z.object({
+    sinkCallsPerMinute: z.number().int().min(1).max(1000).default(60),
+    distinctDestinations: z.number().int().min(1).max(1000).default(20),
+    repeatThreshold: z.number().int().min(1).max(1000).default(5),
+    historyEntries: z.number().int().min(1).max(1000).default(1000)
+  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 }),
   policy: z.string().default("policies/default.yaml"),
   lockfile: z.string().default("palizade.lock"),
   audit: z.object({

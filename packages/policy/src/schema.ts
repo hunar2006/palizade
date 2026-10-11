@@ -44,6 +44,8 @@ export const policyConditionSchema = z.object({
   new_destination: z.boolean().optional(),
   split_match: z.boolean().optional(),
   rule_of_two: z.boolean().optional(),
+  rate_limited: z.boolean().optional(),
+  loop_detected: z.boolean().optional(),
   destination_session_trusted: z.boolean().optional(),
   destination_allowlist_configured: z.boolean().optional(),
   detector_score_gte: z.number().min(0).max(1).optional(),

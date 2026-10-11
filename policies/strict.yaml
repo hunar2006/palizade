@@ -157,3 +157,14 @@ rules:
     when: { direction: request, tool_class: sink, session_quarantined: true }
     action: require_approval
     reason: Session is quarantined after high-risk content or a blocked destination.
+
+  # --- M2: rate and loop gates ---
+  - id: approve-rate-limited-sink
+    when: { direction: request, tool_class: sink, rate_limited: true }
+    action: require_approval
+    reason: Session sink rate or distinct destination limit exceeded.
+
+  - id: approve-looping-sink
+    when: { direction: request, tool_class: sink, loop_detected: true }
+    action: require_approval
+    reason: Identical sink call repeated too many times.

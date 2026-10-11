@@ -14,6 +14,7 @@ import { dirname, resolve } from "node:path";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
 import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
+import { trackSinkAttempt } from "./session-gates.js";
 import {
   isRequest,
   isSuccess,
@@ -101,6 +102,18 @@ export class InterceptionEngine {
   }
 
   async handleServerMessage(message: JsonRpcMessage): Promise<EngineOutput> {
+    try { return await this.processServerMessage(message); }
+    catch {
+      const decision: PolicyDecision = { action: this.options.policy.defaults.on_error, reason: "Security response decision failed", failClosed: true };
+      const approval = await this.maybeApprove(decision, { method: "security/error", toolClass: "unknown", taintMatches: [], summary: "Security response decision failed." });
+      await this.auditDecision(message, "response", approval.decision, Date.now());
+      if (approval.approved && decision.action !== "block") return { toClient: [message], toServer: [] };
+      if (isRequest(message)) return { toClient: [], toServer: message.id === undefined ? [] : [makeErrorResponse(message.id, -32028, "Security decision failed")] };
+      return { toClient: [makeErrorResponse(message.id, -32028, "Security decision failed")], toServer: [] };
+    }
+  }
+
+  private async processServerMessage(message: JsonRpcMessage): Promise<EngineOutput> {
     if (isRequest(message)) {
       return this.handleServerInitiatedRequest(message);
     }
@@ -187,6 +200,7 @@ export class InterceptionEngine {
     const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
     const entries = destinationEntries(argumentFields);
     const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
+    const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
     const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
     const splitMatches = toolClass !== "sink" ? [] : entries.flatMap((entry) => {
@@ -230,6 +244,8 @@ export class InterceptionEngine {
       rule_of_two: ruleOfTwo,
       destination_session_trusted: sessionTrusted,
       session_quarantined: Boolean(session.quarantine),
+      rate_limited: gates.rateLimited,
+      loop_detected: gates.loopDetected,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,
@@ -982,14 +998,7 @@ export class InterceptionEngine {
       content?.path,
       typeof content?.rawValue === "string" ? content.rawValue : undefined
     ].filter((value): value is string => Boolean(value));
-    return this.options.server.sensitivePathPatterns.some((pattern) => {
-      try {
-        const regex = new RegExp(pattern, "iu");
-        return searchable.some((value) => regex.test(value));
-      } catch {
-        return false;
-      }
-    });
+    return this.options.server.sensitivePathPatterns.some((pattern) => searchable.some((value) => new RegExp(pattern, "iu").test(value)));
   }
 }
 

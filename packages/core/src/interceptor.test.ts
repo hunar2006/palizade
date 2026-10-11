@@ -27,6 +27,19 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it.each([
+    { key: "sinkCallsPerMinute", rule: "approve-rate-limited-sink", varied: false },
+    { key: "distinctDestinations", rule: "approve-rate-limited-sink", varied: true },
+    { key: "repeatThreshold", rule: "approve-looping-sink", varied: false }
+  ])("approval-gates $key while passing the first benign call", async ({ key, rule, varied }) => {
+    const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { configure: (config) => { Object.assign(config.limits, { [key]: 1 }); } });
+    try {
+      const send = (host: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 80, method: "tools/call", params: { name: "send_email", arguments: { url: `https://${host}`, body: "Hello from the user." } } });
+      expect((await send("first.test")).toServer).toHaveLength(1);
+      expect((await send(varied ? "second.test" : "first.test")).toServer).toHaveLength(0);
+      expect(events.filter((event) => event.direction === "request").at(-1)?.matched_rule?.id).toBe(rule);
+    } finally { await cleanup(); }
+  });
   it("quarantines high-score responses, expires the gate and audits both transitions", async () => {
     let now = Date.now();
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -727,6 +740,7 @@ async function makeEngine(
   const dir = await mkdtemp(join(tmpdir(), "palizade-engine-"));
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
+    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),
