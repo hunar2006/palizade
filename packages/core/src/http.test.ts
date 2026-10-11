@@ -35,6 +35,7 @@ function urlServer(url: string): ServerConfig {
     trust: "untrusted",
     toolClasses: {},
     toolCapabilities: {},
+    argumentRoles: {},
     sensitive: false,
     sensitiveTools: {},
     sensitivePathPatterns: [],
@@ -324,11 +325,17 @@ async function makeEngineWithAudit(dir: string): Promise<{ engine: InterceptionE
       secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
       pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
     },
-    egress: { allowlist: { hosts: [], emails: [] } },
+    egress: {
+      mode: "open",
+      learnedFile: join(dir, "palizade.allow.yaml"),
+      allowlist: { hosts: [], emails: [], destinations: [] }
+    },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     http: httpLimits,
     listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
     taint: {
+      window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
+      decode: { maxDepth: 2, maxBytes: 262144 },
       sqlite: join(dir, "taint.sqlite"),
       keyPath: join(dir, "taint.key"),
       scope: "profile",
@@ -450,11 +457,17 @@ describe("HttpServeListener", () => {
           secrets: { enabled: false, aws: true, generic: true, jwt: true, privateKey: true, googleApiKey: true, stripe: true, slack: true, github: true, openai: true },
           pii: { enabled: false, email: true, ssn: true, creditCard: true, phone: true }
         },
-        egress: { allowlist: { hosts: [], emails: [] } },
+        egress: {
+          mode: "open",
+          learnedFile: join(dir, "palizade.allow.yaml"),
+          allowlist: { hosts: [], emails: [], destinations: [] }
+        },
         transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
         http: httpLimits,
         listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
         taint: {
+          window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
+          decode: { maxDepth: 2, maxBytes: 262144 },
           sqlite: join(dir, "taint.sqlite"),
           keyPath: join(dir, "taint.key"),
           scope: "profile",
