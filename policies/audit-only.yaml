@@ -12,6 +12,29 @@ rules:
     action: log_only
     reason: Tool metadata has prompt-injection indicators.
 
+  # --- M4: tool metadata hardening ---
+  - id: log-tool-metadata-findings
+    when:
+      direction: response
+      tool_shadowing_detected: true
+    action: log_only
+    reason: Tool metadata references another server's tool; enforcing presets block it.
+
+  - id: log-tool-name-collision
+    when:
+      direction: response
+      name_collision_detected: true
+    action: log_only
+    reason: Another wrapped server exposes a tool with this name; enforcing presets block it.
+
+  - id: log-hidden-unicode-metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: log_only
+    reason: Metadata contains hidden Unicode; enforcing presets strip it.
+  # --- end M4 ---
+
   - id: log-tainted-sinks
     when:
       direction: request

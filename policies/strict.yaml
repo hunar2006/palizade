@@ -28,6 +28,32 @@ rules:
     action: block
     reason: Server-initiated model access is denied in strict mode.
 
+  # --- M4: tool metadata hardening ---
+  - id: block-tool-name-collision
+    name: Block tools whose name another wrapped server already exposes
+    when:
+      direction: response
+      name_collision_detected: true
+    action: block
+    reason: Another wrapped server already exposes a tool with this name.
+
+  - id: block-tool-shadowing
+    name: Block metadata that references another server's tools
+    when:
+      direction: response
+      tool_shadowing_detected: true
+    action: block
+    reason: Tool metadata references a tool that belongs to a different server.
+
+  - id: sanitize-hidden-unicode-metadata
+    name: Strip hidden Unicode from metadata
+    when:
+      direction: response
+      hidden_unicode_detected: true
+    action: sanitize
+    reason: Metadata contains hidden Unicode characters.
+  # --- end M4 ---
+
   - id: block-any-tool-lock-drift
     when:
       direction: response

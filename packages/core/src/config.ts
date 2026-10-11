@@ -218,6 +218,12 @@ export const palizadeConfigSchema = z.object({
     fuzzyHammingMax: 7,
     temporal: { enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 }
   }),
+  metadata: z.object({
+    shadowing: z.boolean().default(true),
+    builtinNames: z.array(z.string()).default(["read_file", "write_file", "bash", "fetch"]),
+    dangerousDefaults: z.array(z.string()).default([]),
+    maxScanBytes: z.number().int().min(1024).max(16 * 1024 * 1024).default(256 * 1024)
+  }).strict().optional(),
   servers: z.record(z.string(), serverConfigSchema).default({})
 }).strict();
 
