@@ -294,9 +294,14 @@ export class InterceptionEngine {
     const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
     const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
+    const outboundPayload = argumentFields.filter((field) => !field.path.includes("<")).flatMap((field) => {
+      if (field.role === "url") {
+        try { return [...new URL(field.text).searchParams.values()]; } catch { return []; }
+      }
+      return ["hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role) ? [] : [field.text];
+    }).join("");
     const splitMatches = toolClass !== "sink" ? [] : entries.flatMap((entry) => {
-      const payload = argumentFields.filter((field) => !field.path.includes("<") && !["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role)).map((field) => field.text).join("");
-      const combined = this.outboundWindow.append(this.options.sessionId, entry, payload || argumentText, this.options.config.taint.window);
+      const combined = this.outboundWindow.append(this.options.sessionId, entry, outboundPayload || argumentText, this.options.config.taint.window);
       return combined === undefined ? [] : expandCandidates(combined, this.options.config.taint.decode).flatMap((candidate) => this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax, sensitiveFragments: true }).filter((match) => match.reason !== "temporal"));
     });
     const splitMatch = splitMatches.some((match) => !matches.some((current) => current.reason !== "temporal" && current.taintId === match.taintId));
@@ -306,6 +311,7 @@ export class InterceptionEngine {
       const skeleton = hostSkeleton(host);
       return skeleton !== canonicalHost(host) && (allowlist.hosts.some((allowed) => hostSkeleton(allowed) === skeleton) || matchText(skeleton).some((match) => match.reason !== "temporal" && match.classes?.includes("untrusted")));
     });
+    const safeDestination = { ...destination, hosts: destination.hosts.map((host) => matchText(host).some((match) => match.reason !== "temporal") ? "[REDACTED:tainted-host]" : maskKnownSensitiveText(host)) };
     const allTaintMatches = [
       ...matches,
       ...fieldMatches.map(({ match }) => match),
@@ -331,7 +337,7 @@ export class InterceptionEngine {
         inputResponseMatches.push(match);
       }
       inputResponseTaint = inputResponseMatches.some((match) => match.reason !== "temporal");
-      inputResponseSensitive = inputResponseMatches.some((match) => match.classes?.includes("sensitive"));
+      inputResponseSensitive = inputResponseMatches.some((match) => match.reason !== "temporal" && match.classes?.includes("sensitive"));
       allTaintMatches.push(...inputResponseMatches);
     }
 
@@ -394,7 +400,7 @@ export class InterceptionEngine {
         capabilities: classification.capabilities,
         taintMatches: allTaintMatches,
         taintedArgumentRoles,
-        destination,
+        destination: safeDestination,
         taintStore: this.options.taintStore
       })
     });
@@ -408,7 +414,7 @@ export class InterceptionEngine {
       approved: approval.approved,
       argumentRoles: argumentRolesSummary(argumentFields),
       taintedArgumentRoles,
-      destination,
+      destination: safeDestination,
       sensitiveTaint,
       secretDetected,
       piiDetected,
@@ -1507,7 +1513,7 @@ export class InterceptionEngine {
       action: decision.action,
       reason: decision.reason,
       latency_ms: Date.now() - startedAt,
-      payload: scrubAuditPayload(extra.payload),
+      payload: (extra.taintIds?.length || extra.taintMatches?.some((match) => match.reason !== "temporal")) && extra.payload !== undefined ? "[REDACTED:tainted-content]" : scrubAuditPayload(extra.payload),
       metadata: {
         toolClass: extra.toolClass,
         capabilities: extra.classification?.capabilities,
