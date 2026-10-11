@@ -7,6 +7,7 @@ export interface TaintFingerprint {
   substrings: string[];
   tokens: string[];
   simhash: string;
+  sensitiveFragments?: string[];
 }
 
 export interface TaintRecord {
@@ -50,6 +51,7 @@ export interface AddTaintInput {
 }
 
 export interface TaintMatchOptions {
+  sensitiveFragments?: boolean;
   fuzzyHammingMax?: number;
   minNormalizedLength?: number;
   classes?: TaintClass[] | undefined;

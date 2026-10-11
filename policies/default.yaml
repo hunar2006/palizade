@@ -103,6 +103,12 @@ rules:
     action: sanitize
     reason: Strong injection signal in tool output.
 
+  # --- M1: split-call correlation ---
+  - id: approve-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: require_approval
+    reason: Split outbound calls reconstruct tainted content.
+
   - id: block-tainted-sink
     name: Block tainted content entering sinks
     when:

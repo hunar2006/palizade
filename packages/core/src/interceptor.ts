@@ -5,10 +5,12 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { expandCandidates, canonicalHost, hostSkeleton } from "@palizade/taint";
+import { expandCandidates, canonicalHost, hostSkeleton, OutboundWindow } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
+import { palizadeConfigSchema, serverConfigSchema } from "./config.js";
+import { dirname, resolve } from "node:path";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
 import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
@@ -62,9 +64,13 @@ export class InterceptionEngine {
   private readonly pendingClient = new Map<string, PendingClientRequest>();
   private readonly knownTools = new Map<string, McpTool>();
   private readonly learnedEgress: LearnedEgress;
+  private readonly outboundWindow = new OutboundWindow();
 
   constructor(private readonly options: InterceptionEngineOptions) {
-    this.learnedEgress = new LearnedEgress(options.config.egress.learnedFile);
+    const config = palizadeConfigSchema.parse(options.config);
+    if (!options.config.egress.learnedFile) config.egress.learnedFile = resolve(dirname(config.lockfile), "palizade.allow.yaml");
+    this.options = { ...options, config, server: serverConfigSchema.parse(options.server) };
+    this.learnedEgress = new LearnedEgress(config.egress.learnedFile);
   }
 
   async handleClientMessage(message: JsonRpcMessage): Promise<EngineOutput> {
@@ -173,10 +179,17 @@ export class InterceptionEngine {
     const temporal = matches.some((match) => match.reason === "temporal") || this.options.taintStore.hasTemporal(this.options.sessionId);
     const secretDetected = hasSecretLabel(argumentDetection.labels);
     const piiDetected = hasPiiLabel(argumentDetection.labels);
-    const sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
+    let sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
     const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
     const entries = destinationEntries(argumentFields);
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
+    const splitMatches = toolClass !== "sink" ? [] : entries.flatMap((entry) => {
+      const payload = argumentFields.filter((field) => !field.path.includes("<") && !["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role)).map((field) => field.text).join("");
+      const combined = this.outboundWindow.append(this.options.sessionId, entry, payload || argumentText, this.options.config.taint.window);
+      return combined === undefined ? [] : expandCandidates(combined, this.options.config.taint.decode).flatMap((candidate) => this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax, sensitiveFragments: true }).filter((match) => match.reason !== "temporal"));
+    });
+    const splitMatch = splitMatches.some((match) => !matches.some((current) => current.reason !== "temporal" && current.taintId === match.taintId));
+    sensitiveTaint ||= splitMatches.some((match) => match.classes?.includes("sensitive"));
     const destination = summarizeDestinations(argumentFields, allowlist);
     const lookalikeDestination = destination.hosts.some((host) => {
       const skeleton = hostSkeleton(host);
@@ -186,7 +199,8 @@ export class InterceptionEngine {
       ...matches,
       ...fieldMatches.map(({ match }) => match),
       ...sensitiveMatches,
-      ...sensitiveFieldMatches.map(({ match }) => match)
+      ...sensitiveFieldMatches.map(({ match }) => match),
+      ...splitMatches
     ];
 
     const policyDecision = evaluatePolicy(this.options.policy, {
@@ -206,6 +220,7 @@ export class InterceptionEngine {
       tainted_destination: taintedDestination,
       lookalike_destination: lookalikeDestination,
       new_destination: newDestination,
+      split_match: splitMatch,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,

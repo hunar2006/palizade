@@ -108,6 +108,12 @@ rules:
     action: redact_secrets
     reason: PII-like content should be redacted before egress.
 
+  # --- M1: split-call correlation ---
+  - id: block-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: block
+    reason: Split outbound calls reconstruct tainted content.
+
   - id: block-tainted-sink
     when:
       direction: request

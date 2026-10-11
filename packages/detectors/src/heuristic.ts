@@ -106,6 +106,10 @@ export class HeuristicDetector implements Detector {
     const spans: DetectionSpan[] = [];
     let score = 0;
     const positions: number[] = [];
+    const emojiOffsets = new Set<number>();
+    for (const sequence of text.matchAll(/\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F}|\p{Extended_Pictographic}[\uFE0E\uFE0F]/gu)) {
+      for (let offset = sequence.index!; offset < sequence.index! + sequence[0].length; offset++) emojiOffsets.add(offset);
+    }
     let matchingText = "";
     for (let index = 0; index < text.length;) {
       const char = String.fromCodePoint(text.codePointAt(index)!);
@@ -134,7 +138,7 @@ export class HeuristicDetector implements Detector {
       labels.add("hidden_unicode");
       spans.push({ start, end: start + match[0].length, label: "invisible-control-unicode" });
       // Valid emoji tags and selectors are still reported, but are not an attack signal alone.
-      if (!/\p{Extended_Pictographic}/u.test(text)) score += 0.2;
+      if (!emojiOffsets.has(start)) score += 0.2;
     }
 
     const imperativeDensity = countImperatives(matchingText);

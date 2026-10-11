@@ -51,6 +51,7 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (condition.tainted_destination !== undefined && Boolean(ctx.tainted_destination) !== condition.tainted_destination) return false;
   if (condition.lookalike_destination !== undefined && Boolean(ctx.lookalike_destination) !== condition.lookalike_destination) return false;
   if (condition.new_destination !== undefined && Boolean(ctx.new_destination) !== condition.new_destination) return false;
+  if (condition.split_match !== undefined && Boolean(ctx.split_match) !== condition.split_match) return false;
   if (condition.destination_allowlist_configured !== undefined && Boolean(ctx.destination_allowlist_configured) !== condition.destination_allowlist_configured) return false;
   if (condition.session_quarantined !== undefined && Boolean(ctx.session_quarantined) !== condition.session_quarantined) return false;
   if (condition.detector_score_gte !== undefined && (ctx.detector_score ?? 0) < condition.detector_score_gte) return false;

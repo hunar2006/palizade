@@ -150,6 +150,12 @@ rules:
     action: sanitize
     reason: Strong injection signal in tool output.
 
+  # --- M1: split-call correlation ---
+  - id: block-split-match
+    when: { direction: request, tool_class: sink, split_match: true }
+    action: block
+    reason: Split outbound calls reconstruct tainted content.
+
   - id: allow-tainted-allowed-egress-destination
     name: Allow tainted data only to explicitly allowlisted egress destinations
     when:

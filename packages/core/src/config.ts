@@ -133,6 +133,12 @@ export const palizadeConfigSchema = z.object({
     allowContentLength: false
   }),
   taint: z.object({
+    window: z.object({
+      calls: z.number().int().min(1).max(100).default(12),
+      ttlMs: z.number().int().positive().default(900_000),
+      maxBytes: z.number().int().positive().default(262144),
+      maxDestinations: z.number().int().positive().default(256)
+    }).default({ calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 }),
     decode: z.object({
       maxDepth: z.number().int().min(0).max(8).default(2),
       maxBytes: z.number().int().positive().default(256 * 1024)
@@ -152,6 +158,7 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
     decode: { maxDepth: 2, maxBytes: 256 * 1024 },
     keyPath: ".palizade/taint.key",
     scope: "profile",

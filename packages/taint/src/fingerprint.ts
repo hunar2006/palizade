@@ -27,14 +27,22 @@ export function extractAtomicTokens(input: string): string[] {
   return [...tokens];
 }
 
-export function makeFingerprint(input: string): TaintFingerprint {
+export function makeFingerprint(input: string, sensitive = false): TaintFingerprint {
   const normalized = normalizeText(input);
   return {
     normalized,
     substrings: makeSubstrings(normalized),
     tokens: extractAtomicTokens(input).map(normalizeText),
-    simhash: simhash(normalized)
+    simhash: simhash(normalized),
+    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized) } : {})
   };
+}
+
+// shortcut: sensitive shard coverage is bounded to 2048 eight-character fragments, raise the bound for larger sensitive outputs.
+export function makeSensitiveFragments(text: string): string[] {
+  const fragments: string[] = [];
+  for (let index = 0; index + 8 <= text.length && index < 2048; index++) fragments.push(text.slice(index, index + 8));
+  return [...new Set(fragments)];
 }
 
 // Winnowing (Schleimer et al. 2003): keep the min-hash k-gram in every window of w k-grams.

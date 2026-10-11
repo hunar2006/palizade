@@ -85,6 +85,8 @@ The internal model uses capability flags such as `network_egress`, `sends_messag
 
 ## Shared Taint
 
+Outbound sink calls keep a memory-only rolling payload window for each session and destination. `taint.window` defaults to 12 calls, 900000 ms TTL, 262144 bytes per window and 256 destinations. Concatenated payloads are decoded and matched; only sensitive records gain eight-character shard fingerprints, HMAC-protected in SQLite. Window matches exclude temporal-only hits. The window is process-local and bounded; it cannot correlate shards across distinct wrapper processes.
+
 Learned egress grants live in the separate `egress.learnedFile` (default `palizade.allow.yaml`, relative to config). It is validated at startup and before each sink call. Remember writes use an exclusive lock and atomic replacement; lock contention fails closed. Hard policy blocks always win over egress approvals. Source-call destinations are not egress-gated.
 
 Sink fields and the flattened argument text are expanded into bounded decoded candidates before matching both taint classes. Original payloads are retained, and ingestion never decodes. `taint.decode.maxDepth` defaults to 2 and `maxBytes` to 262144 total decoded bytes; exceeding the budget follows policy `on_error`. Supported views include base64/base64url, hex, percent encoding, common HTML entities, JS escapes, UTF-8 RFC 2047 B/Q and punycode. Audit `matchReasons` records `decoded:<kind>` without payloads.

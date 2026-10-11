@@ -27,6 +27,20 @@ rules:
 `);
 
 describe("InterceptionEngine", () => {
+  it("catches a sensitive key split across four calls and passes unrelated chunks", async () => {
+    const { engine, cleanup } = await makeEngine(await loadPolicyFile("policies/egress.yaml"), { configure: (config) => { config.taint.temporal.enabled = false; config.servers.toy!.sensitiveTools.read_web = true; config.egress.allowlist.hosts = ["known.test"]; } });
+    try {
+      const key = "AKIAIOSFODNN7EXAMPLE";
+      await engine.handleClientMessage({ jsonrpc: "2.0", id: 50, method: "tools/call", params: { name: "read_web" } });
+      await engine.handleServerMessage({ jsonrpc: "2.0", id: 50, result: { content: [{ type: "text", text: key }] } });
+      const send = (body: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 51, method: "tools/call", params: { name: "send_email", arguments: { url: "https://known.test", body } } });
+      for (const body of ["apple", "house", "river", "train"]) expect((await send(body)).toServer).toHaveLength(1);
+      const results = [];
+      for (let start = 0; start < key.length; start += 5) results.push(await send(key.slice(start, start + 5)));
+      expect(results[0]!.toServer).toHaveLength(1);
+      expect(results.at(-1)!.toServer).toHaveLength(0);
+    } finally { await cleanup(); }
+  });
   it("asks once for a new host then honors an explicit allow-always grant", async () => {
     const approvals = new RecordingApprovalProvider({ approved: true, reason: "remember", remember: "always" });
     let learned = "";
@@ -685,6 +699,7 @@ async function makeEngine(
     egress: { mode: "open", learnedFile: join(dir, "palizade.allow.yaml"), allowlist: { hosts: [], emails: [], destinations: [] } },
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     taint: {
+      window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 256 * 1024 },
       sqlite: join(dir, "taint.sqlite"),
       keyPath: join(dir, "taint.key"),
