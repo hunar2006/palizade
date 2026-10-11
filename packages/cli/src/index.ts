@@ -14,7 +14,7 @@ import {
   StdioMcpProxy,
   type McpTool
 } from "@palizade/core";
-import { JsonlAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
+import { AuditLogger, JsonlAuditSink, SqliteAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
 import { SqliteTaintStore } from "@palizade/taint";
 import {
@@ -150,6 +150,25 @@ program.command("install-config")
 
 const detectors = program.command("detectors")
   .description("Manage optional detector models");
+
+program.command("session").description("Manage shared security session state")
+  .command("quarantine")
+  .description("Inspect or explicitly clear session quarantine")
+  .option("--clear", "Clear quarantine", false)
+  .option("--session <id>", "Session identifier (uses configured profile/run scope)")
+  .action(async (options: { clear: boolean; session?: string }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const store = new SqliteTaintStore(config.taint.sqlite, { scope: config.taint.scope, profileId: config.taint.profileId, keyPath: config.taint.keyPath, ttlMs: config.taint.ttlMs, ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {}) });
+    const session = options.session ?? process.env.PALIZADE_RUN_ID ?? config.taint.profileId;
+    try {
+      if (options.clear) {
+        store.updateSession(session, (state) => ({ ...state, quarantine: undefined }));
+        const audit = new AuditLogger([new JsonlAuditSink(config.audit.jsonl), new SqliteAuditSink(config.audit.sqlite)]);
+        await audit.write({ session, direction: "internal", method: "session/quarantine/clear", action: "log_only", reason: "Session quarantine explicitly cleared by operator." });
+        console.log("Session quarantine cleared.");
+      } else console.log(JSON.stringify(store.getSession(session).quarantine ?? null, null, 2));
+    } finally { store.close(); }
+  });
 
 detectors.command("install")
   .description("Download an optional detector model")

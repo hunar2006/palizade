@@ -34,7 +34,7 @@ export const serverConfigSchema = z.object({
   argumentRoles: z.record(z.string(), z.record(z.string(), z.enum(["url", "hostname", "email_recipient", "file_path", "shell_command", "repository_destination", "channel_id", "account_id", "http_header", "http_query", "body", "unknown"]))).default({}),
   sensitive: z.boolean().default(false),
   sensitiveTools: z.record(z.string(), z.boolean()).default({}),
-  sensitivePathPatterns: z.array(z.string()).default([]),
+  sensitivePathPatterns: z.array(z.string().refine((pattern) => { try { new RegExp(pattern, "iu"); return true; } catch { return false; } }, "Invalid sensitive path regular expression")).default([]),
   shell: z.boolean().default(false),
   allowShell: z.boolean().default(false)
 }).strict().superRefine((server, ctx) => {
@@ -88,6 +88,12 @@ const piiDetectorConfigSchema = z.object({
 
 export const palizadeConfigSchema = z.object({
   stateDir: z.string().default(".palizade"),
+  limits: z.object({
+    sinkCallsPerMinute: z.number().int().min(1).max(1000).default(60),
+    distinctDestinations: z.number().int().min(1).max(1000).default(20),
+    repeatThreshold: z.number().int().min(1).max(1000).default(5),
+    historyEntries: z.number().int().min(1).max(1000).default(1000)
+  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 }),
   policy: z.string().default("policies/default.yaml"),
   lockfile: z.string().default("palizade.lock"),
   audit: z.object({
@@ -171,6 +177,11 @@ export const palizadeConfigSchema = z.object({
     allowRemote: false
   }),
   taint: z.object({
+    quarantine: z.object({
+      scoreGte: z.number().min(0).max(1).default(0.85),
+      turns: z.number().int().positive().default(20),
+      ttlMs: z.number().int().positive().default(1800000)
+    }).default({ scoreGte: 0.85, turns: 20, ttlMs: 1800000 }),
     window: z.object({
       calls: z.number().int().min(1).max(100).default(12),
       ttlMs: z.number().int().positive().default(900_000),
@@ -196,6 +207,7 @@ export const palizadeConfigSchema = z.object({
     }).default({ enabled: true, turns: 3, ttlMs: 300_000, detectorScoreGte: 0.55 })
   }).default({
     sqlite: ".palizade/taint.sqlite",
+    quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
     window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
     decode: { maxDepth: 2, maxBytes: 256 * 1024 },
     keyPath: ".palizade/taint.key",

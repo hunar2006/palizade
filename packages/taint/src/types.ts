@@ -1,3 +1,4 @@
+import type { SessionState } from "./session.js";
 export type TrustLevel = "trusted" | "semi" | "untrusted";
 export type TaintScope = "process" | "profile" | "external_run_id";
 export type TaintClass = "untrusted" | "sensitive";
@@ -58,6 +59,9 @@ export interface TaintMatchOptions {
 }
 
 export interface TaintStore {
+  getSession(sessionId: string): SessionState;
+  updateSession(sessionId: string, update: (state: SessionState) => SessionState): SessionState;
+  destinationKey(text: string): string;
   add(input: AddTaintInput): TaintRecord;
   get(id: string): TaintRecord | undefined;
   all(): TaintRecord[];

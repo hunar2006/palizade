@@ -14,6 +14,7 @@ import { dirname, resolve } from "node:path";
 import { contentText, extractContent, type ContentOrigin, type ExtractedContent } from "./content.js";
 import type { LockfileStore, ToolLockCheck } from "./lockfile.js";
 import { destinationEntries, destinationsAllowed, LearnedEgress } from "./egress.js";
+import { trackSinkAttempt } from "./session-gates.js";
 import {
   isRequest,
   isSuccess,
@@ -55,6 +56,7 @@ interface DestinationSummary {
 }
 
 interface PendingClientRequest {
+  sensitive?: boolean;
   method: string;
   tool?: string | undefined;
   startedAt: number;
@@ -100,6 +102,18 @@ export class InterceptionEngine {
   }
 
   async handleServerMessage(message: JsonRpcMessage): Promise<EngineOutput> {
+    try { return await this.processServerMessage(message); }
+    catch {
+      const decision: PolicyDecision = { action: this.options.policy.defaults.on_error, reason: "Security response decision failed", failClosed: true };
+      const approval = await this.maybeApprove(decision, { method: "security/error", toolClass: "unknown", taintMatches: [], summary: "Security response decision failed." });
+      await this.auditDecision(message, "response", approval.decision, Date.now());
+      if (approval.approved && decision.action !== "block") return { toClient: [message], toServer: [] };
+      if (isRequest(message)) return { toClient: [], toServer: message.id === undefined ? [] : [makeErrorResponse(message.id, -32028, "Security decision failed")] };
+      return { toClient: [makeErrorResponse(message.id, -32028, "Security decision failed")], toServer: [] };
+    }
+  }
+
+  private async processServerMessage(message: JsonRpcMessage): Promise<EngineOutput> {
     if (isRequest(message)) {
       return this.handleServerInitiatedRequest(message);
     }
@@ -149,6 +163,9 @@ export class InterceptionEngine {
     const knownTool = this.knownTools.get(tool);
     const classification = classifyToolDetailed(tool, this.options.server, knownTool);
     const toolClass = classification.toolClass;
+    await this.expireQuarantine();
+    const session = this.options.taintStore.getSession(this.options.sessionId);
+    const ruleOfTwo = session.seenUntrusted && session.seenSensitive;
     const argumentText = flattenArguments(params.arguments);
     const matchCache = new Map<string, TaintMatch[]>();
     const matchText = (text: string): TaintMatch[] => {
@@ -182,6 +199,9 @@ export class InterceptionEngine {
     let sensitiveTaint = sensitiveMatches.length > 0 || sensitiveFieldMatches.length > 0;
     const allowlist = this.learnedEgress.allowlist(this.options.config.egress.allowlist);
     const entries = destinationEntries(argumentFields);
+    const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
+    const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
+    const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
     const splitMatches = toolClass !== "sink" ? [] : entries.flatMap((entry) => {
       const payload = argumentFields.filter((field) => !field.path.includes("<") && !["url", "hostname", "email_recipient", "repository_destination", "channel_id", "account_id", "file_path"].includes(field.role)).map((field) => field.text).join("");
@@ -221,6 +241,11 @@ export class InterceptionEngine {
       lookalike_destination: lookalikeDestination,
       new_destination: newDestination,
       split_match: splitMatch,
+      rule_of_two: ruleOfTwo,
+      destination_session_trusted: sessionTrusted,
+      session_quarantined: Boolean(session.quarantine),
+      rate_limited: gates.rateLimited,
+      loop_detected: gates.loopDetected,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
       labels: argumentDetection.labels,
@@ -229,7 +254,7 @@ export class InterceptionEngine {
       tainted_argument_roles: taintedArgumentRoles
     });
 
-    const egressGate = toolClass === "sink" && newDestination && this.options.config.egress.mode !== "open";
+    const egressGate = toolClass === "sink" && newDestination && this.options.config.egress.mode !== "open" && !(this.options.config.egress.mode === "approve_new" && sessionTrusted);
     const decision: PolicyDecision = policyDecision.action === "block" || !egressGate ? policyDecision : {
       action: this.options.config.egress.mode === "allowlist_only" ? "block" : "require_approval",
       matchedRuleId: "egress-new-destination",
@@ -243,6 +268,7 @@ export class InterceptionEngine {
       classification,
       taintMatches: allTaintMatches,
       rememberDestinations: egressGate && decision.action === "require_approval" ? entries : [],
+      trustSessionDestinations: ruleOfTwo && decision.action === "require_approval" ? destinationKeys : [],
       summary: formatToolCallApprovalSummary({
         tool,
         toolClass,
@@ -272,6 +298,14 @@ export class InterceptionEngine {
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);
+    if (!approval.approved || decision.action === "block") {
+      if (decision.action === "block" && (taintedDestination || splitMatch || lookalikeDestination)) await this.startQuarantine("Blocked risky outbound destination or split match.");
+    }
+    const quarantine = this.options.taintStore.getSession(this.options.sessionId).quarantine;
+    if (quarantine) {
+      this.options.taintStore.updateSession(this.options.sessionId, (state) => ({ ...state, quarantine: state.quarantine ? { ...state.quarantine, remainingTurns: state.quarantine.remainingTurns - 1 } : undefined }));
+      await this.expireQuarantine();
+    }
 
     if (!approval.approved || decision.action === "block") {
       return {
@@ -400,7 +434,8 @@ export class InterceptionEngine {
       trust: this.options.server.trust
     });
     const { fused, detectionsByPath } = await this.detectContents(contents);
-    const taintRecords = this.registerTaintFromContents(tool, classification, contents, fused);
+    const taintRecords = this.registerTaintFromContents(tool, classification, contents, fused, pending.sensitive);
+    if (fused.score >= this.options.config.taint.quarantine.scoreGte) await this.startQuarantine("High-score tool response.");
     if (fused.score >= this.options.config.taint.temporal.detectorScoreGte) {
       this.options.taintStore.markTemporal(this.options.sessionId, taintRecords.map((record) => record.id), this.options.config.taint.temporal);
     }
@@ -577,13 +612,18 @@ export class InterceptionEngine {
       }));
   }
 
-  private registerTaintFromContents(sourceName: string, classification: ToolClassification, contents: ExtractedContent[], detection: DetectionResult): TaintRecord[] {
+  private registerTaintFromContents(sourceName: string, classification: ToolClassification, contents: ExtractedContent[], detection: DetectionResult, sensitivePath = false): TaintRecord[] {
     const highRiskSource = this.options.server.trust === "untrusted" || classification.toolClass === "source" || classification.capabilities.includes("reads_untrusted_content");
+    if (contents.some((content) => Boolean(content.text))) this.options.taintStore.updateSession(this.options.sessionId, (state) => ({
+      ...state,
+      seenUntrusted: state.seenUntrusted || highRiskSource || detection.score >= this.options.config.taint.suspiciousScore,
+      seenSensitive: state.seenSensitive || sensitivePath || classification.capabilities.includes("reads_sensitive_data") || contents.some((content) => this.isSensitiveOrigin(sourceName, content)) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels)
+    }));
     return contents
       .filter((content) => content.text && content.text.trim().length >= 8 && content.kind !== "binary")
       .flatMap((content) => {
         const untrusted = highRiskSource || detection.score >= this.options.config.taint.suspiciousScore;
-        const sensitive = this.isSensitiveOrigin(sourceName, content) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
+        const sensitive = sensitivePath || classification.capabilities.includes("reads_sensitive_data") || this.isSensitiveOrigin(sourceName, content) || hasSecretLabel(detection.labels) || hasPiiLabel(detection.labels);
         const classes = taintClasses({ untrusted, sensitive });
         if (classes.length === 0) {
           return [];
@@ -666,6 +706,7 @@ export class InterceptionEngine {
     const { fused, detectionsByPath } = await this.detectContents(contents);
     const classification: ToolClassification = { toolClass: "source", capabilities: ["reads_untrusted_content"] };
     const taintRecords = this.registerTaintFromContents(pending.method, classification, contents, fused);
+    if (fused.score >= this.options.config.taint.quarantine.scoreGte) await this.startQuarantine("High-score source response.");
     if (fused.score >= this.options.config.taint.temporal.detectorScoreGte) {
       this.options.taintStore.markTemporal(this.options.sessionId, taintRecords.map((record) => record.id), this.options.config.taint.temporal);
     }
@@ -805,6 +846,7 @@ export class InterceptionEngine {
       taintMatches: Array<TaintMatch | { taintId: string; reason: string }>;
       summary: string;
       rememberDestinations?: string[];
+      trustSessionDestinations?: string[];
     }
   ): Promise<{ approved: boolean; decision: PolicyDecision }> {
     if (decision.action !== "require_approval") {
@@ -823,10 +865,16 @@ export class InterceptionEngine {
         toolClass: input.toolClass,
         capabilities: input.classification?.capabilities,
         matchedRuleId: decision.matchedRuleId,
-        allowAlways: Boolean(input.rememberDestinations?.length)
+        allowAlways: Boolean(input.rememberDestinations?.length),
+        allowSession: Boolean(input.trustSessionDestinations?.length)
       }
     }));
     if (approval.approved && approval.remember === "always" && input.rememberDestinations?.length) this.learnedEgress.remember(input.rememberDestinations);
+    if (approval.approved && approval.remember === "session" && input.trustSessionDestinations?.length) this.options.taintStore.updateSession(this.options.sessionId, (state) => {
+      const trustedDestinations = [...new Set([...state.trustedDestinations, ...input.trustSessionDestinations!])];
+      if (trustedDestinations.length > 1024) throw new Error("Session destination grant limit exceeded");
+      return { ...state, trustedDestinations };
+    });
     return {
       approved: approval.approved,
       decision: {
@@ -843,8 +891,27 @@ export class InterceptionEngine {
     this.pendingClient.set(String(message.id), {
       method: message.method,
       tool,
+      sensitive: this.isSensitiveOrigin(tool ?? message.method) || extractArgumentFields((message.params as ToolsCallParams | undefined)?.arguments).some((field) => field.role === "file_path" && this.options.server.sensitivePathPatterns.some((pattern) => new RegExp(pattern, "iu").test(field.text))),
       startedAt: Date.now()
     });
+  }
+
+  private async startQuarantine(reason: string): Promise<void> {
+    const previous = this.options.taintStore.getSession(this.options.sessionId).quarantine;
+    const config = this.options.config.taint.quarantine;
+    this.options.taintStore.updateSession(this.options.sessionId, (state) => ({ ...state, quarantine: { expiresAt: Date.now() + config.ttlMs, remainingTurns: config.turns } }));
+    if (!previous) await this.auditSessionEvent("start", reason);
+  }
+
+  private async expireQuarantine(): Promise<void> {
+    const quarantine = this.options.taintStore.getSession(this.options.sessionId).quarantine;
+    if (!quarantine || (quarantine.expiresAt > Date.now() && quarantine.remainingTurns > 0)) return;
+    this.options.taintStore.updateSession(this.options.sessionId, (state) => ({ ...state, quarantine: undefined }));
+    await this.auditSessionEvent("end", "Session quarantine expired.");
+  }
+
+  private async auditSessionEvent(event: string, reason: string): Promise<void> {
+    await this.options.audit.write({ session: this.options.sessionId, profile_id: this.options.config.taint.profileId, run_id: process.env.PALIZADE_RUN_ID, direction: "internal", method: `session/quarantine/${event}`, action: "log_only", reason });
   }
 
   private async auditDecision(
@@ -931,14 +998,7 @@ export class InterceptionEngine {
       content?.path,
       typeof content?.rawValue === "string" ? content.rawValue : undefined
     ].filter((value): value is string => Boolean(value));
-    return this.options.server.sensitivePathPatterns.some((pattern) => {
-      try {
-        const regex = new RegExp(pattern, "iu");
-        return searchable.some((value) => regex.test(value));
-      } catch {
-        return false;
-      }
-    });
+    return this.options.server.sensitivePathPatterns.some((pattern) => searchable.some((value) => new RegExp(pattern, "iu").test(value)));
   }
 }
 

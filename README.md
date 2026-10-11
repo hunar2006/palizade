@@ -44,6 +44,10 @@ Upstream MCP server
 
 ## Features
 
+Enforcing presets approval-gate sink loops and rate limits: defaults are 60 sink attempts per minute, 20 distinct destinations per logical session and five identical calls before approval. `limits.historyEntries` bounds shared tracking to 1000 entries. Denied attempts count toward these limits.
+
+Default, strict and interactive now require approval for remote sinks once a session has seen both untrusted and sensitive content, even when no argument text matches. Approval can trust that destination for the current logical session. Use `PALIZADE_RUN_ID` for host-scoped session isolation; otherwise profile-scoped flags conservatively survive wrapper restarts.
+
 Split outbound payloads are correlated per session/destination in a bounded memory window. Default requires approval for reconstructed taint; strict and egress block it. Eight-character sensitive shard fingerprints are stored as HMACs. This covers bounded observable encodings and fragments; custom transformations and cross-process splits remain limitations.
 
 `egress.mode` defaults to `open` for compatibility. Use `approve_new` with the default preset: new destinations offer allow once, allow always, or deny. Allow always writes `palizade.allow.yaml` beside the config and reloads it on the next call. `allowlist_only` blocks unknown destinations; the strict preset enforces this even with mode `open`. Additional ID destinations can be listed in `egress.allowlist.destinations` as `channel_id:<id>`, `account_id:<id>` or `repository_destination:<id>`.
@@ -171,6 +175,8 @@ Palizade blocked this tool call. Rule: block-tainted-sink. Reason: Tainted conte
 ```
 
 ## Debugging
+
+Inspect quarantine with `palizade session quarantine`; clear it explicitly with `palizade session quarantine --clear [--session <id>]`. This clears quarantine only; seen-sensitive/untrusted flags and hard blocks remain active. High-score responses and blocked tainted/split/lookalike destinations quarantine the session; enforcing presets approval-gate subsequent sinks until expiry or operator clearance.
 
 Check local config and MCP coverage:
 

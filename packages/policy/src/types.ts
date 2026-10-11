@@ -45,6 +45,10 @@ export interface PolicyCondition {
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
+  rule_of_two?: boolean | undefined;
+  rate_limited?: boolean | undefined;
+  loop_detected?: boolean | undefined;
+  destination_session_trusted?: boolean | undefined;
   destination_allowlist_configured?: boolean | undefined;
   detector_score_gte?: number | undefined;
   detector_score_lt?: number | undefined;
@@ -83,6 +87,10 @@ export interface PolicyContext {
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
+  rule_of_two?: boolean | undefined;
+  rate_limited?: boolean | undefined;
+  loop_detected?: boolean | undefined;
+  destination_session_trusted?: boolean | undefined;
   destination_allowlist_configured?: boolean | undefined;
   detector_score?: number | undefined;
   labels?: string[] | undefined;
