@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+      # --ignore-scripts skips the onnxruntime binary download, which only the optional Prompt Guard 2 detector needs.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build
+      - name: Pull the docker image so the sandbox launch test runs instead of skipping
+        if: runner.os == 'Linux'
+        run: docker pull node:22-slim
+      - run: pnpm test
+      - run: pnpm eval
+      - run: pnpm smoke:filesystem
+      - name: Latency benchmark (budget enforced on Linux, reported elsewhere)
+        env:
+          PALIZADE_BENCH_SINK_P95_MS: ${{ runner.os == 'Linux' && '15' || '' }}
+        run: pnpm bench:latency
+
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build
+      - name: Install the packed tarball the way npm users get it and smoke test the CLI
+        run: |
+          set -euo pipefail
+          root="$PWD/.pkg-check"
+          mkdir -p "$root/install" "$root/work"
+          (cd packages/cli && npm pack --pack-destination "$root")
+          (cd "$root/install" && npm init -y > /dev/null && npm install --ignore-scripts --no-audit --no-fund "$root"/palizade-*.tgz)
+          cli="$root/install/node_modules/palizade/dist/index.cjs"
+          expected="$(node -p "require('./packages/cli/package.json').version")"
+          actual="$(cd "$root/work" && node "$cli" --version)"
+          test "$actual" = "$expected" || { echo "version mismatch: $actual vs $expected"; exit 1; }
+          cd "$root/work"
+          node "$cli" init
+          node "$cli" doctor
+          node "$cli" policy check
