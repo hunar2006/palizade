@@ -72,9 +72,10 @@ program.command("init")
 program.command("install-config")
   .description("Install a Palizade wrapper entry into an MCP client config")
   .argument("[serverName]", "Server name from palizade.yaml")
-  .option("--client <name>", "Target client", "claude-desktop")
+  .option("--client <name>", "Target client: claude-desktop, claude-code or cursor", "claude-desktop")
   .option("--config <path>", "Path to this project's palizade.yaml")
   .option("--client-config <path>", "Override the client config file location")
+  .option("--project", "Use the project config in the current directory (.mcp.json or .cursor/mcp.json)", false)
   .option("--name <entryName>", "Name for the mcpServers entry")
   .option("--all", "Wrap every unprotected MCP server in the client config", false)
   .option("--lock", "Print lock approve commands for newly auto-added servers", false)
@@ -84,6 +85,7 @@ program.command("install-config")
     client: string;
     config?: string;
     clientConfig?: string;
+    project: boolean;
     name?: string;
     all: boolean;
     lock: boolean;
@@ -101,6 +103,7 @@ program.command("install-config")
         client: options.client,
         configPath: selectInstallConfigPath(command, program),
         clientConfigPath: options.clientConfig,
+        project: options.project,
         dryRun: options.dryRun,
         cliPath: getRunningCliPath()
       });
@@ -126,7 +129,7 @@ program.command("install-config")
           console.log(`Updated ${result.palizadeConfigPath}`);
         }
         console.log("Auto-added servers default to trust=untrusted. Review palizade.yaml and tighten toolClasses/toolCapabilities where needed.");
-        console.log("Fully quit and reopen Claude Desktop for the change to take effect.");
+        console.log(`Restart ${clientLabel(options.client)} for the change to take effect.`);
       } else {
         console.log("No unprotected MCP server entries found.");
       }
@@ -148,6 +151,7 @@ program.command("install-config")
       client: options.client,
       configPath: selectInstallConfigPath(command, program),
       clientConfigPath: options.clientConfig,
+      project: options.project,
       entryName: options.name,
       dryRun: options.dryRun,
       force: options.force,
@@ -164,7 +168,7 @@ program.command("install-config")
     console.log(`Entry: ${result.entryName}`);
     console.log(`Command: ${result.entry.command ?? "node"} ${(result.entry.args ?? []).join(" ")}`);
     console.log(result.backupPath ? `Backup: ${result.backupPath}` : "Backup: none (created new config file)");
-    console.log("Fully quit and reopen Claude Desktop for the change to take effect.");
+    console.log(`Restart ${clientLabel(options.client)} for the change to take effect.`);
   });
 
 const detectors = program.command("detectors")
@@ -508,9 +512,10 @@ taint.command("prune")
 
 program.command("doctor")
   .description("Validate local Palizade configuration")
-  .option("--client <name>", "Target client for MCP coverage", "claude-desktop")
+  .option("--client <name>", "Target client for MCP coverage: claude-desktop, claude-code or cursor", "claude-desktop")
   .option("--client-config <path>", "Override the client config file location for coverage")
-  .action(async (options: { client: string; clientConfig?: string }) => {
+  .option("--project", "Check the project config in the current directory", false)
+  .action(async (options: { client: string; clientConfig?: string; project: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     console.log(`Config: ${resolve(configPath)}`);
@@ -534,7 +539,8 @@ program.command("doctor")
     }
     const coverage = await inspectClientCoverage({
       client: options.client,
-      clientConfigPath: options.clientConfig
+      clientConfigPath: options.clientConfig,
+      project: options.project
     });
     console.log(`Client config: ${coverage.clientConfigPath}`);
     if (!coverage.existed) {
@@ -713,4 +719,8 @@ async function exists(path: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+function clientLabel(client: string): string {
+  return client === "claude-code" ? "Claude Code" : client === "cursor" ? "Cursor" : "Claude Desktop (fully quit and reopen)";
 }

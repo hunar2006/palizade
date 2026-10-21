@@ -51,6 +51,19 @@ describe("sandbox config validation", () => {
   });
 });
 
+describe("placeholder expansion", () => {
+  it("fills ${NAME} from the host env, reports unset names, and masks expanded secrets in audit", () => {
+    const server = { command: "node", args: ["${APP_DIR}/server.js", "--token=${API_KEY}"], cwd: process.cwd(), env: { API_KEY: "${API_KEY}", REGION: "${REGION:-us}" } };
+    const plan = buildLaunchPlan("api", server, { platform: "linux", hostEnv: { APP_DIR: "/srv/app", API_KEY: "sk_live_expanded_secret" } });
+    expect(plan.args).toEqual(["/srv/app/server.js", "--token=sk_live_expanded_secret"]);
+    expect(plan.env.API_KEY).toBe("sk_live_expanded_secret");
+    expect(plan.env.REGION).toBe("us");
+    expect(plan.missingEnv).toBeUndefined();
+    expect(JSON.stringify(describeLaunchForAudit(plan, server))).not.toContain("sk_live_expanded_secret");
+    expect(buildLaunchPlan("api", server, { platform: "linux", hostEnv: {} }).missingEnv).toEqual(["API_KEY", "APP_DIR"]);
+  });
+});
+
 describe("docker launch plan", () => {
   it("builds a locked down docker argument list without environment values", async () => {
     const cwd = await tempDir();

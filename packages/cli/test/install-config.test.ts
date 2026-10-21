@@ -59,7 +59,7 @@ describe("installClientConfig", () => {
         clientConfigPath,
         configPath: palizadeConfigPath,
         cliPath
-      })).rejects.toThrow("Failed to parse Claude Desktop config");
+      })).rejects.toThrow("Failed to parse client config");
       expect(await readFile(clientConfigPath, "utf8")).toBe("{ nope");
       await expect(stat(`${clientConfigPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
@@ -295,7 +295,7 @@ describe("installClientConfig", () => {
           name: "unwrapped",
           wrapped: false,
           command: "node",
-          advice: "WARNING: unwrapped is configured but NOT protected by Palizade - run palizade install-config unwrapped"
+          advice: "WARNING: unwrapped is configured but NOT protected by Palizade - run palizade install-config --all"
         },
         {
           name: "wrapped",
@@ -304,7 +304,7 @@ describe("installClientConfig", () => {
         }
       ]);
       expect(coverage.warnings).toEqual([
-        "WARNING: unwrapped is configured but NOT protected by Palizade - run palizade install-config unwrapped"
+        "WARNING: unwrapped is configured but NOT protected by Palizade - run palizade install-config --all"
       ]);
     } finally {
       await cleanup();
@@ -353,6 +353,43 @@ describe("installClientConfig", () => {
       .toBe("/Users/hunar/Library/Application Support/Claude/claude_desktop_config.json");
     expect(resolveClientConfigPath("claude-desktop", "linux", {}, "/home/hunar"))
       .toBe("/home/hunar/.config/Claude/claude_desktop_config.json");
+  });
+
+  it("resolves Claude Code and Cursor configs at user and project scope", () => {
+    expect(resolveClientConfigPath("claude-code", "linux", {}, "/home/hunar")).toBe("/home/hunar/.claude.json");
+    expect(resolveClientConfigPath("claude-code", "linux", {}, "/home/hunar", "/work/app")).toBe("/work/app/.mcp.json");
+    expect(resolveClientConfigPath("cursor", "win32", {}, "C:\\Users\\hunar")).toBe("C:\\Users\\hunar\\.cursor\\mcp.json");
+    expect(resolveClientConfigPath("cursor", "darwin", {}, "/Users/hunar", "/work/app")).toBe("/work/app/.cursor/mcp.json");
+    expect(() => resolveClientConfigPath("claude-desktop", "linux", {}, "/home/hunar", "/work/app")).toThrow("no project config");
+    expect(() => resolveClientConfigPath("vscode")).toThrow("Supported clients: claude-desktop, claude-code, cursor");
+  });
+
+  it("imports remote servers with their headers, normalizes Cursor placeholders, and skips sse and ws", async () => {
+    const { root, palizadeConfigPath, cliPath, cleanup } = await makeFixture();
+    try {
+      await mkdir(join(root, ".cursor"), { recursive: true });
+      await writeFile(join(root, ".cursor", "mcp.json"), JSON.stringify({
+        mcpServers: {
+          linear: { url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer ${env:LINEAR_TOKEN}" } },
+          local: { command: "node", args: ["${env:HOME}/server.mjs"], env: { KEY: "${env:API_KEY}" } },
+          legacy: { type: "sse", url: "https://old.example.com/sse" },
+          socket: { type: "ws", url: "wss://ws.example.com" }
+        }
+      }), "utf8");
+
+      const result = await installAllClientConfigs({ client: "cursor", project: true, configPath: palizadeConfigPath, cliPath, cwd: root });
+
+      expect(result.clientConfigPath).toBe(join(root, ".cursor", "mcp.json"));
+      expect(result.wrapped.map((server) => server.name)).toEqual(["linear", "local"]);
+      expect(result.skipped.map((server) => server.name)).toEqual(["legacy", "socket"]);
+      const servers = (YAML.parse(await readFile(palizadeConfigPath, "utf8")) as { servers: Record<string, Record<string, unknown>> }).servers;
+      expect(servers.linear).toMatchObject({ url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer ${LINEAR_TOKEN}" } });
+      expect(servers.local).toMatchObject({ args: ["${HOME}/server.mjs"], env: { KEY: "${API_KEY}" } });
+      const client = JSON.parse(await readFile(result.clientConfigPath, "utf8")) as { mcpServers: Record<string, unknown> };
+      expect(client.mcpServers.legacy).toEqual({ type: "sse", url: "https://old.example.com/sse" });
+    } finally {
+      await cleanup();
+    }
   });
 });
 
