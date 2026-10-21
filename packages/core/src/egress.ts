@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { parseYamlWithSchema } from "@palizade/policy";
-import { canonicalHost } from "@palizade/taint";
+import { canonicalEmail, canonicalHost } from "@palizade/taint";
 import YAML from "yaml";
 import { z } from "zod";
 import type { ArgumentField } from "./arguments.js";
@@ -16,7 +16,7 @@ export function destinationEntries(fields: ArgumentField[]): string[] {
       catch { return [`invalid:${field.text}`]; }
     }
     if (field.role === "hostname") return [`host:${canonicalHost(field.text)}`];
-    if (field.role === "email_recipient") return [`email:${field.text.trim().toLowerCase()}`];
+    if (field.role === "email_recipient") return [`email:${canonicalEmail(field.text)}`];
     if (["repository_destination", "account_id", "channel_id"].includes(field.role)) return [`${field.role}:${field.text}`];
     return [];
   }))];
@@ -84,7 +84,11 @@ export function destinationsAllowed(entries: string[], allowlist: PalizadeConfig
     }
     if (entry.startsWith("email:")) return allowlist.emails.some((configured) => {
       const value = configured.trim().toLowerCase();
-      return value === "*" || value === entry.slice(6) || (value.startsWith("*@") && entry.slice(6).endsWith(value.slice(1))) || (value.startsWith("@") && entry.slice(6).endsWith(value));
+      const email = entry.slice(6);
+      if (value === "*") return true;
+      const domainPattern = value.startsWith("*@") ? value.slice(2) : value.startsWith("@") ? value.slice(1) : undefined;
+      if (domainPattern !== undefined) return email.slice(email.lastIndexOf("@") + 1) === canonicalHost(domainPattern);
+      return canonicalEmail(value) === email;
     });
     return allowlist.destinations.includes(entry);
   });

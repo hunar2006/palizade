@@ -25,3 +25,13 @@ describe("matching view strips all default ignorables", () => {
     expect(normalizeText([..."quarterly payroll export"].join(filler))).toBe("quarterly payroll export");
   });
 });
+
+describe("canonical destinations", () => {
+  it("gives equivalent host spellings one form", async () => {
+    const { canonicalHost, canonicalEmail } = await import("./unicode.js");
+    expect(canonicalHost("EXAMPLE.com.")).toBe("example.com");
+    expect(canonicalHost("127.1")).toBe("127.0.0.1");
+    expect(canonicalHost("bücher.example")).toBe("xn--bcher-kva.example");
+    expect(canonicalEmail("Ops@Example.COM.")).toBe("ops@example.com");
+  });
+});

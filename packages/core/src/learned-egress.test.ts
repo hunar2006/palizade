@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { LearnedEgress, destinationsAllowed } from "./egress.js";
 
 it("retains legacy email-domain allowlists and denies other domains", () => {
@@ -27,4 +27,17 @@ it("remembers new hosts separately and reloads changes without rewriting config"
     await writeFile(file, "hosts: bad\n");
     expect(() => store.allowlist(empty)).toThrow();
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+describe("allowlist uses canonical destinations", () => {
+  it("matches emails and hosts regardless of spelling", async () => {
+    const { destinationsAllowed, destinationEntries } = await import("./egress.js");
+    const allowlist = { hosts: ["api.example.com"], emails: ["@example.com"], destinations: [] };
+    const fields = [
+      { path: "$.to", role: "email_recipient" as const, text: "Ops@EXAMPLE.com" },
+      { path: "$.host", role: "hostname" as const, text: "API.example.com." }
+    ];
+    expect(destinationsAllowed(destinationEntries(fields), allowlist)).toBe(true);
+    expect(destinationsAllowed(destinationEntries([{ path: "$.to", role: "email_recipient" as const, text: "ops@example.com.evil.test" }]), allowlist)).toBe(false);
+  });
 });
