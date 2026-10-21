@@ -29,16 +29,11 @@ const TAG_END = 0xe007f;
 const BLACK_FLAG = 0x1f3f4;
 const CANCEL_TAG = 0xe007f;
 
+// Every code point Unicode says renders as nothing (4,000+, including fillers and bidi controls).
+const DEFAULT_IGNORABLE = /^\p{Default_Ignorable_Code_Point}$/u;
+
 export function isHiddenCodePoint(cp: number): boolean {
-  return (cp >= TAG_START && cp <= TAG_END) ||
-    (cp >= 0xfe00 && cp <= 0xfe0f) ||
-    (cp >= 0xe0100 && cp <= 0xe01ef) ||
-    cp === 0x00ad ||
-    (cp >= 0x200b && cp <= 0x200f) ||
-    (cp >= 0x202a && cp <= 0x202e) ||
-    (cp >= 0x2060 && cp <= 0x206f) ||
-    cp === 0xfeff ||
-    cp === 0x180e;
+  return (cp >= TAG_START && cp <= TAG_END) || cp === 0x2800 || DEFAULT_IGNORABLE.test(String.fromCodePoint(cp));
 }
 
 /**

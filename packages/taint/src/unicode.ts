@@ -1,6 +1,7 @@
 import { domainToASCII, domainToUnicode } from "node:url";
 
-export const HIDDEN_UNICODE = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+// Matching view only: every Unicode default ignorable code point (covers TAG characters, fillers, bidi controls).
+export const HIDDEN_UNICODE = /[\p{Default_Ignorable_Code_Point}\u2800]/gu;
 
 // shortcut: compact common Latin lookalikes only, use the full UTS 39 table for broader identifier coverage.
 const CONFUSABLES: Record<string, string> = {
@@ -15,7 +16,23 @@ export function identifierSkeleton(input: string): string {
 
 export function canonicalHost(input: string): string {
   const host = input.normalize("NFKC").replace(HIDDEN_UNICODE, "").trim().replace(/\.$/u, "").toLowerCase();
+  // Let the WHATWG URL parser canonicalize host spellings (IPv4 forms, percent-encoding, IDNA) so
+  // every caller compares the same form a client would actually connect to.
+  try {
+    const parsed = new URL(`http://${host}/`).hostname.replace(/\.$/u, "");
+    if (parsed) return parsed;
+  } catch {
+    // Not a valid URL host; fall back to IDNA only.
+  }
   return domainToASCII(host) || host;
+}
+
+/** Lowercases and strips invisible characters from the local part, canonicalizes the domain. */
+export function canonicalEmail(input: string): string {
+  const text = input.normalize("NFKC").replace(HIDDEN_UNICODE, "").trim().toLowerCase();
+  const at = text.lastIndexOf("@");
+  if (at <= 0 || at === text.length - 1) return text;
+  return `${text.slice(0, at)}@${canonicalHost(text.slice(at + 1))}`;
 }
 
 export function hostSkeleton(input: string): string {

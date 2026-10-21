@@ -18,3 +18,20 @@ describe("matching Unicode views", () => {
     expect(extractAtomicTokens("обычный русский текст")).toEqual([]);
   });
 });
+
+describe("matching view strips all default ignorables", () => {
+  it("matches text with fillers inserted between letters", () => {
+    const filler = String.fromCodePoint(0x3164);
+    expect(normalizeText([..."quarterly payroll export"].join(filler))).toBe("quarterly payroll export");
+  });
+});
+
+describe("canonical destinations", () => {
+  it("gives equivalent host spellings one form", async () => {
+    const { canonicalHost, canonicalEmail } = await import("./unicode.js");
+    expect(canonicalHost("EXAMPLE.com.")).toBe("example.com");
+    expect(canonicalHost("127.1")).toBe("127.0.0.1");
+    expect(canonicalHost("bücher.example")).toBe("xn--bcher-kva.example");
+    expect(canonicalEmail("Ops@Example.COM.")).toBe("ops@example.com");
+  });
+});

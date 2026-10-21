@@ -73,6 +73,14 @@ if (p95 > 50) {
   process.exitCode = 1;
 }
 
+// Opt-in budget for the SQLite sink check (CI sets it where runners are stable enough to enforce).
+const sinkBudget = Number(process.env.PALIZADE_BENCH_SINK_P95_MS ?? "");
+const sinkP95 = percentile(check, 0.95);
+if (Number.isFinite(sinkBudget) && sinkBudget > 0 && sinkP95 > sinkBudget) {
+  console.error(`sqlite sink check p95 ${sinkP95.toFixed(2)}ms exceeded the ${sinkBudget}ms budget`);
+  process.exitCode = 1;
+}
+
 function percentile(values, p) {
   return values[Math.min(values.length - 1, Math.floor(values.length * p))] ?? 0;
 }

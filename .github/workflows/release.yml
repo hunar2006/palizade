@@ -1,0 +1,72 @@
+name: Release
+
+# Publishes to npm only when a version tag (for example v0.4.0) is pushed.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Check the tag matches the package version and is on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/cli/package.json').version")"
+          if [ "$TAG" != "v$version" ]; then
+            echo "Tag $TAG does not match packages/cli/package.json version $version"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $TAG points at a commit that is not on main"
+            exit 1
+          fi
+          if npm view "palizade@$version" version > /dev/null 2>&1; then
+            echo "palizade@$version is already published"
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build
+      - run: docker pull node:22-slim
+      - run: pnpm test
+      - run: pnpm eval
+      - run: pnpm smoke:filesystem
+      - name: Publish to npm with provenance
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "The NPM_TOKEN repository secret is not set"
+            exit 1
+          fi
+          npm publish --provenance --access public

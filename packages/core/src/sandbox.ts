@@ -14,12 +14,29 @@ export const sandboxObjectSchema = z.object({
   passEnv: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u, "passEnv entries must be environment variable names")).default([]),
   dockerNetwork: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/u, "dockerNetwork must be a docker network name").optional(),
   pidsLimit: z.number().int().min(16).max(65_536).default(512),
-  memory: z.string().regex(/^\d+[bkmg]?$/iu, "memory must look like 512m or 2g").optional()
+  memory: z.string().regex(/^\d+[bkmg]?$/iu, "memory must look like 512m or 2g").optional(),
+  advisoryNetwork: z.boolean().default(false)
 }).strict().superRefine((sandbox, ctx) => {
   if (sandbox.network === "allowlist" && sandbox.allowHosts.length === 0) {
     ctx.addIssue({ code: "custom", path: ["allowHosts"], message: "sandbox.network: allowlist needs at least one allowHosts entry; use network: none to block all egress." });
   }
+  // Fail closed: an allowlist the server can route around must be an explicit, visible choice.
+  if (isAdvisoryNetwork(sandbox) && !sandbox.advisoryNetwork) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["network"],
+      message: sandbox.type === "docker"
+        ? "network: allowlist with docker is only enforced on an internal network whose only route is the proxy; set dockerNetwork, or set advisoryNetwork: true to accept proxy-only filtering."
+        : "network: allowlist with bubblewrap shares the host network, so the proxy is advisory; use seatbelt or docker with dockerNetwork, or set advisoryNetwork: true to accept it."
+    });
+  }
 });
+
+/** True when network: allowlist relies on the server honoring HTTP(S)_PROXY instead of an enforced route. */
+export function isAdvisoryNetwork(sandbox: { type: string; network: string; dockerNetwork?: string | undefined }): boolean {
+  if (sandbox.network !== "allowlist") return false;
+  return (sandbox.type === "docker" && !sandbox.dockerNetwork) || sandbox.type === "bubblewrap";
+}
 
 /** `sandbox: docker` is shorthand for `sandbox: { type: docker }`. */
 export const sandboxConfigSchema = z.union([sandboxTypeSchema, sandboxObjectSchema]);
@@ -224,7 +241,7 @@ export function sandboxStatus(servers: Record<string, LaunchServerConfig & { url
     if (sandbox.type === "none") {
       return { server, sandbox: "none", status: "unsandboxed", detail: "runs with your user's full file, network and environment access; consider sandbox: docker" };
     }
-    const network = sandbox.network === "none" ? "no network" : `network allowlist: ${sandbox.allowHosts.join(", ")}`;
+    const network = sandbox.network === "none" ? "no network" : `network allowlist: ${sandbox.allowHosts.join(", ")}${isAdvisoryNetwork(sandbox) ? " (ADVISORY: not enforced, the server can bypass the proxy)" : ""}`;
     return { server, sandbox: sandbox.type, status: "sandboxed", detail: `${network}; writable: ${sandbox.writable.length > 0 ? sandbox.writable.join(", ") : "none"}` };
   });
 }
@@ -267,7 +284,7 @@ function dockerNetworkArgs(sandbox: SandboxConfig, platform: NodeJS.Platform): s
   if (sandbox.network === "none") {
     return ["--network", "none"];
   }
-  // shortcut: allowlist relies on HTTP(S)_PROXY, which a hostile server can ignore on the default bridge network; set sandbox.dockerNetwork to an internal network whose only route is the proxy for hard enforcement.
+  // Without dockerNetwork this is advisory; config validation rejects it unless advisoryNetwork: true.
   return [
     "--network", sandbox.dockerNetwork ?? "bridge",
     ...(platform === "linux" ? ["--add-host", "host.docker.internal:host-gateway"] : [])
