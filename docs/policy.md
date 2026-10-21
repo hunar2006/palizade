@@ -115,6 +115,17 @@ The client's retry `inputResponses` are checked for observable tainted or sensit
 - Trusted server plus unknown tool: allow with audit logging.
 - Policy evaluation errors: block in enforcing presets.
 
+## How Tools Are Classified
+
+Each tool gets a class (`source`, `sink`, `pure` or `unknown`) and a set of capabilities. The first of these that applies wins:
+
+1. `toolClasses` and `toolCapabilities` in `palizade.yaml`.
+2. The built-in catalog, for servers you configured from a known package, image or url (filesystem, fetch, memory, git, GitHub, Slack, Puppeteer, Playwright, Brave Search, time, sequential thinking). Run `palizade tools --catalog` for the list. Set `catalog: <id>` on a server to use an entry for a custom build, or `catalog: false` to turn it off. Tools the catalog does not name fall through to the next steps.
+3. Annotations. On untrusted and semi trusted servers they can only raise risk: `destructiveHint` or `openWorldHint` makes a tool a sink, `readOnlyHint` is ignored.
+4. Heuristics on the tool name, the input schema and the description. Property names such as `to`, `cmd`, `webhook_url`, `amount`, or a path plus content pair add sink capabilities. On servers that are not trusted, the description and title can add sink capabilities but cannot make a tool a source, since that text comes from the server.
+
+`palizade tools [server]` prints the class, capabilities and reasons for every locked tool without starting any server. Audit events record the same reasons under `metadata.classificationReasons`.
+
 ## Detector Defaults
 
 Detector-based response rules are trust-agnostic in the shipped presets. Semi-trusted servers such as filesystem and fetch still have suspicious `tools/call` output spotlighted or escalated when detector scores cross policy thresholds. Trust affects unknown-tool handling and taint registration, but it does not suppress detector-score rules by default.

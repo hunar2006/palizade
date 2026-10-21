@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { TOOL_CATALOG } from "./tool-catalog.js";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { parseYamlWithSchema } from "@palizade/policy";
 import { z } from "zod";
@@ -39,7 +40,9 @@ export const serverConfigSchema = z.object({
   sensitivePathPatterns: z.array(z.string().refine((pattern) => { try { new RegExp(pattern, "iu"); return true; } catch { return false; } }, "Invalid sensitive path regular expression")).default([]),
   shell: z.boolean().default(false),
   allowShell: z.boolean().default(false),
-  sandbox: sandboxConfigSchema.optional()
+  sandbox: sandboxConfigSchema.optional(),
+  // A catalog id from `palizade tools --catalog`, or false to turn the built-in catalog off for this server.
+  catalog: z.union([z.string().refine((id) => TOOL_CATALOG.some((entry) => entry.id === id), "Unknown catalog id; run palizade tools --catalog for the list"), z.literal(false)]).optional()
 }).strict().superRefine((server, ctx) => {
   if (server.sandbox !== undefined && server.url !== undefined && normalizeSandbox(server.sandbox).type !== "none") {
     ctx.addIssue({ code: "custom", path: ["sandbox"], message: "sandbox applies only to stdio servers (command); remove it from url servers." });

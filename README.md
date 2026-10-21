@@ -310,6 +310,10 @@ palizade session reset [--session <id>]
 palizade doctor
 ```
 
+### Tool classification
+
+Common servers (filesystem, fetch, memory, git, GitHub, Slack, Puppeteer, Playwright, Brave Search, time, sequential thinking) are classified from a built in catalog, so their tools work under `trust: untrusted` without hand written `toolClasses`. `palizade tools` prints each locked tool's class and why; `palizade tools --catalog` lists the catalog. See [how tools are classified](docs/policy.md#how-tools-are-classified).
+
 ### Native client tool hooks
 
 `palizade install-hooks <client>` writes hook entries for `claude-code` (`~/.claude/settings.json`), `cursor` (`~/.cursor/hooks.json`, `failClosed: true`), or `codex` (`~/.codex/hooks.json`) — backing up and merging without ever overwriting malformed JSON. The `palizade hook` command reads the client's hook JSON on stdin and prints the client's decision format (Claude Code/Codex `hookSpecificOutput.permissionDecision`, Cursor `permission`).

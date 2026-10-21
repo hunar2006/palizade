@@ -12,6 +12,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 
 - **Stricter config validation.** Unknown keys in `palizade.yaml` and policy files are now errors, reported with the YAML path, line number and a fix hint.
 - **New rules in the shipped presets.** `default`, `interactive`, `strict` and `egress` now block destinations that were copied from untrusted content and lookalike hosts, ask before outbound actions once a session has seen both untrusted and sensitive data (Rule of Two), ask before writes to critical files (agent and IDE configs, CI workflows, git hooks, `package.json`, `.env*`, shell rc files), and gate quarantined, rate limited and looping sessions. Regenerate your policy with `palizade init --force`, or merge the new rules by hand.
+- **Descriptions from untrusted servers can only raise risk.** On `semi` and `untrusted` servers, a tool description or title can add sink capabilities but no longer turns an unknown tool into a source. Such tools now hit the unknown tool rules (block on untrusted, approval on semi) unless the catalog or `toolClasses` names them.
 - **Annotations from untrusted servers can only raise risk.** On `semi` and `untrusted` servers, `readOnlyHint` no longer turns a risky or unknown tool into a source.
 - **Hooks fail closed.** Any hook error (bad config, oversized or invalid input, timeout) denies the tool call with exit code 2 unless `hooks.failMode: open`.
 - **Sandbox network allowlists must be enforceable.** `network: allowlist` with docker and no `dockerNetwork`, or with bubblewrap, is rejected at startup unless you set `advisoryNetwork: true`, because the server could ignore the proxy.
@@ -31,6 +32,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Optional sandboxed launch** for stdio servers: docker (including Windows), bubblewrap and seatbelt.
 - **Operations:** hot reload, `palizade policy check`, `palizade status`, `palizade learn --from-audit`, optional metrics JSONL, and `doctor` coverage reports.
 - **Presets:** `coding-agent` and `research-readonly`.
+- **Tool catalog and schema signals:** built in classes for common MCP servers, chosen by the package, image or url in your config; input schema property names raise risk; `palizade tools` shows each tool's class and the reasons; audit events record `classificationReasons`.
 - **CI** on Windows, macOS and Linux with Node 22 and 24, and a tag-only release workflow with npm provenance.
 
 ### Security fixes since the v0.4 integration

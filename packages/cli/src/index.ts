@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import YAML from "yaml";
 import {
+  catalogEntryFor,
   collectToolsFromHttpServer,
   collectToolsFromStdioServer,
   createRuntime,
@@ -36,6 +37,7 @@ import { formatLearnDraft, learnFromAudit } from "./learn.js";
 import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
+import { describeServerTools, formatCatalog, formatServerTools } from "./tools-command.js";
 
 declare const __PKG_VERSION__: string;
 declare const __POLICY_PRESETS__: Record<string, string>;
@@ -415,6 +417,21 @@ lock.command("diff")
     if (diff.some((entry) => entry.status !== "unchanged")) process.exitCode = 2;
   });
 
+program.command("tools")
+  .description("Show how Palizade classifies each locked tool (source, sink, pure, unknown) and why")
+  .argument("[serverName]", "Only this server from palizade.yaml")
+  .option("--catalog", "List the built-in catalog of known MCP servers", false)
+  .option("--json", "Print JSON", false)
+  .action(async (serverName: string | undefined, options: { catalog: boolean; json: boolean }) => {
+    if (options.catalog) {
+      console.log(formatCatalog());
+      return;
+    }
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const reports = describeServerTools(config, await new LockfileStore(config.lockfile).read(), serverName);
+    console.log(options.json ? JSON.stringify(reports, null, 2) : formatServerTools(reports));
+  });
+
 const audit = program.command("audit")
   .description("Read audit events")
   .option("--last <duration>", "Only events within a duration such as 1h", "1h")
@@ -521,7 +538,7 @@ program.command("doctor")
       if (server.url) {
         console.log(`Server ${name}: url=${server.url} [trust=${server.trust}] [protocolVersion=${server.protocolVersion ?? "auto"}]`);
       } else {
-        console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]`);
+        console.log(`Server ${name}: ${server.command} ${server.args.join(" ")} [trust=${server.trust}]${catalogEntryFor(server) ? ` [catalog=${catalogEntryFor(server)!.id}]` : ""}`);
       }
     }
     const sandboxRows = sandboxStatus(config.servers);

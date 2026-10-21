@@ -2,6 +2,7 @@ export * from "./mcp.js";
 export * from "./canonical.js";
 export * from "./config.js";
 export * from "./classifier.js";
+export * from "./tool-catalog.js";
 export * from "./content.js";
 export * from "./arguments.js";
 export * from "./era.js";

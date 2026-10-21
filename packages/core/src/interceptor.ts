@@ -263,7 +263,7 @@ export class InterceptionEngine {
           .map((match): TaintMatch => ({ ...match, reason: candidate.kind === "original" || match.reason === "temporal" ? match.reason : `decoded:${candidate.kind}` }))));
       return matchCache.get(text)!;
     };
-    const argumentFields = extractArgumentFields(params.arguments, tool, this.options.server.argumentRoles?.[tool]);
+    const argumentFields = extractArgumentFields(params.arguments, tool, { ...classification.argumentRoles, ...this.options.server.argumentRoles?.[tool] });
     const protectedPaths = checkProtectedPaths(argumentFields, this.options.server.cwd ?? process.cwd(), this.options.config);
     const writesFile = classification.capabilities.some((capability) => ["file_write", "writes_local", "deletes_data"].includes(capability));
     const argumentBlocks = extractTextBlocks(params.arguments);
@@ -875,7 +875,7 @@ export class InterceptionEngine {
           const approval = await this.maybeApprove(decision, {
             method: "sampling/createMessage",
             toolClass: "unknown",
-            classification: { toolClass: "unknown", capabilities: ["invokes_model"] },
+            classification: { toolClass: "unknown", capabilities: ["invokes_model"], reasons: ["sampling"] },
             taintMatches: [],
             summary: `${this.options.serverName} requested model access through an input_required result (${key}).`
           });
@@ -925,7 +925,7 @@ export class InterceptionEngine {
           const approval = await this.maybeApprove(decision, {
             method: "elicitation/create",
             toolClass: "unknown",
-            classification: { toolClass: "unknown", capabilities: ["user_interaction"] },
+            classification: { toolClass: "unknown", capabilities: ["user_interaction"], reasons: ["elicitation"] },
             taintMatches: [],
             summary: `${this.options.serverName} requested user input through an input_required result (${key}).`
           });
@@ -1024,7 +1024,7 @@ export class InterceptionEngine {
     const approval = await this.maybeApprove(decision, {
       method: message.method,
       toolClass: "unknown",
-      classification: { toolClass: "unknown", capabilities: isSampling ? ["invokes_model"] : ["user_interaction"] },
+      classification: { toolClass: "unknown", capabilities: isSampling ? ["invokes_model"] : ["user_interaction"], reasons: [isSampling ? "sampling" : "elicitation"] },
       taintMatches: [],
       summary: `${this.options.serverName} requested model access via ${message.method}.`
     });
@@ -1220,7 +1220,7 @@ export class InterceptionEngine {
     const approval = await this.maybeApprove(decision, {
       method: bucket,
       toolClass: "unknown",
-      classification: { toolClass: "unknown", capabilities: ["reads_untrusted_content"] },
+      classification: { toolClass: "unknown", capabilities: ["reads_untrusted_content"], reasons: ["prompt"] },
       taintMatches: [],
       summary: `${bucket} returned ${descriptors.length} descriptor(s); lock status ${lockStatus}; detector score ${fused.score.toFixed(2)}.`
     });
@@ -1254,7 +1254,7 @@ export class InterceptionEngine {
       trust: this.options.server.trust
     });
     const { fused, detectionsByPath } = await this.detectContents(contents);
-    const classification: ToolClassification = { toolClass: "source", capabilities: ["reads_untrusted_content"] };
+    const classification: ToolClassification = { toolClass: "source", capabilities: ["reads_untrusted_content"], reasons: ["resource"] };
     const taintRecords = this.registerTaintFromContents(pending.method, classification, contents, fused);
     if (fused.score >= this.options.config.taint.quarantine.scoreGte) await this.startQuarantine("High-score source response.");
     if (fused.score >= this.options.config.taint.temporal.detectorScoreGte) {
@@ -1522,6 +1522,7 @@ export class InterceptionEngine {
       metadata: {
         toolClass: extra.toolClass,
         capabilities: extra.classification?.capabilities,
+        classificationReasons: extra.classification?.reasons,
         lockChecks: extra.lockChecks,
         lockStatus: extra.lockStatus,
         approved: extra.approved,
