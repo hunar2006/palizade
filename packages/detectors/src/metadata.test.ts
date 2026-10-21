@@ -25,3 +25,15 @@ describe("metadata unicode checks", () => {
     expect(findDangerousDefaults({ description: "Never pass --no-sandbox." })).toHaveLength(0);
   });
 });
+
+describe("default ignorable coverage", () => {
+  it("flags every invisible class, not just a hand list", () => {
+    for (const cp of [0x3164, 0x115f, 0xffa0, 0x034f, 0x061c, 0x2800]) {
+      expect(findHiddenUnicode(`read${String.fromCodePoint(cp)}me`).count, cp.toString(16)).toBe(1);
+    }
+  });
+
+  it("still leaves a normal emoji family sequence alone", () => {
+    expect(findHiddenUnicode("team 👩‍👩‍👧 ❤️ done").count).toBe(0);
+  });
+});

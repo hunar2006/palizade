@@ -1,6 +1,7 @@
 import { domainToASCII, domainToUnicode } from "node:url";
 
-export const HIDDEN_UNICODE = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+// Matching view only: every Unicode default ignorable code point (covers TAG characters, fillers, bidi controls).
+export const HIDDEN_UNICODE = /[\p{Default_Ignorable_Code_Point}\u2800]/gu;
 
 // shortcut: compact common Latin lookalikes only, use the full UTS 39 table for broader identifier coverage.
 const CONFUSABLES: Record<string, string> = {

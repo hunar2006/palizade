@@ -18,3 +18,10 @@ describe("matching Unicode views", () => {
     expect(extractAtomicTokens("обычный русский текст")).toEqual([]);
   });
 });
+
+describe("matching view strips all default ignorables", () => {
+  it("matches text with fillers inserted between letters", () => {
+    const filler = String.fromCodePoint(0x3164);
+    expect(normalizeText([..."quarterly payroll export"].join(filler))).toBe("quarterly payroll export");
+  });
+});
