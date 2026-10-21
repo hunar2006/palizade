@@ -140,6 +140,6 @@ Manual review scan for plausible-real contact/name values:
 Ran `pnpm eval:asr` after `pnpm build`.
 
 - Raw rows: 225
-- Programmatic 10% spot-check sample: 10
+- Programmatic 10% spot-check sample: 11
 - Mismatches: 0
   - none
