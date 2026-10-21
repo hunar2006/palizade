@@ -59,7 +59,7 @@ describe("docker launch plan", () => {
       args: ["server.js", "/workspace"],
       cwd,
       env: { GITHUB_TOKEN: "ghp_secretvalue123456" },
-      sandbox: { type: "docker", image: "palizade/fs:1", writable: ["out"], network: "none", allowHosts: [], passEnv: ["LANG"], pidsLimit: 128 }
+      sandbox: { type: "docker", image: "palizade/fs:1", writable: ["out"], network: "none", allowHosts: [], passEnv: ["LANG"], pidsLimit: 128, advisoryNetwork: false }
     }, { platform: "win32", hostEnv: { PATH: "C:\\bin", LANG: "en_US.UTF-8", AWS_SECRET_ACCESS_KEY: "nope" } });
 
     expect(plan.command).toBe("docker");
@@ -81,7 +81,7 @@ describe("docker launch plan", () => {
       args: ["--token=abc123secret"],
       cwd: process.cwd(),
       env: {},
-      sandbox: { type: "docker" as const, writable: [], network: "allowlist" as const, allowHosts: ["api.github.com"], passEnv: [], pidsLimit: 512 }
+      sandbox: { type: "docker" as const, writable: [], network: "allowlist" as const, allowHosts: ["api.github.com"], passEnv: [], pidsLimit: 512, advisoryNetwork: true }
     };
     const plan = buildLaunchPlan("gh", server, { platform: "linux", hostEnv: {}, proxy: { host: "127.0.0.1", port: 4100, token: "proxytoken" } });
     expect(plan.args).toEqual(expect.arrayContaining(["--network", "bridge", "--add-host", "host.docker.internal:host-gateway"]));
@@ -187,3 +187,16 @@ function proxyConnect(port: number, authority: string, auth: string): Promise<nu
     req.end();
   });
 }
+
+describe("advisory network allowlists", () => {
+  it("rejects allowlists the server could route around unless explicitly accepted", async () => {
+    const { sandboxObjectSchema } = await import("./sandbox.js");
+    const docker = { type: "docker", network: "allowlist", allowHosts: ["api.example.com"] };
+    expect(sandboxObjectSchema.safeParse(docker).success).toBe(false);
+    expect(sandboxObjectSchema.safeParse({ ...docker, dockerNetwork: "palizade-internal" }).success).toBe(true);
+    expect(sandboxObjectSchema.safeParse({ ...docker, advisoryNetwork: true }).success).toBe(true);
+    expect(sandboxObjectSchema.safeParse({ ...docker, type: "bubblewrap" }).success).toBe(false);
+    expect(sandboxObjectSchema.safeParse({ ...docker, type: "seatbelt" }).success).toBe(true);
+    expect(sandboxObjectSchema.safeParse({ type: "docker", network: "none" }).success).toBe(true);
+  });
+});
