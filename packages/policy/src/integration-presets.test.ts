@@ -27,3 +27,9 @@ it("research gates permitted output during quarantine and passes normal output",
   expect(evaluatePolicy(policy, { ...output, session_quarantined: true }).action).toBe("require_approval");
   expect(evaluatePolicy(policy, output).action).toBe("allow");
 });
+it.each(["default", "interactive", "strict"])("%s asks before deleting data once the session has seen untrusted content", async (preset) => {
+  const policy = await loadPolicyFile(`policies/${preset}.yaml`);
+  const deleteCall: PolicyContext = { direction: "request", method: "tools/call", tool_class: "sink", capabilities: ["deletes_data"], trust: "trusted" };
+  expect(evaluatePolicy(policy, { ...deleteCall, session_untrusted: true }).matchedRuleId).toBe("approve-delete-after-untrusted");
+  expect(evaluatePolicy(policy, deleteCall).matchedRuleId).not.toBe("approve-delete-after-untrusted");
+});

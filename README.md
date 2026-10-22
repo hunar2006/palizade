@@ -22,6 +22,18 @@ Replay verification sample: 10; mismatches: 0.
 
 Caption: Derived from [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent), [Zhan et al., ACL 2024 Findings](https://arxiv.org/abs/2403.02691), pinned local snapshot `f19c9f2c79a41046eb13c03c51a24c567a8ffa07`, translated to MCP tool-call format with seed `424242`. This is not a run of the original benchmark. Of 225 total replay runs, 0 were classified as model refusals and 100 were Palizade blocks. **These figures are in-sample.** An earlier run let two attacks through (4% default, 2% strict). Inspecting them showed a bug in taint fingerprinting: fixed-stride substring windows only matched a verbatim copy when it sat at the same offset mod 24 in the source response and the sink argument. Fingerprints now use winnowing, which is position independent and is tested outside this corpus in `packages/taint/src/alignment.test.ts`. Because the fix came from looking at this corpus, a held-out set is needed before these numbers mean more than "no known misses". See [NOTES.md](NOTES.md) for methodology, inferred sink arguments, and benign fixture caveats.
 
+## Held Out Evaluation (AgentDojo)
+
+[AgentDojo](https://github.com/ethz-spylab/agentdojo) v1.2.2 with the `important_instructions` attack, replaying each suite's scripted ground truth (an agent that does the user's task and then fully obeys the injection) through the default preset with every tool untrusted, and refusing every approval prompt:
+
+| | Clean utility | Attack success |
+|---|---:|---:|
+| No defense | 97/97 (100%) | 593/949 (62.5%) |
+| Palizade, first run (held out) | 67/97 (69.1%) | 42/949 (4.4%) |
+| Palizade, after reviewing two suites | 68/97 (70.1%) | 11/949 (1.2%) |
+
+This is a replay, not an LLM run, and the utility cost is real: tasks that send to an address read from untrusted content are blocked like attacks. Method, per suite numbers, approval modes and limits: [results/agentdojo](results/agentdojo/README.md). Reproduce with `pnpm eval:agentdojo`.
+
 ## How It Works
 
 Palizade's core control is provenance, not content classification. Data returned by untrusted or source-classed tools is tagged as tainted. If that data later appears in a sink tool call, such as write, send, delete, shell, publish, or network egress, policy can block it, redact it, log it, or require user approval.
