@@ -277,7 +277,7 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - Critical paths are checked against the local filesystem at decision time. They do not enforce a malicious server's actual I/O or prevent subsequent symlink races. Unknown edit formats cannot produce a complete approval diff.
 - Client-rendered side effects such as automatically fetched Markdown images are outside observable proxy/hook traffic.
 - Input-required gating currently covers tool results; prompt/resource input-required handlers, full discover schemas, structured string constraints and listener inbound parameter-header disagreement remain limited. The [integration report](docs/v0.4-report.md) distinguishes these gaps from tested behavior.
-- Substring fingerprints cover roughly the first 17 KB of each tool response. An injection past that point is caught only by token, fuzzy, or temporal matching.
+- Substring fingerprints cover all of a tool response up to about 17 KB; for longer responses they cover the first and last 8 KB or so. Text copied from the middle of a long response is caught only by token, fuzzy, or temporal matching. Urls, email addresses and other tokens are extracted from the whole response.
 - The in sample benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive. The AgentDojo replay is the better utility measure, and shows the real cost: a task that sends to an address it read from untrusted content is blocked like an attack.
 - Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
 - The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
@@ -390,7 +390,11 @@ palizade doctor
 
 ### Checking a machine
 
-`palizade scan` reads every MCP client config it knows (Claude Desktop, Claude Code user, local and project scope, Cursor user and project) plus `palizade.yaml`, and reports servers that are not routed through Palizade, credentials written in plain text, packages and images run without a fixed version, plain http urls, legacy transports, and locked tool descriptions with hidden text, cross server references or instruction like wording. It starts no servers. `--json` and `--fail-on medium` make it usable in CI.
+`palizade scan` reads every MCP client config it knows (Claude Desktop, Claude Code user, local and project scope, Cursor user and project) plus `palizade.yaml`, and reports servers that are not routed through Palizade, credentials written in plain text, packages and images run without a fixed version, plain http urls, legacy transports, and locked tool descriptions with hidden text, cross server references or instruction like wording. It starts no servers. `--json` and `--fail-on medium` make it usable in CI. To check a repository's committed MCP configs (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`) for leaked credentials and unpinned packages on every push:
+
+```yaml
+- run: npx -y palizade@0.4.0 scan --project-only --skip unprotected --fail-on low
+```
 
 ### When something is blocked
 

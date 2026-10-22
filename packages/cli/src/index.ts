@@ -501,15 +501,18 @@ program.command("scan")
   .description("Check every MCP client config on this machine and palizade.yaml for unprotected servers, plaintext secrets, unpinned packages, insecure urls and suspicious tool descriptions; starts no servers")
   .option("--json", "Print JSON", false)
   .option("--fail-on <severity>", "Exit with code 1 when a finding is at least this severe: high, medium, low", "high")
-  .action(async (options: { json: boolean; failOn: string }) => {
-    const result = await scanClientConfigs(clientLocations());
+  .option("--project-only", "Only scan config files in the current directory (for CI on a repository)", false)
+  .option("--skip <checks>", "Comma separated checks to ignore, such as unprotected,unpinned-package")
+  .action(async (options: { json: boolean; failOn: string; projectOnly: boolean; skip?: string }) => {
+    const result = await scanClientConfigs(clientLocations().filter((location) => !options.projectOnly || location.scope === "project"));
     const configPath = resolve(program.opts<{ config: string }>().config);
     if (existsSync(configPath)) {
       const config = await loadConfigForCli(configPath);
       result.findings.push(...await scanPalizadeConfig(config, await new LockfileStore(config.lockfile).read(), configPath));
       result.files.push({ client: "palizade", path: configPath, scope: "project", exists: true, servers: Object.keys(config.servers).length });
     }
-    result.findings = sortFindings(result.findings);
+    const skipped = new Set((options.skip ?? "").split(",").map((check) => check.trim()).filter(Boolean));
+    result.findings = sortFindings(result.findings.filter((finding) => !skipped.has(finding.check)));
     console.log(options.json ? JSON.stringify(result, null, 2) : formatScan(result));
     const order = ["high", "medium", "low", "info"];
     const threshold = order.indexOf(options.failOn);
@@ -584,7 +587,8 @@ const audit = program.command("audit")
   .option("--server <server>", "Filter by server")
   .option("--tool <tool>", "Filter by tool")
   .option("--limit <n>", "Maximum events", "50")
-  .action(async (options: { last: string; action?: string; session?: string; server?: string; tool?: string; limit: string }) => {
+  .option("--json", "Print events as JSON lines", false)
+  .action(async (options: { last: string; action?: string; session?: string; server?: string; tool?: string; limit: string; json: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const sink = new JsonlAuditSink(config.audit.jsonl);
@@ -605,6 +609,10 @@ const audit = program.command("audit")
     if (options.tool) query.tool = options.tool;
     const events = await sink.query(query);
 
+    if (options.json) {
+      for (const event of events) console.log(JSON.stringify(event));
+      return;
+    }
     if (events.length === 0) {
       console.log("No audit events matched.");
       return;
