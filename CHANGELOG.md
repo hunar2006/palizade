@@ -48,6 +48,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - Rule of Two exposure flags now expire (2 hours by default), and native hook sessions are isolated per client session.
 - Every Unicode default ignorable code point is treated as hidden, not just a hand picked list.
 - Hosts and email addresses are compared in one canonical form for allowlist and provenance checks.
+- Object keys are scanned: data placed in an argument key (`{"<copied text>": true}`) is checked for taint, secrets and personal data, and data bearing keys in untrusted results are recorded so copies are traced. Short identifier keys such as `id` are treated as structure.
 - The SSE parser now bounds a partial line and an unterminated event, so a remote server cannot exhaust memory by streaming one endless line or data without a blank line.
 
 ### Performance
