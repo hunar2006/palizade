@@ -278,7 +278,7 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 - Client-rendered side effects such as automatically fetched Markdown images are outside observable proxy/hook traffic.
 - Input-required gating currently covers tool results; prompt/resource input-required handlers, full discover schemas, structured string constraints and listener inbound parameter-header disagreement remain limited. The [integration report](docs/v0.4-report.md) distinguishes these gaps from tested behavior.
 - Substring fingerprints cover roughly the first 17 KB of each tool response. An injection past that point is caught only by token, fuzzy, or temporal matching.
-- The benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive.
+- The in sample benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive. The AgentDojo replay is the better utility measure, and shows the real cost: a task that sends to an address it read from untrusted content is blocked like an attack.
 - Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
 - The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
 - Tool name collision and shadowing checks only compare servers wrapped by Palizade that share one state directory, and only from the moment each server has answered `tools/list`. The server that lists a shared name first keeps it until that server restarts; after that both copies are withheld until one is renamed or removed from `palizade.yaml`.
@@ -465,12 +465,13 @@ pnpm eval:combined
 
 ## Status And Clients
 
-- `install-config` supports Claude Desktop, Claude Code (user and project scope) and Cursor; Codex and other clients take a manual `palizade wrap` entry.
+- `install-config` supports Claude Desktop, Claude Code (user, local and project scope), Cursor (user and project) and Codex (user and project); other clients take a manual `palizade wrap` entry.
+- Remote servers that sign in with OAuth cannot go through the stdio wrapper; use `palizade serve` for them.
 - Coverage includes wrapped MCP traffic and installed native-hook events; live client hook activation needs verification.
 - Claude Desktop live validation has exercised tainted write blocking.
 - Claude Code support is documented with a non-native fetch/post MCP demo in [examples/claude-code-fetch-demo.md](examples/claude-code-fetch-demo.md).
 - Real filesystem server smoke test is available through `pnpm smoke:filesystem`.
-- Overhead from `pnpm bench:latency` (Linux container, Node 22, single run): pass-through call p50 0.3 ms / p95 0.6 ms in process; on the default SQLite taint store with 200 stored 4 KB pages, fingerprinting a page takes p50 about 7 ms and checking a sink call takes p50 about 4 ms. Excludes the stdio hop to the upstream server.
+- Overhead from `pnpm bench:latency` (Linux container, Node 22, single run): pass-through call p50 0.3 ms in process; on the default SQLite taint store with 200 stored 4 KB pages, fingerprinting a page takes p50 about 2.5 ms and checking a sink call takes p50 about 2.5 ms. A 1 MB tool result costs about 0.5 s and a 5 MB result about 3 s. Excludes the stdio hop to the upstream server.
 
 ## Security And Privacy
 
