@@ -31,7 +31,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Optional sandboxed launch** for stdio servers: docker (including Windows), bubblewrap and seatbelt.
 - **Operations:** hot reload, `palizade policy check`, `palizade status`, `palizade learn --from-audit`, optional metrics JSONL, and `doctor` coverage reports.
 - **Presets:** `coding-agent` and `research-readonly`.
-- **Client setup:** `install-config` now supports Claude Code and Cursor (user configs, or project configs with `--project`), carries over remote server headers, and expands `${NAME}`, `${NAME:-default}` and Cursor `${env:NAME}` placeholders when servers start. Legacy `sse` and `ws` servers are skipped with a reason.
+- **Client setup:** `install-config` now supports Claude Code and Cursor (user configs, project configs with `--project`, and Claude Code local scope with `--local`), carries over remote server headers, and expands `${NAME}`, `${NAME:-default}` and Cursor `${env:NAME}` placeholders when servers start. Legacy `sse` and `ws` servers are skipped with a reason.
 - **CI** on Windows, macOS and Linux with Node 22 and 24, and a tag-only release workflow with npm provenance.
 
 ### Security fixes since the v0.4 integration
