@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { loadPolicyFile, parsePolicyTests, runPolicyTests, type PolicyTestResult } from "@palizade/policy";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
@@ -24,7 +24,8 @@ import {
   LockfileStore,
   sandboxStatus,
   StdioMcpProxy,
-  type McpTool
+  type McpTool,
+  type PalizadeConfig
 } from "@palizade/core";
 import { AuditLogger, JsonlAuditSink, SqliteAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
@@ -72,19 +73,7 @@ program.command("init")
   .option("--preset <name>", "Policy preset", "default")
   .option("--output-dir <path>", "Permitted output directory for research-readonly")
   .action(async (options: { force: boolean; preset: string; outputDir?: string }) => {
-    const preset = __POLICY_PRESETS__[options.preset];
-    if (!preset) throw new Error(`Unknown preset '${options.preset}'. Choose ${Object.keys(__POLICY_PRESETS__).join(", ")}.`);
-    const starter = YAML.parse(DEFAULT_CONFIG) as Record<string, unknown>;
-    starter.policy = `policies/${options.preset}.yaml`;
-    if (options.preset === "strict") (starter.egress as Record<string, unknown>).mode = "allowlist_only";
-    if (options.outputDir) starter.protectedTargets = { outputDirectory: options.outputDir };
-    // The template's demo servers point into this repository; a new user starts with none.
-    starter.servers = {};
-    // Keep generated paths relative; loadConfig resolves them against palizade.yaml's directory.
-    await writeIfMissing("palizade.yaml", `${YAML.stringify(starter)}${STARTER_SERVERS_COMMENT}`, options.force);
-    await writeIfMissing(`policies/${options.preset}.yaml`, preset, options.force);
-    await mkdir(".palizade", { recursive: true });
-    await ensureListenerToken(".palizade/listener.token");
+    await initProject(options);
     console.log(`Initialized Palizade config, ${options.preset} policy, and .palizade state directory.`);
     console.log("Listener bearer token stored at .palizade/listener.token.");
     console.log("");
@@ -93,6 +82,67 @@ program.command("init")
     console.log("  palizade install-config --all --client <name>   wrap them (claude-desktop, claude-code, cursor, codex)");
     console.log("  palizade install-hooks <client>                 also cover native tools (claude-code, cursor, codex)");
     console.log("  palizade why                                    explain anything Palizade blocks");
+  });
+
+program.command("setup")
+  .description("One step setup for a client: create palizade.yaml here if missing, wrap the client's MCP servers, install native tool and prompt hooks, and optionally approve each new server's tools")
+  .argument("<client>", "claude-desktop, claude-code, cursor or codex")
+  .option("--project", "Use the project's client config in the current directory instead of the user's", false)
+  .option("--preset <name>", "Policy preset for a new palizade.yaml", "default")
+  .option("--no-hooks", "Do not install native tool and prompt hooks")
+  .option("--lock", "Start each newly wrapped server once and approve its current tool list", false)
+  .option("--timeout <duration>", "Per server timeout for --lock, such as 60s", "60s")
+  .option("--dry-run", "Show what would change without writing", false)
+  .action(async (client: string, options: { project: boolean; preset: string; hooks: boolean; lock: boolean; timeout: string; dryRun: boolean }) => {
+    if (!["claude-desktop", "claude-code", "cursor", "codex"].includes(client)) throw new Error(`Unknown client '${client}'. Choose claude-desktop, claude-code, cursor or codex.`);
+    const configPath = resolve(program.opts<{ config: string }>().config);
+    const step = (text: string) => console.log(`\n== ${text}`);
+    step("palizade.yaml");
+    if (await exists(configPath)) {
+      console.log(`Using ${configPath}`);
+    } else if (options.dryRun) {
+      console.log(`Would create ${configPath} with the ${options.preset} preset.`);
+    } else {
+      await initProject({ force: false, preset: options.preset, dir: dirname(configPath) });
+      console.log(`Created ${configPath} with the ${options.preset} preset.`);
+    }
+
+    step(`${clientLabel(client)} MCP servers`);
+    const result = await installAllClientConfigs({ client, configPath, project: options.project, dryRun: options.dryRun, cliPath: getRunningCliPath() });
+    result.warnings.forEach((warning) => console.warn(warning));
+    result.skipped.forEach((skipped) => console.log(`Skipped ${skipped.name}: ${skipped.reason}`));
+    result.wrapped.forEach((wrapped) => console.log(`${options.dryRun ? "Would wrap" : "Wrapped"} ${wrapped.name}${wrapped.addedToPalizadeConfig ? " (added to palizade.yaml as untrusted)" : ""}`));
+    if (result.wrapped.length === 0) console.log("No unprotected MCP servers found.");
+    else if (!options.dryRun) console.log(`Updated ${result.clientConfigPath}${result.backupPath ? ` (backup: ${result.backupPath})` : ""}`);
+
+    if (options.hooks && client !== "claude-desktop") {
+      step(`${clientLabel(client)} hooks`);
+      const hooks = await installHooks(client, { configPath, dryRun: options.dryRun });
+      console.log(options.dryRun ? `Would update ${hooks.settingsPath}` : `Updated ${hooks.settingsPath}${hooks.backupPath ? ` (backup: ${hooks.backupPath})` : ""}`);
+    }
+
+    const added = result.wrapped.filter((wrapped) => wrapped.addedToPalizadeConfig).map((wrapped) => wrapped.name);
+    if (added.length > 0) {
+      step("Tool approval");
+      if (options.lock && !options.dryRun) {
+        for (const name of added) {
+          try {
+            const count = await approveServerTools(configPath, name, parseDuration(options.timeout));
+            console.log(`Approved ${count} tool(s) for ${name}.`);
+          } catch (error) {
+            console.log(`Could not list ${name}'s tools (${error instanceof Error ? error.message : String(error)}). Run: palizade -c ${configPath} lock approve ${name} --timeout 2m`);
+          }
+        }
+      } else {
+        console.log("Each new server's tools are approved on first use only after you run, for each one:");
+        result.lockCommands.forEach((command) => console.log(`  ${command}`));
+        console.log("or run setup again with --lock to do it now (this starts each server once).");
+      }
+    }
+    if (!options.dryRun) {
+      step("Next");
+      console.log(`Restart ${clientLabel(client)}. Then 'palizade doctor --client ${client}' shows coverage, and 'palizade why' explains any block.`);
+    }
   });
 
 program.command("install-config")
@@ -428,7 +478,7 @@ const lock = program.command("lock")
 lock.command("approve")
   .description("Approve current tools/list metadata for a configured server")
   .argument("<serverName>", "Server name from palizade.yaml")
-  .option("--timeout <duration>", "Timeout such as 5s or 1m", "5s")
+  .option("--timeout <duration>", "Timeout such as 30s or 2m (a first npx or uvx run downloads the server)", "60s")
   .option("-y, --yes", "Approve without the interactive confirmation", false)
   .action(async (serverName: string, options: { timeout: string; yes: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
@@ -438,9 +488,7 @@ lock.command("approve")
       throw new Error(`Unknown server '${serverName}'.`);
     }
     const timeoutMs = parseDuration(options.timeout);
-    const tools = server.url
-      ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
-      : await collectToolsFromStdioServer(server, timeoutMs, { serverName, audit: new AuditLogger([new JsonlAuditSink(config.audit.jsonl)]) }) as McpTool[];
+    const tools = await listServerTools(config, serverName, timeoutMs);
     const lockStore = new LockfileStore(config.lockfile);
     const diff = diffToolsAgainstLock(await lockStore.read(), serverName, tools);
     console.log(formatToolDiff(serverName, diff));
@@ -836,6 +884,38 @@ program.parseAsync().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });
+
+async function initProject(options: { force: boolean; preset: string; outputDir?: string | undefined; dir?: string }): Promise<void> {
+  const preset = __POLICY_PRESETS__[options.preset];
+  if (!preset) throw new Error(`Unknown preset '${options.preset}'. Choose ${Object.keys(__POLICY_PRESETS__).join(", ")}.`);
+  const dir = options.dir ?? ".";
+  const starter = YAML.parse(DEFAULT_CONFIG) as Record<string, unknown>;
+  starter.policy = `policies/${options.preset}.yaml`;
+  if (options.preset === "strict") (starter.egress as Record<string, unknown>).mode = "allowlist_only";
+  if (options.outputDir) starter.protectedTargets = { outputDirectory: options.outputDir };
+  // The template's demo servers point into this repository; a new user starts with none.
+  starter.servers = {};
+  // Keep generated paths relative; loadConfig resolves them against palizade.yaml's directory.
+  await mkdir(join(dir, "policies"), { recursive: true });
+  await writeIfMissing(join(dir, "palizade.yaml"), `${YAML.stringify(starter)}${STARTER_SERVERS_COMMENT}`, options.force);
+  await writeIfMissing(join(dir, `policies/${options.preset}.yaml`), preset, options.force);
+  await mkdir(join(dir, ".palizade"), { recursive: true });
+  await ensureListenerToken(join(dir, ".palizade/listener.token"));
+}
+
+async function listServerTools(config: PalizadeConfig, serverName: string, timeoutMs: number): Promise<McpTool[]> {
+  const server = config.servers[serverName];
+  if (!server) throw new Error(`Unknown server '${serverName}'.`);
+  return server.url
+    ? await collectToolsFromHttpServer(server, config.http, timeoutMs)
+    : await collectToolsFromStdioServer(server, timeoutMs, { serverName, audit: new AuditLogger([new JsonlAuditSink(config.audit.jsonl)]) }) as McpTool[];
+}
+
+async function approveServerTools(configPath: string, serverName: string, timeoutMs: number): Promise<number> {
+  const config = await loadConfigForCli(configPath);
+  const tools = await listServerTools(config, serverName, timeoutMs);
+  return (await new LockfileStore(config.lockfile).approveTools(serverName, tools)).length;
+}
 
 async function writeIfMissing(path: string, content: string, force: boolean): Promise<void> {
   if (!force && await exists(path)) {
