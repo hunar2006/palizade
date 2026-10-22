@@ -112,6 +112,7 @@ export class SseParser {
   private id: string | undefined;
   private dataLines: string[] = [];
   private eventBytes = 0;
+  private pendingDataBytes = 0;
 
   constructor(private readonly limits: { maxLineBytes: number; maxEventBytes: number }) {}
 
@@ -145,6 +146,7 @@ export class SseParser {
         this.id = undefined;
         this.dataLines = [];
         this.eventBytes = 0;
+        this.pendingDataBytes = 0;
         continue;
       }
       if (line.startsWith(":")) {
@@ -157,12 +159,21 @@ export class SseParser {
         value = value.slice(1);
       }
       if (field === "data") {
+        // Count data before the blank line arrives, so an event that never ends cannot grow without bound.
+        this.pendingDataBytes += Buffer.byteLength(value, "utf8") + 1;
+        if (this.eventBytes + this.pendingDataBytes > this.limits.maxEventBytes) {
+          throw new SseParseError(`SSE event exceeded ${this.limits.maxEventBytes} bytes`);
+        }
         this.dataLines.push(value);
       } else if (field === "event") {
         this.eventName = value;
       } else if (field === "id") {
         this.id = value;
       }
+    }
+    // A line with no newline yet is still bounded: an upstream cannot stream one endless line.
+    if (this.lineBuffer.length * 3 > this.limits.maxLineBytes && Buffer.byteLength(this.lineBuffer, "utf8") > this.limits.maxLineBytes) {
+      throw new SseParseError(`SSE line exceeded ${this.limits.maxLineBytes} bytes`);
     }
   }
 }
