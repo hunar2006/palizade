@@ -364,6 +364,7 @@ palizade lock approve <serverName>
 palizade lock diff <serverName>
 palizade detectors install promptguard2
 palizade detectors verify heuristic
+palizade scan [--json] [--fail-on high|medium|low]
 palizade why [--last 24h] [--limit 5]
 palizade tools [serverName] [--catalog]
 palizade allow host|email <value...>
@@ -377,6 +378,10 @@ palizade session quarantine --clear [--session <id>]
 palizade session reset [--session <id>]
 palizade doctor
 ```
+
+### Checking a machine
+
+`palizade scan` reads every MCP client config it knows (Claude Desktop, Claude Code user, local and project scope, Cursor user and project) plus `palizade.yaml`, and reports servers that are not routed through Palizade, credentials written in plain text, packages and images run without a fixed version, plain http urls, legacy transports, and locked tool descriptions with hidden text, cross server references or instruction like wording. It starts no servers. `--json` and `--fail-on medium` make it usable in CI.
 
 ### When something is blocked
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -39,6 +40,7 @@ import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
 import { explainEvent, formatExplanation, isInteresting } from "./why.js";
+import { clientLocations, formatScan, scanClientConfigs, scanPalizadeConfig, sortFindings } from "./scan.js";
 import { describeServerTools, formatCatalog, formatServerTools } from "./tools-command.js";
 
 declare const __PKG_VERSION__: string;
@@ -440,6 +442,26 @@ program.command("tools")
     const config = await loadConfigForCli(program.opts<{ config: string }>().config);
     const reports = describeServerTools(config, await new LockfileStore(config.lockfile).read(), serverName);
     console.log(options.json ? JSON.stringify(reports, null, 2) : formatServerTools(reports));
+  });
+
+program.command("scan")
+  .description("Check every MCP client config on this machine and palizade.yaml for unprotected servers, plaintext secrets, unpinned packages, insecure urls and suspicious tool descriptions; starts no servers")
+  .option("--json", "Print JSON", false)
+  .option("--fail-on <severity>", "Exit with code 1 when a finding is at least this severe: high, medium, low", "high")
+  .action(async (options: { json: boolean; failOn: string }) => {
+    const result = await scanClientConfigs(clientLocations());
+    const configPath = resolve(program.opts<{ config: string }>().config);
+    if (existsSync(configPath)) {
+      const config = await loadConfigForCli(configPath);
+      result.findings.push(...await scanPalizadeConfig(config, await new LockfileStore(config.lockfile).read(), configPath));
+      result.files.push({ client: "palizade", path: configPath, scope: "project", exists: true, servers: Object.keys(config.servers).length });
+    }
+    result.findings = sortFindings(result.findings);
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatScan(result));
+    const order = ["high", "medium", "low", "info"];
+    const threshold = order.indexOf(options.failOn);
+    if (threshold < 0) throw new Error("--fail-on must be high, medium or low.");
+    if (result.findings.some((finding) => order.indexOf(finding.severity) <= threshold)) process.exitCode = 1;
   });
 
 program.command("why")
