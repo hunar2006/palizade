@@ -10,14 +10,19 @@ Runs locally on Windows, macOS and Linux. Requires Node.js 22.13 or newer.
 
 ## Get Started
 
-Install it globally, so the path written into your client config stays valid (an `npx` cache can be cleared):
+Install it globally, so the path written into your client config stays valid (an `npx` cache can be cleared), then run setup for your client from the folder where you want `palizade.yaml` to live:
 
 ```bash
 npm install -g palizade
-palizade init                      # writes palizade.yaml and a default policy here
+mkdir -p ~/.palizade-home && cd ~/.palizade-home
+palizade setup claude-code --lock      # or claude-desktop, cursor, codex
 ```
 
-Then pick your client. Each `install-config --all` run rewrites the client's MCP entries to go through Palizade, copies the original servers into `palizade.yaml` as `trust: untrusted`, and keeps a `.bak` of the client file. Add `--dry-run` first to see the change.
+`setup` creates `palizade.yaml` with the default policy if there is none, wraps every MCP server in the client's config, installs the native tool and prompt hooks (Claude Code, Cursor, Codex), and with `--lock` starts each new server once to approve its current tool list. Add `--dry-run` to see the changes first, `--project` to use the repository's own client config, and restart the client afterwards. The steps below do the same thing one at a time.
+
+### Step by step
+
+Start with `palizade init`, which writes `palizade.yaml` and a default policy in the current folder. Then pick your client. Each `install-config --all` run rewrites the client's MCP entries to go through Palizade, copies the original servers into `palizade.yaml` as `trust: untrusted`, and keeps a `.bak` of the client file. Add `--dry-run` first to see the change.
 
 **Claude Desktop**
 
@@ -81,8 +86,9 @@ Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` 
 | No defense | 97/97 (100%) | 593/949 (62.5%) |
 | Palizade, first run (held out) | 67/97 (69.1%) | 42/949 (4.4%) |
 | Palizade, after reviewing two suites | 68/97 (70.1%) | 11/949 (1.2%) |
+| Palizade, with your prompt's destinations and a credential change rule | 74/97 (76.3%) | 0/949 in this replay |
 
-This is a replay, not an LLM run, and the utility cost is real: tasks that send to an address read from untrusted content are blocked like attacks. Method, per suite numbers, approval modes and limits: [results/agentdojo](results/agentdojo/README.md). Reproduce with `pnpm eval:agentdojo`.
+This is a replay, not an LLM run, and the utility cost is real: tasks that send to an address read from untrusted content are blocked like attacks, unless you typed that address yourself. The last row's credential rule was found by looking at banking traces, so only the travel suite is still unseen; zero means none of these scripted attacks got through, not that every injection is stopped. Method, per suite numbers, approval modes and limits: [results/agentdojo](results/agentdojo/README.md). Reproduce with `pnpm eval:agentdojo`.
 
 ## How It Works
 
@@ -402,7 +408,7 @@ palizade doctor
 
 ### Tool classification
 
-Common servers (filesystem, fetch, memory, git, GitHub, Slack, Puppeteer, Playwright, Brave Search, time, sequential thinking) are classified from a built in catalog, so their tools work under `trust: untrusted` without hand written `toolClasses`. `palizade tools` prints each locked tool's class and why; `palizade tools --catalog` lists the catalog. See [how tools are classified](docs/policy.md#how-tools-are-classified).
+Widely used servers are classified from a built in catalog, so their tools work under `trust: untrusted` without hand written `toolClasses`: the reference servers (filesystem, fetch, memory, git, time, sequential thinking, Postgres, GitLab, Google Maps), GitHub, Slack, Notion, Sentry, HubSpot, Heroku, MongoDB, search and crawling (Brave, Exa, Tavily, Firecrawl, Context7, Apify), browsers (Playwright, Puppeteer, Chrome DevTools, Browserbase), Figma and Desktop Commander. Entries were written from each server's real tool list, which `pnpm eval:real` reads again (results in [results/real-servers.md](results/real-servers.md)). Search tools that send a query to a fixed provider are sources; tools that fetch a url, write, delete, send or run code are sinks. `palizade tools` prints each locked tool's class and why; `palizade tools --catalog` lists the catalog. See [how tools are classified](docs/policy.md#how-tools-are-classified).
 
 ### Native client tool hooks
 

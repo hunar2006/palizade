@@ -18,7 +18,7 @@ pnpm eval:real        # lists tools from 8 reference servers (needs npx and uvx)
 The held out AgentDojo evaluation needs Python with `pip install agentdojo==0.1.35`:
 
 ```bash
-PALIZADE_PYTHON=/path/to/python pnpm eval:agentdojo --compare results/agentdojo/after-dev-review
+PALIZADE_PYTHON=/path/to/python pnpm eval:agentdojo --compare results/agentdojo/user-intent
 ```
 
 Do not tune detectors or rules against benchmark attack text. If a change was informed by looking at benchmark results, say which suites you looked at, and record the new numbers in a new folder under `results/`.

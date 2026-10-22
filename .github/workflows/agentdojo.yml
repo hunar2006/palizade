@@ -31,4 +31,4 @@ jobs:
       - name: Replay and score, fail on regression
         env:
           PALIZADE_PYTHON: .venv-agentdojo/bin/python
-        run: pnpm eval:agentdojo --policies default --out .palizade/agentdojo-results --compare results/agentdojo/after-dev-review
+        run: pnpm eval:agentdojo --policies default --out .palizade/agentdojo-results --compare results/agentdojo/user-intent
