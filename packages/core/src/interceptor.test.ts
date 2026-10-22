@@ -899,7 +899,7 @@ async function makeEngine(
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
     protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 },
-    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
     stateDir: dir,
     policy: "unused",
     lockfile: join(dir, "palizade.lock"),

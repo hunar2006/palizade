@@ -48,6 +48,7 @@ describe("user stated destinations", () => {
         expect(store.isUserStated("s1", "email:alice@corp.example")).toBe(true);
         expect(store.isUserStated("s1", "email:old@corp.example")).toBe(false);
         expect(store.isUserStated("s1", "email:other@corp.example")).toBe(false);
+        expect(store.hasUserStatements("s1")).toBe(true);
       }
       const reopened = new SqliteTaintStore(join(dir, "taint.sqlite"), { keyPath: join(dir, "taint.key") });
       expect(reopened.isUserStated("another-session", "email:alice@corp.example")).toBe(true);

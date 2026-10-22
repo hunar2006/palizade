@@ -34,7 +34,7 @@ function makeConfig(dir: string): PalizadeConfig {
   return {
     protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 },
     stateDir: dir,
-    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
     policy: join(dir, "policy.yaml"),
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },

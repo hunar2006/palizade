@@ -9,6 +9,7 @@
   },
   "files": [
     "dist/index.cjs",
+    "dist/cli.cjs",
     "README.md"
   ],
   "keywords": [

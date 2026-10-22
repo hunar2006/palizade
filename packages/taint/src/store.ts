@@ -14,6 +14,11 @@ export class InMemoryTaintStore implements TaintStore {
     for (const canonical of canonicals) this.statements.set(sha256(canonical), expiresAt);
   }
 
+  hasUserStatements(_sessionId: string): boolean {
+    const now = Date.now();
+    return [...this.statements.values()].some((expiresAt) => expiresAt > now);
+  }
+
   isUserStated(_sessionId: string, canonical: string): boolean {
     return (this.statements.get(sha256(canonical)) ?? 0) > Date.now();
   }

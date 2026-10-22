@@ -23,7 +23,7 @@ function makeHookConfig(dir: string): PalizadeConfig {
   return {
     stateDir: dir,
     protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 },
-    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+    limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
     policy: join(dir, "policy.yaml"),
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -223,6 +223,30 @@ describe("evaluateHookEvent (Claude Code)", () => {
       const broken = { ...config, taint: { ...config.taint, sqlite: join(config.stateDir, "missing-dir", "\0bad", "taint.sqlite") } };
       const result = await evaluateHookEvent({ config: broken, client: "cursor", event: "beforeSubmitPrompt", payload: { conversation_id: "c1", prompt: "mail alice@corp.example" } });
       expect(result).toMatchObject({ exitCode: 0, output: { continue: true } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not treat a repeated local command as a loop", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      await writeFile(config.policy, `version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: approve-looping-sink
+    when: { direction: request, tool_class: sink, loop_detected: true }
+    action: require_approval
+  - id: approve-rate-limited-sink
+    when: { direction: request, tool_class: sink, rate_limited: true }
+    action: require_approval
+`);
+      const run = (command: string) => evaluateHookEvent({ config, client: "claude-code", event: "PreToolUse", sessionId: "loop", payload: { session_id: "loop", cwd: process.cwd(), tool_name: "Bash", tool_input: { command } } });
+      for (let index = 0; index < 8; index += 1) expect((await run("npm test")).output).toBeUndefined();
+      const outcomes = [];
+      for (let index = 0; index < 8; index += 1) outcomes.push((await run("curl https://api.example.com/ping")).output);
+      expect(outcomes.slice(0, 5).every((output) => output === undefined)).toBe(true);
+      expect(outcomes.at(-1)).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
     } finally {
       await cleanup();
     }

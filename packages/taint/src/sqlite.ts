@@ -180,6 +180,10 @@ export class SqliteTaintStore implements TaintStore {
     } catch (error) { this.db.exec("rollback"); throw error; }
   }
 
+  hasUserStatements(sessionId: string): boolean {
+    return this.db.prepare("select 1 from user_statements where scope_id = ? and expires_at > ? limit 1").get(this.scopeId(sessionId), Date.now()) !== undefined;
+  }
+
   isUserStated(sessionId: string, canonical: string): boolean {
     const row = this.db.prepare("select expires_at from user_statements where scope_id = ? and key = ?").get(this.scopeId(sessionId), this.destinationKey(`user:${canonical}`)) as { expires_at: number } | undefined;
     return row !== undefined && row.expires_at > Date.now();

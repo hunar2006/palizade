@@ -353,7 +353,7 @@ describe("HttpMcpTransport (legacy 2025-11-25)", () => {
 async function makeEngineWithAudit(dir: string): Promise<{ engine: InterceptionEngine; events: AuditEvent[] }> {
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
-    stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+    stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
     policy: join(dir, "policy.yaml"),
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -486,7 +486,7 @@ describe("HttpServeListener", () => {
     const { engine } = await makeEngineWithAudit(dir);
     const listener = new HttpServeListener({
       config: {
-        stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+        stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
         policy: join(dir, "policy.yaml"),
         lockfile: join(dir, "palizade.lock"),
         audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },

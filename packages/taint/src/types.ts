@@ -78,6 +78,7 @@ export interface TaintStore {
   /** Records destination values the user typed (canonical forms from extractStatedObservables). */
   addUserStatements(sessionId: string, canonicals: string[], ttlMs: number): void;
   isUserStated(sessionId: string, canonical: string): boolean;
+  hasUserStatements(sessionId: string): boolean;
 }
 
 export interface TemporalTaintConfig {

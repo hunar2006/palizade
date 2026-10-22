@@ -106,8 +106,9 @@ export const palizadeConfigSchema = z.object({
     sinkCallsPerMinute: z.number().int().min(1).max(1000).default(60),
     distinctDestinations: z.number().int().min(1).max(1000).default(20),
     repeatThreshold: z.number().int().min(1).max(1000).default(5),
-    historyEntries: z.number().int().min(1).max(1000).default(1000)
-  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 }),
+    historyEntries: z.number().int().min(1).max(1000).default(1000),
+    windowMs: z.number().int().min(60_000).default(600_000)
+  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 }),
   policy: z.string().default("policies/default.yaml"),
   lockfile: z.string().default("palizade.lock"),
   audit: z.object({

@@ -258,10 +258,10 @@ export class InterceptionEngine {
     const argumentText = flattenArguments(params.arguments);
     const matchCache = new Map<string, TaintMatch[]>();
     // Destinations the user typed are theirs even if untrusted content also mentions them.
-    const userIntent = this.options.config.taint.userIntent;
+    const userIntent = this.options.config.taint.userIntent.enabled && this.options.taintStore.hasUserStatements(this.options.sessionId);
     const userStated = new Set<string>();
     const unstated = (text: string): string => {
-      if (!userIntent.enabled) return text;
+      if (!userIntent) return text;
       const result = maskStatedObservables(text, (canonical) => this.options.taintStore.isUserStated(this.options.sessionId, canonical));
       result.masked.forEach((canonical) => userStated.add(canonical));
       return result.text;
@@ -304,7 +304,10 @@ export class InterceptionEngine {
     for (const entry of gitPush.destinations) if (!entries.includes(entry)) entries.push(entry);
     if (classification.capabilities.includes("persists_memory") && entries.length === 0) entries.push(`memory:${this.options.serverName}`);
     const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
-    const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
+    // Only outbound calls feed the loop and rate gates: a coding agent running `npm test` ten
+    // times is normal, sending the same email ten times is not.
+    const outbound = entries.length > 0 || classification.capabilities.some((capability) => ["sends_message", "writes_remote", "deletes_data", "persists_memory"].includes(capability));
+    const gates = toolClass === "sink" && outbound ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
     const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
     const outboundPayload = argumentFields.filter((field) => !field.path.includes("<")).flatMap((field) => {
