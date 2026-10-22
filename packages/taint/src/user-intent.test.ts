@@ -59,3 +59,14 @@ describe("user stated destinations", () => {
     }
   });
 });
+
+describe("user intent on hostile input", () => {
+  it("stays fast on long repetitive text", () => {
+    const started = Date.now();
+    for (const text of ["a.".repeat(100_000), "1 ".repeat(100_000), `x-y.`.repeat(50_000) + "@", `${"a".repeat(61)}-`.repeat(3_000)]) {
+      extractStatedObservables(text);
+      maskStatedObservables(text, () => true);
+    }
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+});

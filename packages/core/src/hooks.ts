@@ -268,6 +268,33 @@ export function findClientServerEntry(serverName: string, cwd: string, home = ho
   return pick(read(join(cwd, ".mcp.json"))?.mcpServers) ?? pick(projects[cwd]?.mcpServers) ?? pick(user?.mcpServers);
 }
 
+/**
+ * The Cursor config key of the MCP server a beforeMCPExecution/afterMCPExecution payload is for.
+ * Cursor currently sends that key in `command` (and no url); if it sends the real command line or
+ * url instead, the entry with that command or url is used.
+ */
+export function cursorServerKey(payload: Record<string, unknown>, cwd: string, home = homedir()): { key: string; entry: ClientServerEntry } | undefined {
+  const roots = Array.isArray(payload.workspace_roots) ? payload.workspace_roots.filter((root): root is string => typeof root === "string") : [];
+  const servers: Record<string, ClientServerEntry> = {};
+  for (const path of [join(home, ".cursor", "mcp.json"), ...[cwd, ...roots].map((root) => join(root, ".cursor", "mcp.json"))]) {
+    try {
+      if (!existsSync(path)) continue;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, ClientServerEntry> };
+      Object.assign(servers, parsed.mcpServers ?? {});
+    } catch {
+      // An unreadable config only means the server is not recognized.
+    }
+  }
+  const command = typeof payload.command === "string" ? payload.command : undefined;
+  const url = typeof payload.url === "string" ? payload.url : undefined;
+  if (command && servers[command]) return { key: command, entry: servers[command]! };
+  for (const [key, entry] of Object.entries(servers)) {
+    if (url && entry.url === url) return { key, entry };
+    if (command && [entry.command, ...(entry.args ?? [])].filter(Boolean).join(" ") === command) return { key, entry };
+  }
+  return undefined;
+}
+
 function isPalizadeWrapperEntry(entry: ClientServerEntry | undefined): boolean {
   const tokens = [entry?.command ?? "", ...(entry?.args ?? [])];
   return tokens.includes("wrap") && tokens.some((token) => /palizade/iu.test(token));
@@ -279,9 +306,9 @@ function isPalizadeWrapperEntry(entry: ClientServerEntry | undefined): boolean {
  * OAuth, servers the user did not wrap) is checked here as an untrusted server, recognized by the
  * catalog from the client's own config when possible.
  */
-function mcpHookTarget(config: PalizadeConfig, serverName: string, cwd: string): { serverName: string; server: ServerConfig } | "wrapped" {
+function mcpHookTarget(config: PalizadeConfig, serverName: string, cwd: string, known?: ClientServerEntry): { serverName: string; server: ServerConfig } | "wrapped" {
   if (config.servers[serverName]) return "wrapped";
-  const entry = findClientServerEntry(serverName, cwd);
+  const entry = known ?? findClientServerEntry(serverName, cwd);
   if (isPalizadeWrapperEntry(entry)) return "wrapped";
   const server = serverConfigSchema.parse({
     ...(entry?.url ? { url: entry.url } : { command: entry?.command ?? `mcp:${serverName}`, args: entry?.args ?? [] }),
@@ -388,8 +415,10 @@ export async function evaluateHookEvent(input: {
   const cwd = input.cwd ?? payloadField(input.payload, "cwd") ?? process.cwd();
   const sessionId = input.sessionId ?? payloadField(input.payload, "session_id", "conversation_id") ?? "native-session";
 
-  const mcp = input.client === "cursor" ? undefined : parseMcpToolName(normalized.tool);
-  const target = mcp ? mcpHookTarget(input.config, mcp.server, cwd) : undefined;
+  const record = input.payload && typeof input.payload === "object" ? input.payload as Record<string, unknown> : {};
+  const cursorServer = input.client === "cursor" && (input.event === "beforeMCPExecution" || input.event === "afterMCPExecution") ? cursorServerKey(record, cwd) : undefined;
+  const mcp = input.client === "cursor" ? (cursorServer ? { server: cursorServer.key, tool: normalized.tool } : undefined) : parseMcpToolName(normalized.tool);
+  const target = mcp ? mcpHookTarget(input.config, mcp.server, cwd, cursorServer?.entry) : undefined;
   if (target === "wrapped") {
     return { exitCode: 0, output: undefined, reason: "MCP server is wrapped by Palizade; its proxy checks this call." };
   }

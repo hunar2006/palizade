@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeShellCommand, createHookEngine, evaluateHookEvent, findClientServerEntry, normalizeNativeEvent, parseMcpToolName } from "./hooks.js";
+import { analyzeShellCommand, createHookEngine, cursorServerKey, evaluateHookEvent, findClientServerEntry, normalizeNativeEvent, parseMcpToolName } from "./hooks.js";
 import { SqliteTaintStore } from "@palizade/taint";
 import type { PalizadeConfig } from "./config.js";
 
@@ -264,6 +264,21 @@ rules:
       expect(send.output).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
       const wrapped = await evaluateHookEvent({ config: { ...config, servers: { inbox: { command: "x", args: [], env: {}, headers: {}, protocolVersion: "auto", trust: "untrusted", toolClasses: {}, toolCapabilities: {}, argumentRoles: {}, sensitive: false, sensitiveTools: {}, sensitivePathPatterns: [], shell: false, allowShell: false } } }, client: "claude-code", event: "PreToolUse", sessionId, payload: { session_id: sessionId, tool_name: "mcp__inbox__send_email", tool_input: { to: "me@example.com", body: "Quarterly report data from untrusted source" } } });
       expect(wrapped).toMatchObject({ exitCode: 0, output: undefined });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("identifies the Cursor MCP server from the config key Cursor sends, or a command or url", async () => {
+    const { dir, cleanup } = await setup();
+    try {
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(dir, ".cursor"), { recursive: true });
+      await writeFile(join(dir, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { linear: { url: "https://mcp.linear.app/mcp" }, pw: { command: "npx", args: ["@playwright/mcp"] } } }));
+      expect(cursorServerKey({ command: "linear" }, dir, dir)?.key).toBe("linear");
+      expect(cursorServerKey({ url: "https://mcp.linear.app/mcp" }, dir, dir)?.key).toBe("linear");
+      expect(cursorServerKey({ command: "npx @playwright/mcp" }, dir, dir)?.key).toBe("pw");
+      expect(cursorServerKey({ command: "unknown" }, dir, dir)).toBeUndefined();
     } finally {
       await cleanup();
     }
