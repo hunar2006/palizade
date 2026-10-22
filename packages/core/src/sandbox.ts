@@ -1,6 +1,7 @@
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { maskKnownSensitiveText } from "@palizade/detectors";
+import { expandEnvTemplates, expandServerTemplates } from "./env-templates.js";
 
 export const sandboxTypeSchema = z.enum(["none", "docker", "bubblewrap", "seatbelt"]);
 export type SandboxType = z.infer<typeof sandboxTypeSchema>;
@@ -63,6 +64,8 @@ export interface LaunchPlan {
   sandbox: SandboxType;
   /** Proxy URL the sandboxed server must use when network is allowlist. */
   proxyUrl?: string | undefined;
+  /** `${NAME}` placeholders in command, args or env that had no value and no default. */
+  missingEnv?: string[] | undefined;
 }
 
 export interface LaunchOptions {
@@ -101,8 +104,14 @@ export function assertSandboxSupported(serverName: string, server: LaunchServerC
 }
 
 export function buildLaunchPlan(serverName: string, server: LaunchServerConfig, options: LaunchOptions = {}): LaunchPlan {
-  const platform = options.platform ?? process.platform;
   const hostEnv = options.hostEnv ?? process.env;
+  const expanded = expandServerTemplates(server, hostEnv);
+  const plan = buildExpandedLaunchPlan(serverName, expanded.server, hostEnv, options);
+  return expanded.missing.length > 0 ? { ...plan, missingEnv: expanded.missing } : plan;
+}
+
+function buildExpandedLaunchPlan(serverName: string, server: LaunchServerConfig, hostEnv: NodeJS.ProcessEnv, options: LaunchOptions): LaunchPlan {
+  const platform = options.platform ?? process.platform;
   const sandbox = assertSandboxSupported(serverName, server, platform);
   if (!server.command) {
     throw new Error(`Server '${serverName}' has no command; only stdio servers can be launched.`);
@@ -257,7 +266,10 @@ export interface SpawnAuditRecord {
 
 /** Spawn description for the audit log: environment values are never included and secret-looking arguments are masked. */
 export function describeLaunchForAudit(plan: LaunchPlan, server: LaunchServerConfig): SpawnAuditRecord {
-  const secretValues = Object.values(server.env).filter((value) => value.length >= 4);
+  // Mask the values the server actually receives, so expanded `${NAME}` secrets are covered too.
+  const secretValues = Object.entries(server.env)
+    .map(([key, value]) => plan.env[key] ?? expandEnvTemplates(value).value)
+    .filter((value) => value.length >= 4);
   const maskArg = (arg: string): string => {
     let masked = maskKnownSensitiveText(arg);
     for (const value of secretValues) {

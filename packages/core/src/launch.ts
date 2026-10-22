@@ -49,6 +49,9 @@ export async function launchUpstream(serverName: string, server: LaunchServerCon
 
   try {
     const plan = buildLaunchPlan(serverName, server, { platform, proxy: proxyAddress, resolveCommand: context.resolveCommand });
+    if (plan.missingEnv?.length) {
+      process.stderr.write(`[palizade:${serverName}] environment variables not set, left as written: ${plan.missingEnv.join(", ")}\n`);
+    }
     if (context.audit) {
       await context.audit.write({
         session: sessionId,

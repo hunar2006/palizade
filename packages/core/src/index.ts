@@ -20,5 +20,6 @@ export * from "./stdio.js";
 export * from "./http.js";
 export * from "./http-listener.js";
 export * from "./hooks.js";
+export * from "./env-templates.js";
 export * from "./factory.js";
 export * from "./protected-paths.js";

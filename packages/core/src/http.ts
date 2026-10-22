@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { expandEnvTemplates } from "./env-templates.js";
 import { isRequest, isSuccess, type JsonRpcId, type JsonRpcMessage, type McpTool } from "./mcp.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
 import type { InterceptionEngine } from "./interceptor.js";
@@ -70,14 +71,24 @@ export function protocolVersionOf(message: JsonRpcMessage): string | undefined {
   return undefined;
 }
 
+/** Expands `${NAME}` in a server url; an unset variable is an error, since the url would be wrong. */
+export function resolveUrlTemplate(url: string, env: NodeJS.ProcessEnv = process.env): string {
+  const expanded = expandEnvTemplates(url, env);
+  if (expanded.missing.length > 0) {
+    throw new Error(`Server url needs environment variables that are not set: ${expanded.missing.join(", ")}`);
+  }
+  return expanded.value;
+}
+
 export function resolveHeaderTemplates(headers: Record<string, string>, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const resolved: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
-    const substituted = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (match, key: string) => env[key] ?? match);
-    if (/\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(substituted)) {
+    const expanded = expandEnvTemplates(value, env);
+    // A header whose variable is unset is dropped rather than sent with a literal placeholder.
+    if (expanded.missing.length > 0) {
       continue;
     }
-    resolved[name] = substituted;
+    resolved[name] = expanded.value;
   }
   return resolved;
 }
@@ -227,8 +238,8 @@ export class HttpMcpTransport extends EventEmitter {
     if (!server.url) {
       throw new Error(`Server '${options.serverName}' has no url; cannot use the HTTP transport.`);
     }
-    this.url = server.url;
     this.env = options.env ?? process.env;
+    this.url = resolveUrlTemplate(server.url, this.env);
     if (options.protocolVersion === "2026-07-28") {
       this.era = "2026-07-28";
     } else if (options.protocolVersion === "2025-11-25") {
@@ -936,7 +947,7 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
     method: "tools/list",
     params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
   } as JsonRpcMessage;
-  const attempt = await fetch(server.url, {
+  const attempt = await fetch(resolveUrlTemplate(server.url), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

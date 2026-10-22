@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { HttpMcpTransport, SseParser, decodeHeaderValue, encodeSseEvent, isLocalhostOrigin, protocolVersionOf, resolveHeaderTemplates, type TransportSecurityEvent } from "./http.js";
+import { HttpMcpTransport, SseParser, decodeHeaderValue, encodeSseEvent, isLocalhostOrigin, protocolVersionOf, resolveHeaderTemplates, resolveUrlTemplate, type TransportSecurityEvent } from "./http.js";
 import { isRequest, makeErrorResponse, type JsonRpcMessage } from "./mcp.js";
 import type { PalizadeConfig } from "./config.js";
 import type { InterceptionEngine } from "./interceptor.js";
@@ -252,7 +252,7 @@ export class HttpServeListener {
     request.on("close", () => abort.abort());
     let upstream: Response;
     try {
-      upstream = await fetch(server.url!, { method: "GET", headers: upstreamHeaders, redirect: "manual", signal: abort.signal });
+      upstream = await fetch(resolveUrlTemplate(server.url!), { method: "GET", headers: upstreamHeaders, redirect: "manual", signal: abort.signal });
     } catch (error) {
       if (!abort.signal.aborted) {
         this.securityEvent(serverName, {
@@ -355,7 +355,7 @@ export class HttpServeListener {
     };
     let upstream: Response;
     try {
-      upstream = await fetch(server.url!, { method: "DELETE", headers, redirect: "manual" });
+      upstream = await fetch(resolveUrlTemplate(server.url!), { method: "DELETE", headers, redirect: "manual" });
     } catch (error) {
       this.securityEvent(serverName, {
         kind: "upstream_http_error",

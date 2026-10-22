@@ -2,6 +2,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
 import { basename, dirname, posix, resolve, win32 } from "node:path";
 import YAML from "yaml";
+import { normalizeEnvPlaceholders } from "@palizade/core";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -15,6 +16,8 @@ export interface InstallConfigOptions {
   client?: string | undefined;
   configPath?: string | undefined;
   clientConfigPath?: string | undefined;
+  project?: boolean | undefined;
+  local?: boolean | undefined;
   entryName?: string | undefined;
   dryRun?: boolean | undefined;
   force?: boolean | undefined;
@@ -27,6 +30,8 @@ export interface InstallAllConfigOptions {
   client?: string | undefined;
   configPath?: string | undefined;
   clientConfigPath?: string | undefined;
+  project?: boolean | undefined;
+  local?: boolean | undefined;
   dryRun?: boolean | undefined;
   cwd?: string | undefined;
   cliPath?: string | undefined;
@@ -49,6 +54,7 @@ export interface ClientMcpServerEntry {
   command?: string;
   args?: string[];
   url?: string;
+  headers?: Record<string, string>;
   cwd?: string;
   env?: Record<string, string>;
 }
@@ -103,7 +109,8 @@ export async function installClientConfig(options: InstallConfigOptions): Promis
   const cwd = options.cwd ?? process.cwd();
   const clientConfigPath = options.clientConfigPath
     ? resolve(cwd, options.clientConfigPath)
-    : resolveClientConfigPath(client);
+    : resolveClientConfigPath(client, osPlatform(), process.env, homedir(), options.project ? cwd : undefined);
+  const localKey = localScopeKey(client, options.local, cwd);
   const palizadeConfigPath = resolvePalizadeConfigPath(options.configPath, cwd);
   const entryName = options.entryName ?? `palizade-${options.serverName}`;
   const entry = makeEntry({
@@ -116,7 +123,7 @@ export async function installClientConfig(options: InstallConfigOptions): Promis
 
   const existed = await exists(clientConfigPath);
   const config = existed ? await readClientConfig(clientConfigPath) : { mcpServers: {} };
-  const mcpServers = ensureMcpServers(config, clientConfigPath);
+  const mcpServers = ensureMcpServers(config, clientConfigPath, localKey, true);
   if (Object.prototype.hasOwnProperty.call(mcpServers, entryName) && !options.force) {
     throw new Error(
       `MCP server entry '${entryName}' already exists in ${clientConfigPath}. ` +
@@ -175,14 +182,15 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
   const cwd = options.cwd ?? process.cwd();
   const clientConfigPath = options.clientConfigPath
     ? resolve(cwd, options.clientConfigPath)
-    : resolveClientConfigPath(client);
+    : resolveClientConfigPath(client, osPlatform(), process.env, homedir(), options.project ? cwd : undefined);
+  const localKey = localScopeKey(client, options.local, cwd);
   const palizadeConfigPath = resolvePalizadeConfigPath(options.configPath, cwd);
   const cliPath = options.cliPath ?? getRunningCliPath();
   const warnings = await validatePalizadeConfig(palizadeConfigPath);
 
   const existed = await exists(clientConfigPath);
   const config = existed ? await readClientConfig(clientConfigPath) : { mcpServers: {} };
-  const mcpServers = ensureMcpServers(config, clientConfigPath);
+  const mcpServers = ensureMcpServers(config, clientConfigPath, localKey);
 
   const palizadeConfig = await readPalizadeConfig(palizadeConfigPath);
   const palizadeServers = ensurePalizadeServers(palizadeConfig, palizadeConfigPath);
@@ -196,6 +204,11 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
       continue;
     }
 
+    const unsupported = unsupportedTransport(rawEntry);
+    if (unsupported) {
+      skipped.push({ name, reason: `uses the '${unsupported}' transport, which Palizade cannot proxy; only stdio and Streamable HTTP servers are wrapped` });
+      continue;
+    }
     const original = normalizeClientEntry(name, rawEntry, clientConfigPath);
     const addedToPalizadeConfig = !Object.prototype.hasOwnProperty.call(palizadeServers, name);
     if (addedToPalizadeConfig) {
@@ -278,13 +291,16 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
 export async function inspectClientCoverage(options: {
   client?: string | undefined;
   clientConfigPath?: string | undefined;
+  project?: boolean | undefined;
+  local?: boolean | undefined;
   cwd?: string | undefined;
 }): Promise<ClientCoverageResult> {
   const client = options.client ?? "claude-desktop";
   const cwd = options.cwd ?? process.cwd();
   const clientConfigPath = options.clientConfigPath
     ? resolve(cwd, options.clientConfigPath)
-    : resolveClientConfigPath(client);
+    : resolveClientConfigPath(client, osPlatform(), process.env, homedir(), options.project ? cwd : undefined);
+  const localKey = localScopeKey(client, options.local, cwd);
 
   if (!await exists(clientConfigPath)) {
     return {
@@ -298,7 +314,7 @@ export async function inspectClientCoverage(options: {
   }
 
   const config = await readClientConfig(clientConfigPath);
-  const mcpServers = ensureMcpServers(config, clientConfigPath);
+  const mcpServers = ensureMcpServers(config, clientConfigPath, localKey);
   const rows = Object.entries(mcpServers).map(([name, rawEntry]): ClientCoverageRow => {
     const wrapped = isPalizadeWrapper(rawEntry);
     const command = isRecord(rawEntry) && typeof rawEntry.command === "string"
@@ -310,7 +326,11 @@ export async function inspectClientCoverage(options: {
       name,
       wrapped,
       command,
-      ...(wrapped ? {} : { advice: `WARNING: ${name} is configured but NOT protected by Palizade - run palizade install-config ${name}` })
+      ...(wrapped ? {} : {
+        advice: unsupportedTransport(rawEntry)
+          ? `WARNING: ${name} uses the '${unsupportedTransport(rawEntry)}' transport, which Palizade cannot proxy; it is NOT protected`
+          : `WARNING: ${name} is configured but NOT protected by Palizade - run palizade install-config --all`
+      })
     };
   });
 
@@ -332,9 +352,21 @@ export function resolvePalizadeConfigPath(configPath: string | undefined, cwd = 
   return resolve(cwd, configPath ?? "./palizade.yaml");
 }
 
-export function resolveClientConfigPath(client: string, platform = osPlatform(), env: NodeJS.ProcessEnv = process.env, homeDir = homedir()): string {
+/** Pass projectDir to target a project's shared config (.mcp.json, .cursor/mcp.json) instead of the user's. */
+export function resolveClientConfigPath(client: string, platform = osPlatform(), env: NodeJS.ProcessEnv = process.env, homeDir = homedir(), projectDir?: string): string {
+  const join = platform === "win32" ? win32.join : posix.join;
+  if (client === "claude-code") {
+    // User scope lives at the top level of ~/.claude.json; project scope is .mcp.json.
+    return projectDir ? join(projectDir, ".mcp.json") : join(homeDir, ".claude.json");
+  }
+  if (client === "cursor") {
+    return projectDir ? join(projectDir, ".cursor", "mcp.json") : join(homeDir, ".cursor", "mcp.json");
+  }
   if (client !== "claude-desktop") {
-    throw new Error(`Unsupported client '${client}'. Supported clients: claude-desktop.`);
+    throw new Error(`Unsupported client '${client}'. Supported clients: claude-desktop, claude-code, cursor. For Codex, see the README.`);
+  }
+  if (projectDir) {
+    throw new Error("Claude Desktop has no project config; drop --project.");
   }
   if (platform === "win32") {
     if (!env.APPDATA) {
@@ -386,11 +418,34 @@ async function readClientConfig(path: string): Promise<JsonRecord> {
     return parsed;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to parse Claude Desktop config at ${path}: ${reason}. Refusing to overwrite it.`);
+    throw new Error(`Failed to parse client config at ${path}: ${reason}. Refusing to overwrite it.`);
   }
 }
 
-function ensureMcpServers(config: JsonRecord, path: string): JsonRecord {
+// Claude Code's default "local" scope keeps servers under projects[<project dir>] in ~/.claude.json.
+function localScopeKey(client: string, local: boolean | undefined, cwd: string): string | undefined {
+  if (!local) return undefined;
+  if (client !== "claude-code") throw new Error("--local applies only to --client claude-code.");
+  return resolve(cwd);
+}
+
+function findProjectKey(projects: JsonRecord, dir: string): string | undefined {
+  // Keys may use either slash style on Windows, and drive letter case can differ.
+  const normalize = (value: string) => value.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+  return Object.keys(projects).find((key) => normalize(key) === normalize(dir));
+}
+
+function ensureMcpServers(config: JsonRecord, path: string, localKey?: string, requireLocal = false): JsonRecord {
+  if (localKey !== undefined) {
+    const projects = isRecord(config.projects) ? config.projects : undefined;
+    const key = projects ? findProjectKey(projects, localKey) : undefined;
+    if (!projects || !key || !isRecord(projects[key])) {
+      if (requireLocal) throw new Error(`${path} has no Claude Code project entry for ${localKey}. Open Claude Code in that directory once, or use --project.`);
+      // Nothing to wrap: Claude Code has no local scope entry for this directory.
+      return {};
+    }
+    return ensureMcpServers(projects[key] as JsonRecord, `${path} projects["${key}"]`);
+  }
   const existing = config.mcpServers;
   if (existing === undefined) {
     const mcpServers: JsonRecord = {};
@@ -448,7 +503,10 @@ function normalizeClientEntry(name: string, value: unknown, path: string): Clien
   }
   const entry: ClientMcpServerEntry = {};
   if (typeof value.url === "string" && value.url.trim() !== "") {
-    entry.url = value.url;
+    entry.url = normalizeEnvPlaceholders(value.url);
+    if (value.headers !== undefined) {
+      entry.headers = stringRecord(value.headers, `mcpServers.${name}.headers`, path);
+    }
     return entry;
   }
   if (typeof value.command !== "string" || value.command.trim() === "") {
@@ -458,25 +516,35 @@ function normalizeClientEntry(name: string, value: unknown, path: string): Clien
   if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) {
     throw new Error(`Expected mcpServers.${name}.args in ${path} to be an array of strings.`);
   }
-  entry.command = value.command;
-  entry.args = [...args];
+  entry.command = normalizeEnvPlaceholders(value.command);
+  entry.args = args.map(normalizeEnvPlaceholders);
   if (typeof value.cwd === "string") {
     entry.cwd = value.cwd;
   }
   if (value.env !== undefined) {
-    if (!isRecord(value.env) || !Object.values(value.env).every((envValue) => typeof envValue === "string")) {
-      throw new Error(`Expected mcpServers.${name}.env in ${path} to be an object of string values.`);
-    }
-    entry.env = { ...(value.env as Record<string, string>) };
+    entry.env = stringRecord(value.env, `mcpServers.${name}.env`, path);
   }
   return entry;
+}
+
+function stringRecord(value: unknown, label: string, path: string): Record<string, string> {
+  if (!isRecord(value) || !Object.values(value).every((item) => typeof item === "string")) {
+    throw new Error(`Expected ${label} in ${path} to be an object of string values.`);
+  }
+  return Object.fromEntries(Object.entries(value as Record<string, string>).map(([key, item]) => [key, normalizeEnvPlaceholders(item)]));
+}
+
+// Legacy HTTP+SSE and WebSocket servers have no Streamable HTTP endpoint for Palizade to proxy.
+function unsupportedTransport(value: unknown): string | undefined {
+  const type = isRecord(value) ? value.type : undefined;
+  return type === "sse" || type === "ws" ? type : undefined;
 }
 
 function makeAutoServerConfig(entry: ClientMcpServerEntry): JsonRecord {
   if (entry.url) {
     return {
       url: entry.url,
-      headers: {},
+      headers: entry.headers ?? {},
       trust: "untrusted",
       toolClasses: {}
     };
@@ -534,7 +602,7 @@ function isClaudeCodeClientPath(path: string): boolean {
 }
 
 function claudeCodeNativeToolsNote(): string {
-  return "Palizade wraps MCP servers only. Claude Code native file, shell, Read, Write, and Bash tools bypass MCP and are not protected.";
+  return "install-config wraps MCP servers only. Claude Code native tools (Bash, Read, Write, WebFetch) are covered only after palizade install-hooks claude-code.";
 }
 
 async function validatePalizadeConfig(path: string): Promise<string[]> {

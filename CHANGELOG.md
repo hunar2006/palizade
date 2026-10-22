@@ -34,6 +34,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Presets:** `coding-agent` and `research-readonly`.
 - **`palizade why` and `palizade allow`:** plain language explanations of recent blocks and prompts with suggested fixes, and commands to add, list and remove allowed hosts and email addresses.
 - **Tool catalog and schema signals:** built in classes for common MCP servers, chosen by the package, image or url in your config; input schema property names raise risk; `palizade tools` shows each tool's class and the reasons; audit events record `classificationReasons`.
+- **Client setup:** `install-config` now supports Claude Code and Cursor (user configs, project configs with `--project`, and Claude Code local scope with `--local`), carries over remote server headers, and expands `${NAME}`, `${NAME:-default}` and Cursor `${env:NAME}` placeholders when servers start. Legacy `sse` and `ws` servers are skipped with a reason.
 - **CI** on Windows, macOS and Linux with Node 22 and 24, and a tag-only release workflow with npm provenance.
 
 ### Security fixes since the v0.4 integration
