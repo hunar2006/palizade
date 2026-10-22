@@ -26,7 +26,8 @@
     "demo:pii-redact": "node examples/pii-redact-demo.mjs",
     "demo:egress-allowlist": "node examples/egress-allowlist-demo.mjs",
     "smoke:filesystem": "node examples/real-filesystem-smoke.mjs",
-    "eval:real": "node eval/real-servers.mjs eval/real-servers.example.yaml --out results/real-servers.md"
+    "eval:real": "node eval/real-servers.mjs eval/real-servers.example.yaml --out results/real-servers.md",
+    "eval:real:more": "node eval/real-servers.mjs eval/real-servers.more.yaml --timeout 90000 --out results/real-servers-more.md"
   },
   "keywords": [
     "mcp",

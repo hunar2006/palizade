@@ -13,6 +13,7 @@ pnpm eval:asr        # in sample InjecAgent regression check
 pnpm smoke:filesystem
 pnpm bench:latency
 pnpm eval:real        # lists tools from 8 reference servers (needs npx and uvx)
+pnpm eval:real:more   # 18 more servers; credentials are placeholders
 ```
 
 The held out AgentDojo evaluation needs Python with `pip install agentdojo==0.1.35`:
