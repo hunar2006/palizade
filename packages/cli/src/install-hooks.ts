@@ -121,12 +121,13 @@ function buildHookDefinition(client: string, cliParts: string[]): JsonRecord {
     const args = [...cliParts.slice(1), "claude-code"];
     return {
       // onFailure: block makes a crashed or missing hook deny the call (Claude Code 2.1.295+).
+      // mcp__.* covers MCP servers that are not wrapped, such as remote servers that sign in with OAuth.
       PreToolUse: {
-        matcher: "Bash|Write|Edit|WebFetch",
+        matcher: "Bash|Write|Edit|WebFetch|mcp__.*",
         hooks: [{ type: "command", command, args, onFailure: "block" }]
       },
       PostToolUse: {
-        matcher: "Read|WebFetch|Grep|Glob",
+        matcher: "Read|WebFetch|Grep|Glob|mcp__.*",
         hooks: [{ type: "command", command, args }]
       },
       // Remembers destinations the user typed; never blocks the prompt.

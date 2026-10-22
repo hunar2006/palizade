@@ -955,7 +955,7 @@ async function makeEngine(
       maxRedirects: 5
     },
     listener: { host: "127.0.0.1", port: 32_146, tokenPath: join(dir, "listener.token"), allowRemote: false },
-    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
+    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
     taint: {
       exposure: { ttlMs: 7_200_000 },
       userIntent: { enabled: true, ttlMs: 7_200_000 },

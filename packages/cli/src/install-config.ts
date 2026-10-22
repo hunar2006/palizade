@@ -215,7 +215,7 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
     const original = normalizeClientEntry(name, rawEntry, clientConfigPath);
     // The stdio wrapper sends only static headers, so an OAuth sign in would stop working.
     if (original.url && Object.keys(original.headers ?? {}).length === 0 && !options.includeRemote) {
-      skipped.push({ name, reason: "remote server with no static credentials; it probably signs in with OAuth, which the wrapper cannot do. Use palizade serve for it, or add --include-remote if it needs no sign in" });
+      skipped.push({ name, reason: "remote server with no static credentials; it probably signs in with OAuth, which the wrapper cannot do. The Claude Code and Codex hooks (palizade install-hooks) check its tool calls instead; add --include-remote if it needs no sign in" });
       continue;
     }
     const addedToPalizadeConfig = !Object.prototype.hasOwnProperty.call(palizadeServers, name);

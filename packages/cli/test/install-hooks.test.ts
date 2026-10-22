@@ -10,7 +10,7 @@ describe("mergeHookEntries", () => {
     const hooks = merged.hooks as Record<string, unknown[]>;
     expect(hooks.PreToolUse).toHaveLength(1);
     expect(hooks.PostToolUse).toHaveLength(1);
-    expect(hooks.PreToolUse[0]).toMatchObject({ matcher: "Bash|Write|Edit|WebFetch" });
+    expect(hooks.PreToolUse[0]).toMatchObject({ matcher: "Bash|Write|Edit|WebFetch|mcp__.*" });
     const hook = (hooks.PreToolUse[0] as { hooks: Array<{ command: string; args: string[] }> }).hooks[0]!;
     expect(hook.command).toBe("C:/node/node.exe");
     expect(hook.args).toContain("hook");

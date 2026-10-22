@@ -75,7 +75,7 @@ palizade lock approve <server>     # install-config prints these for you
 palizade doctor --client <name>    # shows which servers and tools are protected
 ```
 
-Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` (Claude Code) and `${env:NAME}` (Cursor) are filled from your environment when Palizade starts the server or connects to its url. A header whose variable is unset is left out; a url whose variable is unset is an error. Remote servers with no static credentials are skipped, because they usually sign in with OAuth, which the stdio wrapper cannot do; run those through `palizade serve`, or pass `--include-remote` if they need no sign in. Servers using the legacy `sse` or `ws` transports are skipped with a message, since Palizade proxies stdio and Streamable HTTP only.
+Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` (Claude Code) and `${env:NAME}` (Cursor) are filled from your environment when Palizade starts the server or connects to its url. A header whose variable is unset is left out; a url whose variable is unset is an error. Remote servers with no static credentials are skipped, because they usually sign in with OAuth, which the stdio wrapper cannot do. In Claude Code and Codex the hooks cover them instead: `install-hooks` matches `mcp__*` tools, so calls to servers Palizade does not wrap (such as a Linear, Notion or Atlassian remote) are checked against the shared taint store as `trust: untrusted` (`hooks.mcpTrust`), recognized by the catalog from the client's own config, while wrapped servers are left to their proxy. Pass `--include-remote` to wrap a remote that needs no sign in. Servers using the legacy `sse` or `ws` transports are skipped with a message, since Palizade proxies stdio and Streamable HTTP only.
 
 ## Held Out Evaluation (AgentDojo)
 
@@ -486,7 +486,7 @@ pnpm eval:combined
 ## Status And Clients
 
 - `install-config` supports Claude Desktop, Claude Code (user, local and project scope), Cursor (user and project) and Codex (user and project); other clients take a manual `palizade wrap` entry.
-- Remote servers that sign in with OAuth cannot go through the stdio wrapper; use `palizade serve` for them.
+- Remote servers that sign in with OAuth cannot go through the stdio wrapper. Claude Code and Codex hooks check their tool calls, but without a tool list Palizade cannot lock or review their metadata, and Cursor hooks classify them by name only.
 - Coverage includes wrapped MCP traffic and installed native-hook events; live client hook activation needs verification.
 - Claude Desktop live validation has exercised tainted write blocking.
 - Claude Code support is documented with a non-native fetch/post MCP demo in [examples/claude-code-fetch-demo.md](examples/claude-code-fetch-demo.md).

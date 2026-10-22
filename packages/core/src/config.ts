@@ -194,11 +194,14 @@ export const palizadeConfigSchema = z.object({
   hooks: z.object({
     failMode: z.enum(["closed", "open"]).default("closed"),
     timeoutMs: z.number().int().min(1000).default(30_000),
-    maxInputBytes: z.number().int().min(1024).default(1024 * 1024)
+    maxInputBytes: z.number().int().min(1024).default(1024 * 1024),
+    // Trust for MCP servers seen only through hooks (not wrapped), such as OAuth remotes.
+    mcpTrust: z.enum(["trusted", "semi", "untrusted"]).default("untrusted")
   }).default({
     failMode: "closed",
     timeoutMs: 30_000,
-    maxInputBytes: 1024 * 1024
+    maxInputBytes: 1024 * 1024,
+    mcpTrust: "untrusted"
   }),
   taint: z.object({
     exposure: z.object({ ttlMs: z.number().int().positive().default(7_200_000) }).default({ ttlMs: 7_200_000 }),

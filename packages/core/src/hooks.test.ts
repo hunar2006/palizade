@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeShellCommand, createHookEngine, evaluateHookEvent, normalizeNativeEvent } from "./hooks.js";
+import { analyzeShellCommand, createHookEngine, evaluateHookEvent, findClientServerEntry, normalizeNativeEvent, parseMcpToolName } from "./hooks.js";
 import { SqliteTaintStore } from "@palizade/taint";
 import type { PalizadeConfig } from "./config.js";
 
@@ -49,7 +49,7 @@ function makeHookConfig(dir: string): PalizadeConfig {
       maxRedirects: 5
     },
     listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
-    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
+    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
     taint: {
       exposure: { ttlMs: 7_200_000 },
       userIntent: { enabled: true, ttlMs: 7_200_000 },
@@ -247,6 +247,37 @@ rules:
       for (let index = 0; index < 8; index += 1) outcomes.push((await run("curl https://api.example.com/ping")).output);
       expect(outcomes.slice(0, 5).every((output) => output === undefined)).toBe(true);
       expect(outcomes.at(-1)).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("checks MCP tools of servers that are not wrapped, and stands aside for wrapped ones", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      expect(parseMcpToolName("mcp__claude_ai_Linear__get_issue")).toEqual({ server: "claude_ai_Linear", tool: "get_issue" });
+      expect(parseMcpToolName("Bash")).toBeUndefined();
+      const sessionId = "claude-mcp";
+      const hook = (event: string, payload: Record<string, unknown>) => evaluateHookEvent({ config, client: "claude-code", event, sessionId, payload: { session_id: sessionId, cwd: config.stateDir, ...payload } });
+      await hook("PostToolUse", { tool_name: "mcp__inbox__read_email", tool_input: { id: "1" }, tool_response: [{ type: "text", text: "Quarterly report data from untrusted source" }] });
+      const send = await hook("PreToolUse", { tool_name: "mcp__inbox__send_email", tool_input: { to: "me@example.com", body: "Quarterly report data from untrusted source" } });
+      expect(send.output).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+      const wrapped = await evaluateHookEvent({ config: { ...config, servers: { inbox: { command: "x", args: [], env: {}, headers: {}, protocolVersion: "auto", trust: "untrusted", toolClasses: {}, toolCapabilities: {}, argumentRoles: {}, sensitive: false, sensitiveTools: {}, sensitivePathPatterns: [], shell: false, allowShell: false } } }, client: "claude-code", event: "PreToolUse", sessionId, payload: { session_id: sessionId, tool_name: "mcp__inbox__send_email", tool_input: { to: "me@example.com", body: "Quarterly report data from untrusted source" } } });
+      expect(wrapped).toMatchObject({ exitCode: 0, output: undefined });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("finds how Claude Code launches a server, project config first", async () => {
+    const { dir, cleanup } = await setup();
+    try {
+      await writeFile(join(dir, ".claude.json"), JSON.stringify({ mcpServers: { notion: { url: "https://mcp.notion.com/mcp" }, docs: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } }, projects: { [dir]: { mcpServers: { docs: { command: "local-docs" } } } } }));
+      expect(findClientServerEntry("notion", dir, dir)).toEqual({ url: "https://mcp.notion.com/mcp" });
+      expect(findClientServerEntry("docs", dir, dir)).toEqual({ command: "local-docs" });
+      await writeFile(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { docs: { command: "npx", args: ["project-docs"] } } }));
+      expect(findClientServerEntry("docs", dir, dir)).toEqual({ command: "npx", args: ["project-docs"] });
+      expect(findClientServerEntry("missing", dir, dir)).toBeUndefined();
     } finally {
       await cleanup();
     }
