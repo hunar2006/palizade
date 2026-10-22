@@ -47,6 +47,10 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - Hosts and email addresses are compared in one canonical form for allowlist and provenance checks.
 - The SSE parser now bounds a partial line and an unterminated event, so a remote server cannot exhaust memory by streaming one endless line or data without a blank line.
 
+### Performance
+
+- Stdio framing copies a large message once instead of once per chunk: a 20 MB tool result in 64 KB chunks now takes about 60 ms instead of about 800 ms.
+
 ### Known limits
 
 - The published InjecAgent results are an in-sample regression check, not a benchmark result. See `docs/evaluation-plan.md`.

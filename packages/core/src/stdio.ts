@@ -13,6 +13,8 @@ import type { PalizadeConfig } from "./config.js";
 
 export class LineJsonRpcPeer extends EventEmitter {
   private buffer = Buffer.alloc(0);
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
   private readonly maxMessageBytes: number;
   private readonly maxBufferedBytes: number;
   private readonly allowBatches: boolean;
@@ -34,12 +36,22 @@ export class LineJsonRpcPeer extends EventEmitter {
   }
 
   private onData(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    if (this.buffer.length > this.maxBufferedBytes) {
+    this.pending.push(chunk);
+    this.pendingBytes += chunk.length;
+    if (this.buffer.length + this.pendingBytes > this.maxBufferedBytes) {
       this.emit("error", new Error(`JSON-RPC buffer exceeded ${this.maxBufferedBytes} bytes`));
       this.buffer = Buffer.alloc(0);
+      this.pending = [];
+      this.pendingBytes = 0;
       return;
     }
+    // Join chunks only once a message can be complete, so a large message is copied once, not per chunk.
+    if (!this.allowContentLength && !chunk.includes(0x0a)) {
+      return;
+    }
+    this.buffer = Buffer.concat([this.buffer, ...this.pending]);
+    this.pending = [];
+    this.pendingBytes = 0;
 
     while (this.buffer.length > 0) {
       const framed = this.allowContentLength ? this.tryReadContentLengthFrame() : undefined;
