@@ -1,4 +1,4 @@
-| Server | Catalog | Tools | Source | Sink | Pure | Unknown | Metadata flags | Instruction like |
+| Server | Catalog | Tools | Source | Sink | Pure | Unknown | Metadata flags | Withheld |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | filesystem | filesystem | 14 | 9 | 4 | 1 | 0 | 0 | 0 |
 | memory | memory | 9 | 3 | 6 | 0 | 0 | 0 | 0 |
@@ -12,4 +12,4 @@
 Unknown tools (blocked on untrusted servers until classified):
 - everything: echo, trigger-long-running-operation
 
-No metadata or description flags.
+No metadata flags and no tools withheld.

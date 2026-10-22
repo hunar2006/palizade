@@ -530,14 +530,24 @@ export class InterceptionEngine {
       });
     }
     const fused = review.labels.length > 0 ? fuseDetections(detections.map((entry) => entry.detection)) : contentFused;
+    // Detections belong to single tools and are decided per tool below, so one suspicious
+    // description withholds that tool instead of the whole server. Fusing every description
+    // together also inflated scores: many ordinary "use this tool when" sentences add up.
+    const toolDetections = new Map<string, DetectionResult>();
+    for (const tool of tools) {
+      const own = detections.filter(({ content }) => content.sourceToolOrResource === tool.name).map(({ detection }) => detection);
+      if (own.length > 0) toolDetections.set(tool.name, fuseDetections(own));
+    }
+    const unattributed = detections.filter(({ content }) => !tools.some((tool) => tool.name === content.sourceToolOrResource)).map(({ detection }) => detection);
+    const listDetection = unattributed.length > 0 ? fuseDetections(unattributed) : { score: 0, labels: [] as string[] };
 
     let decision = evaluatePolicy(this.options.policy, {
       direction: "response",
       method: "tools/list",
       server: this.options.serverName,
       trust: this.options.server.trust,
-      detector_score: fused.score,
-      labels: fused.labels,
+      detector_score: listDetection.score,
+      labels: listDetection.labels,
       lock_status: lockStatus
     });
 
@@ -579,7 +589,7 @@ export class InterceptionEngine {
         : { toClient: [error], toServer: [] };
     }
 
-    const perTool = await this.applyPerToolMetadataDecisions(message, tools, review, startedAt);
+    const perTool = await this.applyPerToolMetadataDecisions(message, tools, review, startedAt, toolDetections);
     const keptTools = perTool.tools;
     for (const tool of keptTools) {
       this.knownTools.set(tool.name, tool);
@@ -653,14 +663,17 @@ export class InterceptionEngine {
     message: JsonRpcResponse,
     tools: McpTool[],
     review: MetadataReview,
-    startedAt: number
+    startedAt: number,
+    toolDetections: Map<string, DetectionResult> = new Map()
   ): Promise<{ tools: McpTool[]; changed: boolean }> {
     const reviews = new Map(review.items.map((item) => [item.name, item]));
     const kept: McpTool[] = [];
     let changed = false;
     for (const tool of tools) {
       const item = reviews.get(tool.name);
-      if (!item?.flagged) {
+      const contentDetection = toolDetections.get(tool.name);
+      const detection = contentDetection && item ? fuseDetections([item.detection, contentDetection]) : contentDetection ?? item?.detection;
+      if (!item?.flagged && (detection?.score ?? 0) < 0.35) {
         this.metadataBlockedTools.delete(tool.name);
         kept.push(tool);
         continue;
@@ -671,25 +684,30 @@ export class InterceptionEngine {
         server: this.options.serverName,
         tool: tool.name,
         trust: this.options.server.trust,
-        detector_score: item.detection.score,
-        labels: item.detection.labels,
-        tool_shadowing_detected: item.shadows.length > 0,
-        name_collision_detected: item.collidesWith.length > 0,
-        hidden_unicode_detected: item.hiddenUnicode.count > 0
+        detector_score: detection?.score ?? 0,
+        labels: detection?.labels ?? [],
+        tool_shadowing_detected: (item?.shadows.length ?? 0) > 0,
+        name_collision_detected: (item?.collidesWith.length ?? 0) > 0,
+        hidden_unicode_detected: (item?.hiddenUnicode.count ?? 0) > 0
       });
+      if (!item?.flagged && (decision.action === "allow" || decision.action === "log_only" || decision.action === "sanitize")) {
+        this.metadataBlockedTools.delete(tool.name);
+        kept.push(tool);
+        continue;
+      }
       const approval = await this.maybeApprove(decision, {
         method: "tools/list",
         tool: tool.name,
         toolClass: "unknown",
         taintMatches: [],
-        summary: formatMetadataApprovalSummary(tool.name, item)
+        summary: item ? formatMetadataApprovalSummary(tool.name, item, detection) : `Tool metadata for ${tool.name} reads like instructions to the model (${(detection?.labels ?? []).join(", ")}).`
       });
       await this.auditDecision(message, "response", approval.decision, startedAt, {
         method: "tools/list",
         tool: tool.name,
-        detector: item.detection,
+        ...(detection ? { detector: detection } : {}),
         approved: approval.approved,
-        metadataReview: item.detection.metadata
+        metadataReview: item?.detection.metadata
       });
       if (!approval.approved || decision.action === "block") {
         this.metadataBlockedTools.set(tool.name, approval.decision);
@@ -697,7 +715,7 @@ export class InterceptionEngine {
         continue;
       }
       this.metadataBlockedTools.delete(tool.name);
-      if (decision.action === "sanitize" && item.hiddenUnicode.count > 0) {
+      if (decision.action === "sanitize" && item && item.hiddenUnicode.count > 0) {
         kept.push(stripHiddenUnicodeDeep(tool));
         changed = true;
         continue;
@@ -1647,9 +1665,10 @@ function visibleMetadataContents(contents: ExtractedContent[]): ExtractedContent
   return contents.map((content) => content.text ? { ...content, text: stripHiddenUnicode(content.text) } : content);
 }
 
-function formatMetadataApprovalSummary(tool: string, item: MetadataReview["items"][number]): string {
+function formatMetadataApprovalSummary(tool: string, item: MetadataReview["items"][number], detection?: DetectionResult): string {
   return [
     `Tool metadata for ${tool} was flagged.`,
+    detection && detection.labels.length > 0 ? `Signals: ${detection.labels.join(", ")}.` : undefined,
     item.hiddenUnicode.count > 0 ? `Hidden characters: ${item.hiddenUnicode.count} (${item.hiddenUnicode.codePoints.join(", ")}).` : undefined,
     item.shadows.length > 0 ? `Mentions tools of other servers: ${item.shadows.map((entry) => `${entry.server}/${entry.tool}`).join(", ")}.` : undefined,
     item.collidesWith.length > 0 ? `Name also exposed by: ${item.collidesWith.join(", ")}.` : undefined,

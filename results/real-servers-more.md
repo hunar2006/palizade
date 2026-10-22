@@ -1,4 +1,4 @@
-| Server | Catalog | Tools | Source | Sink | Pure | Unknown | Metadata flags | Instruction like |
+| Server | Catalog | Tools | Source | Sink | Pure | Unknown | Metadata flags | Withheld |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | notion | notion | 24 | 14 | 10 | 0 | 0 | 0 | 0 |
 | context7 | context7 | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
@@ -17,10 +17,8 @@
 | gitlab | gitlab | 9 | 2 | 7 | 0 | 0 | 0 | 0 |
 | google-maps | google-maps | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | hubspot | hubspot | 21 | 13 | 7 | 1 | 0 | 0 | 0 |
-| apify | apify | 10 | 6 | 4 | 0 | 0 | 0 | 2 |
+| apify | apify | 10 | 6 | 4 | 0 | 0 | 0 | 0 |
 
 No unknown tools.
 
-Flags:
-- apify/call-actor: description score 0.65 (tool-control, high-imperative-density)
-- apify/get-actor-run: description score 0.55 (tool-control, high-imperative-density)
+No metadata flags and no tools withheld.
