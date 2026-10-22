@@ -16,6 +16,6 @@ cases:
   - name: servers may not use the model
     context: { direction: request, method: sampling/createMessage }
     expect: block
-  - name: deleting data after untrusted content is never silent
+  - name: deleting data after untrusted content needs approval
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [deletes_data], session_untrusted: true }
-    expect: { not_rule: allow-trusted-pure }
+    expect: { action: require_approval, rule: approve-delete-after-untrusted }
