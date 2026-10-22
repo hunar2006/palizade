@@ -32,6 +32,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Optional sandboxed launch** for stdio servers: docker (including Windows), bubblewrap and seatbelt.
 - **Operations:** hot reload, `palizade policy check`, `palizade status`, `palizade learn --from-audit`, optional metrics JSONL, and `doctor` coverage reports.
 - **Presets:** `coding-agent` and `research-readonly`.
+- **`palizade policy test`:** YAML test cases for policies, with strict field checking; the default and strict presets ship with their own cases.
 - **`palizade scan`:** one command that checks all MCP client configs and `palizade.yaml` for unprotected servers, plaintext secrets, unpinned packages and images, plain http urls and suspicious locked tool metadata, without starting servers.
 - **`palizade why` and `palizade allow`:** plain language explanations of recent blocks and prompts with suggested fixes, and commands to add, list and remove allowed hosts and email addresses.
 - **Tool catalog and schema signals:** built in classes for common MCP servers, chosen by the package, image or url in your config; input schema property names raise risk; `palizade tools` shows each tool's class and the reasons; audit events record `classificationReasons`.

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { loadPolicyFile, parsePolicyTests, runPolicyTests, type PolicyTestResult } from "@palizade/policy";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import YAML from "yaml";
@@ -354,9 +355,40 @@ program.command("serve")
     await new Promise<void>(() => {});
   });
 
-program.command("policy")
-  .description("Inspect policy files")
-  .command("check")
+const policyCommand = program.command("policy")
+  .description("Inspect and test policy files");
+
+policyCommand.command("test")
+  .description("Run policy test cases: each case gives a decision context and the expected action or rule")
+  .argument("<files...>", "YAML test files (see policies/tests for examples)")
+  .option("--policy <file>", "Policy to test when a test file does not name one (defaults to the policy in palizade.yaml)")
+  .option("--json", "Print results as JSON", false)
+  .action(async (files: string[], options: { policy?: string; json: boolean }) => {
+    const all: Array<{ file: string; policy: string; results: PolicyTestResult[] }> = [];
+    for (const file of files) {
+      const tests = parsePolicyTests(await readFile(file, "utf8"), file);
+      const policyFile = tests.policy
+        ? resolve(dirname(resolve(file)), tests.policy)
+        : options.policy ? resolve(options.policy) : (await loadConfigForCli(program.opts<{ config: string }>().config)).policy;
+      all.push({ file, policy: policyFile, results: runPolicyTests(await loadPolicyFile(policyFile), tests) });
+    }
+    const failed = all.flatMap((entry) => entry.results).filter((result) => !result.passed).length;
+    if (options.json) {
+      console.log(JSON.stringify(all, null, 2));
+    } else {
+      for (const entry of all) {
+        console.log(`${entry.file} (policy ${entry.policy})`);
+        for (const result of entry.results) {
+          console.log(`  ${result.passed ? "pass" : "FAIL"}  ${result.name}${result.passed ? "" : `\n        expected ${result.expected}, got ${result.actual}`}`);
+        }
+      }
+      const total = all.reduce((sum, entry) => sum + entry.results.length, 0);
+      console.log(`${total - failed}/${total} passed`);
+    }
+    if (failed > 0) process.exitCode = 1;
+  });
+
+policyCommand.command("check")
   .description("Validate a policy: schema, unknown keys, unreachable rules, impossible conditions, unknown servers and tools")
   .argument("[file]", "Policy file (defaults to the policy in palizade.yaml)")
   .option("--json", "Print findings as JSON", false)

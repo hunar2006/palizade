@@ -355,6 +355,7 @@ palizade status [--json]
 palizade hook <client> [event]
 palizade install-hooks <client>
 palizade policy check [file] [--json] [--strict]
+palizade policy test <files...> [--policy <file>]
 palizade learn --from-audit --since 7d [--server <name>]
 palizade lock approve <serverName>
 palizade lock diff <serverName>

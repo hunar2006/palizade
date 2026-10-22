@@ -115,6 +115,23 @@ The client's retry `inputResponses` are checked for observable tainted or sensit
 - Trusted server plus unknown tool: allow with audit logging.
 - Policy evaluation errors: block in enforcing presets.
 
+## Testing A Policy
+
+Write test cases in YAML: each case gives the decision context Palizade would build and the action or rule you expect. Unknown context fields are errors, so a typo cannot pass by accident.
+
+```yaml
+policy: ../default.yaml          # relative to this file; or pass --policy, or use palizade.yaml's policy
+cases:
+  - name: a destination copied from untrusted content is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, tainted_destination: true }
+    expect: { action: block, rule: block-tainted-destination }
+  - name: a clean read is allowed
+    context: { direction: request, method: tools/call, tool_class: source }
+    expect: allow
+```
+
+Run them with `palizade policy test my-policy.test.yaml`; it exits non zero on any failure, so it fits in CI. The shipped presets have their own cases in `policies/tests`, which run with the test suite.
+
 ## How Tools Are Classified
 
 Each tool gets a class (`source`, `sink`, `pure` or `unknown`) and a set of capabilities. The first of these that applies wins:
