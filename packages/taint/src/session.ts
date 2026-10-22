@@ -5,8 +5,13 @@ export interface SessionState {
   trustedDestinations: string[];
   quarantine?: { expiresAt: number; remainingTurns: number } | undefined;
   sinkCalls?: number[];
+  /** Older state files only; replaced by recentDestinations and recentRepeats. */
   destinations?: string[];
   repeats?: Record<string, number>;
+  /** Destination key to last time seen, within limits.windowMs. */
+  recentDestinations?: Record<string, number>;
+  /** Call signature to the times it was seen, within limits.windowMs. */
+  recentRepeats?: Record<string, number[]>;
   trackingOverflow?: boolean;
 }
 

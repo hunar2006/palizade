@@ -1,11 +1,11 @@
 import { z } from "zod";
 
-const actionSchema = z.enum(["allow", "block", "sanitize", "redact_spans", "redact_secrets", "require_approval", "log_only"]);
-const directionSchema = z.enum(["request", "response"]);
-const trustSchema = z.enum(["trusted", "semi", "untrusted"]);
-const toolClassSchema = z.enum(["source", "sink", "pure", "unknown"]);
-const lockStatusSchema = z.enum(["approved", "new", "changed", "missing", "unknown"]);
-const capabilitySchema = z.enum([
+export const actionSchema = z.enum(["allow", "block", "sanitize", "redact_spans", "redact_secrets", "require_approval", "log_only"]);
+export const directionSchema = z.enum(["request", "response"]);
+export const trustSchema = z.enum(["trusted", "semi", "untrusted"]);
+export const toolClassSchema = z.enum(["source", "sink", "pure", "unknown"]);
+export const lockStatusSchema = z.enum(["approved", "new", "changed", "missing", "unknown"]);
+export const capabilitySchema = z.enum([
   "reads_untrusted_content",
   "reads_sensitive_data",
   "network_egress",
@@ -41,10 +41,13 @@ export const policyConditionSchema = z.object({
   pii_detected: z.boolean().optional(),
   destination_allowed: z.boolean().optional(),
   tainted_destination: z.boolean().optional(),
+  user_stated_destination: z.boolean().optional(),
+  copied_link_only: z.boolean().optional(),
   lookalike_destination: z.boolean().optional(),
   new_destination: z.boolean().optional(),
   split_match: z.boolean().optional(),
   rule_of_two: z.boolean().optional(),
+  session_untrusted: z.boolean().optional(),
   rate_limited: z.boolean().optional(),
   loop_detected: z.boolean().optional(),
   destination_session_trusted: z.boolean().optional(),

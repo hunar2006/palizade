@@ -1,0 +1,48 @@
+# Guarantees the default preset must keep. Run: palizade policy test policies/tests/default.test.yaml
+policy: ../default.yaml
+cases:
+  - name: a destination copied from untrusted content is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [sends_message, network_egress], tainted_destination: true, taint: true }
+    expect: { action: block, rule: block-tainted-destination }
+  - name: opening a link exactly as an untrusted page wrote it is allowed
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress, reads_untrusted_content], tainted_destination: true, taint: true, copied_link_only: true }
+    expect: { action: allow, rule: allow-following-copied-link }
+  - name: a copied link is not followed once the session holds sensitive data
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress, reads_untrusted_content], tainted_destination: true, taint: true, copied_link_only: true, rule_of_two: true }
+    expect: { action: block, rule: block-tainted-destination }
+  - name: a lookalike host is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress], lookalike_destination: true }
+    expect: { action: block, rule: block-lookalike-destination }
+  - name: untrusted text copied into any sink is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [file_write], taint: true }
+    expect: block
+  - name: an unknown tool on an untrusted server is blocked
+    context: { direction: request, method: tools/call, tool_class: unknown, trust: untrusted }
+    expect: { action: block, rule: block-untrusted-unknown-tool }
+  - name: an unknown tool on a semi trusted server needs approval
+    context: { direction: request, method: tools/call, tool_class: unknown, trust: semi }
+    expect: { action: require_approval, rule: approve-semi-unknown-tool }
+  - name: servers may not use the model
+    context: { direction: request, method: sampling/createMessage }
+    expect: block
+  - name: outbound action after untrusted and sensitive data needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress], rule_of_two: true, destination_session_trusted: false }
+    expect: { action: require_approval, rule: approve-rule-of-two }
+  - name: writes to critical files need approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [file_write, writes_local], critical_path: true }
+    expect: require_approval
+  - name: quarantined sessions need approval for sinks
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [writes_remote], session_quarantined: true }
+    expect: require_approval
+  - name: a clean read is allowed
+    context: { direction: request, method: tools/call, tool_class: source, trust: untrusted, capabilities: [reads_untrusted_content] }
+    expect: allow
+  - name: a clean write with no taint is allowed
+    context: { direction: request, method: tools/call, tool_class: sink, trust: untrusted, capabilities: [file_write] }
+    expect: allow
+  - name: deleting data after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [deletes_data], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-delete-after-untrusted }
+  - name: changing a password after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [accesses_credentials, reads_sensitive_data, writes_remote], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-credential-change-after-untrusted }

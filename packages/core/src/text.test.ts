@@ -20,3 +20,19 @@ describe("spotlighting a tool result", () => {
     expect(out.content[2]!.resource!.text).toContain("<untrusted-content");
   });
 });
+
+describe("object keys", () => {
+  it("includes data bearing keys, skips identifier keys, and renames keys on transform", async () => {
+    const { applyTextTransforms, extractTextBlocks, flattenArguments, isDataBearingKey } = await import("./text.js");
+    expect(isDataBearingKey("subject")).toBe(false);
+    expect(isDataBearingKey("bob@example.com")).toBe(true);
+    expect(isDataBearingKey("a".repeat(21))).toBe(true);
+    const value = { id: 1, meta: { "secret value here": "x", keep: "y" } };
+    expect(flattenArguments(value)).toContain("secret value here");
+    expect(extractTextBlocks(value).filter((block) => block.key).map((block) => block.text)).toEqual(["secret value here"]);
+    const out = applyTextTransforms(value, (text) => text.replace("secret", "[MASKED]")) as { meta: Record<string, string> };
+    expect(Object.keys(out.meta)).toEqual(["[MASKED] value here", "keep"]);
+    expect(out.meta["[MASKED] value here"]).toBe("x");
+    expect(value.meta).toHaveProperty("secret value here");
+  });
+});

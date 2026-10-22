@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { expandEnvTemplates } from "./env-templates.js";
 import { isRequest, isSuccess, type JsonRpcId, type JsonRpcMessage, type McpTool } from "./mcp.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
 import type { InterceptionEngine } from "./interceptor.js";
@@ -70,14 +71,24 @@ export function protocolVersionOf(message: JsonRpcMessage): string | undefined {
   return undefined;
 }
 
+/** Expands `${NAME}` in a server url; an unset variable is an error, since the url would be wrong. */
+export function resolveUrlTemplate(url: string, env: NodeJS.ProcessEnv = process.env): string {
+  const expanded = expandEnvTemplates(url, env);
+  if (expanded.missing.length > 0) {
+    throw new Error(`Server url needs environment variables that are not set: ${expanded.missing.join(", ")}`);
+  }
+  return expanded.value;
+}
+
 export function resolveHeaderTemplates(headers: Record<string, string>, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const resolved: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
-    const substituted = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (match, key: string) => env[key] ?? match);
-    if (/\$\{[A-Za-z_][A-Za-z0-9_]*\}/u.test(substituted)) {
+    const expanded = expandEnvTemplates(value, env);
+    // A header whose variable is unset is dropped rather than sent with a literal placeholder.
+    if (expanded.missing.length > 0) {
       continue;
     }
-    resolved[name] = substituted;
+    resolved[name] = expanded.value;
   }
   return resolved;
 }
@@ -101,6 +112,7 @@ export class SseParser {
   private id: string | undefined;
   private dataLines: string[] = [];
   private eventBytes = 0;
+  private pendingDataBytes = 0;
 
   constructor(private readonly limits: { maxLineBytes: number; maxEventBytes: number }) {}
 
@@ -134,6 +146,7 @@ export class SseParser {
         this.id = undefined;
         this.dataLines = [];
         this.eventBytes = 0;
+        this.pendingDataBytes = 0;
         continue;
       }
       if (line.startsWith(":")) {
@@ -146,12 +159,21 @@ export class SseParser {
         value = value.slice(1);
       }
       if (field === "data") {
+        // Count data before the blank line arrives, so an event that never ends cannot grow without bound.
+        this.pendingDataBytes += Buffer.byteLength(value, "utf8") + 1;
+        if (this.eventBytes + this.pendingDataBytes > this.limits.maxEventBytes) {
+          throw new SseParseError(`SSE event exceeded ${this.limits.maxEventBytes} bytes`);
+        }
         this.dataLines.push(value);
       } else if (field === "event") {
         this.eventName = value;
       } else if (field === "id") {
         this.id = value;
       }
+    }
+    // A line with no newline yet is still bounded: an upstream cannot stream one endless line.
+    if (this.lineBuffer.length * 3 > this.limits.maxLineBytes && Buffer.byteLength(this.lineBuffer, "utf8") > this.limits.maxLineBytes) {
+      throw new SseParseError(`SSE line exceeded ${this.limits.maxLineBytes} bytes`);
     }
   }
 }
@@ -227,8 +249,8 @@ export class HttpMcpTransport extends EventEmitter {
     if (!server.url) {
       throw new Error(`Server '${options.serverName}' has no url; cannot use the HTTP transport.`);
     }
-    this.url = server.url;
     this.env = options.env ?? process.env;
+    this.url = resolveUrlTemplate(server.url, this.env);
     if (options.protocolVersion === "2026-07-28") {
       this.era = "2026-07-28";
     } else if (options.protocolVersion === "2025-11-25") {
@@ -366,6 +388,11 @@ export class HttpMcpTransport extends EventEmitter {
     if (isRequest(message) && message.method === "initialize" && !this.legacyStreamAbort) {
       this.openLegacyStream();
     }
+    // 2025-era servers may answer a POST with an SSE stream (the TypeScript and Python SDKs do by default).
+    if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+      await this.consumeSse(response, "legacy");
+      return;
+    }
     const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
     if (typeof body === "string" && body.trim().length > 0) {
       try {
@@ -392,7 +419,7 @@ export class HttpMcpTransport extends EventEmitter {
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("text/event-stream")) {
-      await this.consumeModernSse(response);
+      await this.consumeSse(response, "modern");
       return;
     }
     const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
@@ -421,7 +448,7 @@ export class HttpMcpTransport extends EventEmitter {
     this.emitInbound(parsed, "json");
   }
 
-  private async consumeModernSse(response: Response): Promise<void> {
+  private async consumeSse(response: Response, era: "modern" | "legacy"): Promise<void> {
     if (!response.body) {
       return;
     }
@@ -457,7 +484,10 @@ export class HttpMcpTransport extends EventEmitter {
           break;
         }
         for (const message of messages) {
-          if ("method" in message && "id" in message) {
+          if (era === "legacy") {
+            // The 2025 spec allows requests and notifications related to the POST on its stream.
+            this.emitInbound(message, "sse");
+          } else if ("method" in message && "id" in message) {
             this.securityEvent({
               kind: "protocol_violation",
               message: `Upstream pushed a JSON-RPC request on an SSE stream in the 2026-07-28 era; the spec forbids it. Message dropped.`,
@@ -930,33 +960,40 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
   if (!server.url) {
     throw new Error("collectToolsFromHttpServer requires a server with a url.");
   }
-  const request = {
-    jsonrpc: "2.0",
-    id: "palizade-lock-probe",
-    method: "tools/list",
-    params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
-  } as JsonRpcMessage;
-  const attempt = await fetch(server.url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "MCP-Protocol-Version": "2026-07-28",
-      "Mcp-Method": "tools/list",
-      ...resolveHeaderTemplates(server.headers ?? {})
-    },
-    body: JSON.stringify(request),
-    redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs)
-  });
-  if (attempt.ok) {
-    const body = await readBodyBounded(attempt, limits.maxBodyBytes);
-    const parsed = JSON.parse(body ?? "null") as JsonRpcMessage;
-    if ("result" in parsed) {
-      const tools = (parsed.result as { tools?: unknown }).tools;
-      return Array.isArray(tools) ? (tools as McpTool[]) : [];
+  const url = resolveUrlTemplate(server.url);
+  const modernPage = async (cursor: string | undefined): Promise<{ tools: McpTool[]; nextCursor?: string } | undefined> => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/list",
+        ...resolveHeaderTemplates(server.headers ?? {})
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "palizade-lock-probe", method: "tools/list", params: { ...(cursor ? { cursor } : {}), _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } } }),
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) return undefined;
+    let parsed: JsonRpcMessage | undefined;
+    try { parsed = JSON.parse(await readBodyBounded(response, limits.maxBodyBytes) ?? "null") as JsonRpcMessage; } catch { return undefined; }
+    // An error body usually means a legacy server that wants initialize first.
+    if (!parsed || !("result" in parsed)) return undefined;
+    const result = parsed.result as { tools?: unknown; nextCursor?: unknown };
+    return { tools: Array.isArray(result.tools) ? (result.tools as McpTool[]) : [], ...(typeof result.nextCursor === "string" && result.nextCursor !== "" ? { nextCursor: result.nextCursor } : {}) };
+  };
+  const first = await modernPage(undefined);
+  if (first) {
+    const tools = [...first.tools];
+    let cursor = first.nextCursor;
+    for (let page = 1; cursor && page < 100; page += 1) {
+      const next = await modernPage(cursor);
+      if (!next) throw new Error("tools/list over HTTP failed on a later page");
+      tools.push(...next.tools);
+      cursor = next.nextCursor;
     }
-    return [];
+    return tools;
   }
   const transport = new HttpMcpTransport({ serverName: "lock-probe", server, http: limits });
   const responsePromise = transport.waitForResponse("palizade-lock-probe-2", timeoutMs);
@@ -975,13 +1012,25 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
     await transport.close();
     throw new Error(`tools/list over HTTP failed: ${initializeResponse.error.message}`);
   }
-  const toolsPromise = transport.waitForResponse("palizade-lock-probe-3", timeoutMs);
-  await transport.send({ jsonrpc: "2.0", id: "palizade-lock-probe-3", method: "tools/list", params: {} });
-  const toolsResponse = await toolsPromise;
-  await transport.close();
-  if ("error" in toolsResponse) {
-    throw new Error(`tools/list over HTTP failed: ${toolsResponse.error.message}`);
+  try {
+    await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" } as JsonRpcMessage);
+    const tools: McpTool[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const id = `palizade-lock-probe-${page + 3}`;
+      const toolsPromise = transport.waitForResponse(id, timeoutMs);
+      await transport.send({ jsonrpc: "2.0", id, method: "tools/list", params: cursor ? { cursor } : {} });
+      const toolsResponse = await toolsPromise;
+      if ("error" in toolsResponse) {
+        throw new Error(`tools/list over HTTP failed: ${toolsResponse.error.message}`);
+      }
+      const result = (toolsResponse as { result?: { tools?: unknown; nextCursor?: unknown } }).result;
+      if (Array.isArray(result?.tools)) tools.push(...(result.tools as McpTool[]));
+      cursor = typeof result?.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined;
+      if (!cursor) return tools;
+    }
+    throw new Error("tools/list over HTTP returned more than 100 pages");
+  } finally {
+    await transport.close();
   }
-  const tools = (toolsResponse as { result?: { tools?: unknown } }).result?.tools;
-  return Array.isArray(tools) ? (tools as McpTool[]) : [];
 }

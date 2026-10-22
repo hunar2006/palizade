@@ -260,6 +260,45 @@ describe("HttpMcpTransport (legacy 2025-11-25)", () => {
     }
   });
 
+  it("reads SSE answers to POSTs, as the TypeScript and Python SDKs send by default", async () => {
+    const upstream = createHttpServer((request, response) => {
+      if (request.method === "GET" || request.method === "DELETE") {
+        response.writeHead(405);
+        response.end();
+        return;
+      }
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const message = JSON.parse(body) as JsonRpcMessage;
+        if (!("id" in message)) {
+          response.writeHead(202);
+          response.end();
+          return;
+        }
+        const result = "method" in message && message.method === "initialize"
+          ? { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "sdk", version: "1" } }
+          : { tools: [{ name: "add", inputSchema: {} }] };
+        response.writeHead(200, { "Content-Type": "text/event-stream", "Mcp-Session-Id": "s-1" });
+        response.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info" } })}\n\n`);
+        response.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n\n`);
+      });
+    });
+    const url = await listen(upstream);
+    try {
+      const transport = new HttpMcpTransport({ serverName: "test", server: urlServer(url), http: httpLimits, protocolVersion: "2025-11-25" });
+      const messages: JsonRpcMessage[] = [];
+      transport.on("message", (message: JsonRpcMessage) => messages.push(message));
+      await transport.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client", version: "1" } } });
+      expect(messages.map((message) => ("id" in message ? message.id : (message as { method: string }).method))).toEqual(["notifications/message", 1]);
+      await transport.close();
+      const { collectToolsFromHttpServer } = await import("./http.js");
+      expect((await collectToolsFromHttpServer(urlServer(url), httpLimits, 5_000)).map((tool) => tool.name)).toEqual(["add"]);
+    } finally {
+      upstream.close();
+    }
+  });
+
   it("auto-detects a modern server from a 404 with a modern JSON-RPC error and synthesizes initialize", async () => {
     const upstream = createHttpServer((request, response) => {
       if (request.headers["mcp-protocol-version"]) {
@@ -314,7 +353,7 @@ describe("HttpMcpTransport (legacy 2025-11-25)", () => {
 async function makeEngineWithAudit(dir: string): Promise<{ engine: InterceptionEngine; events: AuditEvent[] }> {
   const events: AuditEvent[] = [];
   const config: PalizadeConfig = {
-    stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+    stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
     policy: join(dir, "policy.yaml"),
     lockfile: join(dir, "palizade.lock"),
     audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -333,8 +372,8 @@ async function makeEngineWithAudit(dir: string): Promise<{ engine: InterceptionE
     transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
     http: httpLimits,
     listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
-    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
-    taint: { exposure: { ttlMs: 7_200_000 }, quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
+    hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
+    taint: { exposure: { ttlMs: 7_200_000 }, userIntent: { enabled: true, ttlMs: 7_200_000 }, quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },
       sqlite: join(dir, "taint.sqlite"),
@@ -447,7 +486,7 @@ describe("HttpServeListener", () => {
     const { engine } = await makeEngineWithAudit(dir);
     const listener = new HttpServeListener({
       config: {
-        stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 },
+        stateDir: dir, protectedTargets: { criticalPaths: [], maxDiffBytes: 65536 }, limits: { sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 },
         policy: join(dir, "policy.yaml"),
         lockfile: join(dir, "palizade.lock"),
         audit: { jsonl: join(dir, "audit.jsonl"), sqlite: join(dir, "audit.sqlite"), captureRawPayloads: false, errorVerbosity: true },
@@ -466,8 +505,8 @@ describe("HttpServeListener", () => {
         transport: { maxMessageBytes: 67108864, maxBufferedBytes: 67108864, allowBatches: false, allowContentLength: false },
         http: httpLimits,
         listener: { host: "127.0.0.1", port: 0, tokenPath: join(dir, "listener.token"), allowRemote: false },
-        hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
-        taint: { exposure: { ttlMs: 7_200_000 }, quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
+        hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
+        taint: { exposure: { ttlMs: 7_200_000 }, userIntent: { enabled: true, ttlMs: 7_200_000 }, quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
           window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
           decode: { maxDepth: 2, maxBytes: 262144 },
           sqlite: join(dir, "taint.sqlite"),

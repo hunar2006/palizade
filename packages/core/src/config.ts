@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { TOOL_CATALOG } from "./tool-catalog.js";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { parseYamlWithSchema } from "@palizade/policy";
 import { z } from "zod";
@@ -39,7 +40,9 @@ export const serverConfigSchema = z.object({
   sensitivePathPatterns: z.array(z.string().refine((pattern) => { try { new RegExp(pattern, "iu"); return true; } catch { return false; } }, "Invalid sensitive path regular expression")).default([]),
   shell: z.boolean().default(false),
   allowShell: z.boolean().default(false),
-  sandbox: sandboxConfigSchema.optional()
+  sandbox: sandboxConfigSchema.optional(),
+  // A catalog id from `palizade tools --catalog`, or false to turn the built-in catalog off for this server.
+  catalog: z.union([z.string().refine((id) => TOOL_CATALOG.some((entry) => entry.id === id), "Unknown catalog id; run palizade tools --catalog for the list"), z.literal(false)]).optional()
 }).strict().superRefine((server, ctx) => {
   if (server.sandbox !== undefined && server.url !== undefined && normalizeSandbox(server.sandbox).type !== "none") {
     ctx.addIssue({ code: "custom", path: ["sandbox"], message: "sandbox applies only to stdio servers (command); remove it from url servers." });
@@ -103,8 +106,9 @@ export const palizadeConfigSchema = z.object({
     sinkCallsPerMinute: z.number().int().min(1).max(1000).default(60),
     distinctDestinations: z.number().int().min(1).max(1000).default(20),
     repeatThreshold: z.number().int().min(1).max(1000).default(5),
-    historyEntries: z.number().int().min(1).max(1000).default(1000)
-  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000 }),
+    historyEntries: z.number().int().min(1).max(1000).default(1000),
+    windowMs: z.number().int().min(60_000).default(600_000)
+  }).default({ sinkCallsPerMinute: 60, distinctDestinations: 20, repeatThreshold: 5, historyEntries: 1000, windowMs: 600_000 }),
   policy: z.string().default("policies/default.yaml"),
   lockfile: z.string().default("palizade.lock"),
   audit: z.object({
@@ -190,14 +194,21 @@ export const palizadeConfigSchema = z.object({
   hooks: z.object({
     failMode: z.enum(["closed", "open"]).default("closed"),
     timeoutMs: z.number().int().min(1000).default(30_000),
-    maxInputBytes: z.number().int().min(1024).default(1024 * 1024)
+    maxInputBytes: z.number().int().min(1024).default(1024 * 1024),
+    // Trust for MCP servers seen only through hooks (not wrapped), such as OAuth remotes.
+    mcpTrust: z.enum(["trusted", "semi", "untrusted"]).default("untrusted")
   }).default({
     failMode: "closed",
     timeoutMs: 30_000,
-    maxInputBytes: 1024 * 1024
+    maxInputBytes: 1024 * 1024,
+    mcpTrust: "untrusted"
   }),
   taint: z.object({
     exposure: z.object({ ttlMs: z.number().int().positive().default(7_200_000) }).default({ ttlMs: 7_200_000 }),
+    userIntent: z.object({
+      enabled: z.boolean().default(true),
+      ttlMs: z.number().int().min(60_000).default(7_200_000)
+    }).default({ enabled: true, ttlMs: 7_200_000 }),
     quarantine: z.object({
       scoreGte: z.number().min(0).max(1).default(0.85),
       turns: z.number().int().positive().default(20),
@@ -229,6 +240,7 @@ export const palizadeConfigSchema = z.object({
   }).default({
     sqlite: ".palizade/taint.sqlite",
     exposure: { ttlMs: 7_200_000 },
+    userIntent: { enabled: true, ttlMs: 7_200_000 },
     quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
     window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
     decode: { maxDepth: 2, maxBytes: 256 * 1024 },

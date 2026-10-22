@@ -97,7 +97,10 @@ const IS_HIDDEN = new RegExp(INVISIBLE_OR_CONTROL.source, "u");
 export class HeuristicDetector implements Detector {
   readonly name = "heuristic";
 
-  detect(text: string, _ctx: DetectorContext = {}): DetectionResult {
+  detect(text: string, ctx: DetectorContext = {}): DetectionResult {
+    // Tool descriptions are written as instructions to the model ("Use this tool when ...", "Call
+    // fetch-details first"), so tool directions and imperative density are weak signals there.
+    const describesTool = ctx.surface === "tool_description";
     if (!text.trim()) {
       return { score: 0, labels: [], spans: [], detector: this.name };
     }
@@ -129,22 +132,24 @@ export class HeuristicDetector implements Detector {
         spans.push({ start, end, label: rule.label });
         hits += 1;
       }
-      score += Math.min(rule.weight * hits, rule.maxWeight ?? rule.weight);
+      const weight = describesTool && rule.label === "tool-control" ? 0.1 : rule.weight;
+      score += Math.min(weight * hits, rule.maxWeight ?? weight);
     }
 
     for (const match of text.matchAll(INVISIBLE_OR_CONTROL)) {
       const start = match.index ?? 0;
+      // Selectors and tags inside a valid emoji sequence (a shield emoji, a subdivision flag) are not hidden text.
+      if (emojiOffsets.has(start)) continue;
       labels.add("invisible-control-unicode");
       labels.add("hidden_unicode");
       spans.push({ start, end: start + match[0].length, label: "invisible-control-unicode" });
-      // Valid emoji tags and selectors are still reported, but are not an attack signal alone.
-      if (!emojiOffsets.has(start)) score += 0.2;
+      score += 0.2;
     }
 
     const imperativeDensity = countImperatives(matchingText);
     if (imperativeDensity >= 4) {
       labels.add("high-imperative-density");
-      score += Math.min(0.25, imperativeDensity * 0.025);
+      score += Math.min(describesTool ? 0.1 : 0.25, imperativeDensity * 0.025);
     }
 
     const uniqueLabels = [...labels];

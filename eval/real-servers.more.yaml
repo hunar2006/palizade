@@ -1,0 +1,21 @@
+# More MCP servers for `node eval/real-servers.mjs eval/real-servers.more.yaml --timeout 90000`.
+# Tool lists are read without signing in, so every credential is a placeholder. Versions are the ones last checked.
+servers:
+  notion: { command: npx, args: ["-y", "@notionhq/notion-mcp-server@2.5.2"], env: { NOTION_TOKEN: "placeholder" }, trust: untrusted }
+  context7: { command: npx, args: ["-y", "@upstash/context7-mcp@4.4.4"], trust: untrusted }
+  firecrawl: { command: npx, args: ["-y", "firecrawl-mcp@3.33.4"], env: { FIRECRAWL_API_KEY: "placeholder" }, trust: untrusted }
+  exa: { command: npx, args: ["-y", "exa-mcp-server@3.4.2"], env: { EXA_API_KEY: "placeholder" }, trust: untrusted }
+  tavily: { command: npx, args: ["-y", "tavily-mcp@0.2.22"], env: { TAVILY_API_KEY: "placeholder" }, trust: untrusted }
+  sentry: { command: npx, args: ["-y", "@sentry/mcp-server@0.42.0", "--access-token=placeholder"], trust: untrusted }
+  brave-search: { command: npx, args: ["-y", "@brave/brave-search-mcp-server@2.1.4"], env: { BRAVE_API_KEY: "placeholder" }, trust: untrusted }
+  postgres: { command: npx, args: ["-y", "@modelcontextprotocol/server-postgres@0.6.2", "postgresql://localhost/db"], trust: untrusted }
+  chrome-devtools: { command: npx, args: ["-y", "chrome-devtools-mcp@1.11.0"], trust: untrusted }
+  heroku: { command: npx, args: ["-y", "@heroku/mcp-server@1.2.12"], env: { HEROKU_API_KEY: "placeholder" }, trust: untrusted }
+  mongodb: { command: npx, args: ["-y", "mongodb-mcp-server@3.1.0"], trust: untrusted }
+  browserbase: { command: npx, args: ["-y", "@browserbasehq/mcp-server-browserbase@2.4.3"], env: { BROWSERBASE_API_KEY: "placeholder", BROWSERBASE_PROJECT_ID: "placeholder" }, trust: untrusted }
+  figma: { command: npx, args: ["-y", "figma-developer-mcp@0.13.2", "--stdio"], env: { FIGMA_API_KEY: "placeholder" }, trust: untrusted }
+  desktop-commander: { command: npx, args: ["-y", "@wonderwhy-er/desktop-commander@0.3.0"], trust: untrusted }
+  gitlab: { command: npx, args: ["-y", "@modelcontextprotocol/server-gitlab@2025.4.25"], env: { GITLAB_PERSONAL_ACCESS_TOKEN: "placeholder" }, trust: untrusted }
+  google-maps: { command: npx, args: ["-y", "@modelcontextprotocol/server-google-maps@0.6.2"], env: { GOOGLE_MAPS_API_KEY: "placeholder" }, trust: untrusted }
+  hubspot: { command: npx, args: ["-y", "@hubspot/mcp-server@0.4.0"], env: { PRIVATE_APP_ACCESS_TOKEN: "placeholder" }, trust: untrusted }
+  apify: { command: npx, args: ["-y", "@apify/actors-mcp-server@0.19.3"], env: { APIFY_TOKEN: "placeholder" }, trust: untrusted }

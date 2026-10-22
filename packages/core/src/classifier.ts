@@ -1,6 +1,8 @@
 import type { ToolCapability, ToolClass } from "@palizade/policy";
 import type { McpTool } from "./mcp.js";
+import type { ArgumentRole } from "./arguments.js";
 import type { ServerConfig } from "./config.js";
+import { catalogMatch } from "./tool-catalog.js";
 
 const SINK_RE = /\b(send|post|put|patch|delete|write|save|exec|shell|run|spawn|email|sms|publish|commit|push|upload|http|fetch|request|webhook)\b/iu;
 const SOURCE_RE = /\b(read|get|fetch|search|browse|list|download|crawl|open|load|query|receive|inbox|issue|pull|web|url|file)\b/iu;
@@ -10,6 +12,8 @@ const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
   [/\b(email|mail|send|sms|slack|discord|message|publish)\b/iu, ["sends_message", "writes_remote", "network_egress"]],
   [/\b(write|save|edit|create|move|append)\b/iu, ["file_write", "writes_local"]],
   [/\b(delete|remove|rm|destroy)\b/iu, ["deletes_data"]],
+  // Verbs that change shared state somewhere else: membership, settings, sharing, scheduling.
+  [/\b(add|invite|update|set|assign|grant|share|rename|archive|reply|forward|schedule|cancel|change|reset|rotate|revoke)\b/iu, ["writes_remote"]],
   // shortcut: verb match only, so read tools like get_transfer_history also become sinks (over-block, fails closed).
   [/\b(buy|sell|trade|transfer|withdraw|deposit|pay|payment|purchase|refund|place order)\b/iu, ["writes_remote"]],
   [/\b(exec|shell|run|spawn|command|script|terminal)\b/iu, ["executes_code"]],
@@ -21,7 +25,22 @@ const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
 export interface ToolClassification {
   toolClass: ToolClass;
   capabilities: ToolCapability[];
+  /** Why the class was chosen, for audit, doctor and `palizade tools`. */
+  reasons: string[];
+  /** Argument roles from the catalog; config argumentRoles still take precedence. */
+  argumentRoles?: Record<string, ArgumentRole>;
 }
+
+// Input property names that only make sense for actions with side effects. Schemas from
+// untrusted servers can only add these capabilities, never remove one.
+const SCHEMA_SIGNALS: Array<[RegExp, ToolCapability[], string]> = [
+  [/^(to|cc|bcc|recipients?|recipient_email|email_to|phone_number|webhook_url|webhook)$/iu, ["sends_message", "network_egress", "writes_remote"], "recipient"],
+  [/^(command|cmd|shell_command|script|code|javascript|python)$/iu, ["executes_code"], "code"],
+  [/^(amount|iban|account_number|routing_number|recipient_account)$/iu, ["writes_remote"], "payment"],
+  [/^(url|uri|endpoint)$/iu, ["network_egress"], "url"]
+];
+const WRITE_BODY = /^(content|contents|new_content|file_content|data|text|body|patch|diff)$/iu;
+const PATH_FIELD = /^(path|file|file_path|filepath|filename|target|destination)$/iu;
 
 export function classifyTool(toolName: string, server: ServerConfig, tool?: McpTool): ToolClass {
   return classifyToolDetailed(toolName, server, tool).toolClass;
@@ -30,26 +49,85 @@ export function classifyTool(toolName: string, server: ServerConfig, tool?: McpT
 export function classifyToolDetailed(toolName: string, server: ServerConfig, tool?: McpTool): ToolClassification {
   const configured = server.toolClasses[toolName];
   const capabilities = new Set<ToolCapability>(server.toolCapabilities[toolName] ?? []);
-
-  const annotationClass = server.trust === "trusted" || tool?.annotations?.destructiveHint === true || tool?.annotations?.openWorldHint === true ? classFromAnnotations(tool?.annotations) : undefined;
-  for (const capability of capabilitiesFromAnnotations(tool?.annotations)) {
-    if (server.trust !== "trusted" && capability === "reads_untrusted_content" && tool?.annotations?.openWorldHint !== true) continue;
+  const reasons: string[] = configured ? [`config:${configured}`] : [];
+  const trusted = server.trust === "trusted";
+  const annotationCaps = capabilitiesFromAnnotations(tool?.annotations);
+  const raisingAnnotation = tool?.annotations?.destructiveHint === true || tool?.annotations?.openWorldHint === true;
+  for (const capability of annotationCaps) {
+    if (!trusted && capability === "reads_untrusted_content" && tool?.annotations?.openWorldHint !== true) continue;
     capabilities.add(capability);
   }
 
-  // Split snake, kebab and camelCase so GmailSendEmail reads as "Gmail Send Email" for the \b rules.
-  const words = (text: string) => text.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").replace(/[_-]+/gu, " ");
-  const searchable = words(`${toolName} ${tool?.title ?? ""} ${tool?.description ?? ""}`);
-  for (const [regex, matched] of CAPABILITY_RULES) {
-    if (regex.test(searchable)) {
-      matched.forEach((capability) => capabilities.add(capability));
-    }
+  const catalog = catalogMatch(toolName, server);
+  if (catalog) {
+    catalog.rule.capabilities.forEach((capability) => capabilities.add(capability));
+    reasons.push(`catalog:${catalog.entry.id}`);
+    // destructiveHint may still raise a catalog class to sink, never lower it. openWorldHint only says
+    // the tool touches the outside world, which the catalog entry already accounts for.
+    const destructive = tool?.annotations?.destructiveHint === true && !catalog.rule.ignoreDestructiveHint;
+    const toolClass = configured ?? (destructive ? "sink" : catalog.rule.toolClass);
+    if (!configured && destructive && catalog.rule.toolClass !== "sink") reasons.push("annotation:raised");
+    return { toolClass, capabilities: [...capabilities], reasons, ...(catalog.rule.roles ? { argumentRoles: catalog.rule.roles } : {}) };
   }
 
+  const annotationClass = trusted || raisingAnnotation ? classFromAnnotations(tool?.annotations) : undefined;
+  if (annotationClass) reasons.push(`annotation:${annotationClass}`);
+
+  // Split snake, kebab and camelCase so GmailSendEmail reads as "Gmail Send Email" for the \b rules.
+  const words = (text: string) => text.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").replace(/[_-]+/gu, " ");
+  const name = words(`${toolName} ${trusted ? tool?.title ?? "" : ""}`);
+  // The name is what the user approves; free text from an untrusted server is not evidence of safety.
+  const description = words(`${trusted ? "" : tool?.title ?? ""} ${tool?.description ?? ""}`);
+  let sourceEvidence = false;
+  for (const [regex, matched] of CAPABILITY_RULES) {
+    if (regex.test(name)) {
+      matched.forEach((capability) => capabilities.add(capability));
+      if (matched.includes("reads_untrusted_content")) sourceEvidence = true;
+      reasons.push(`name:${matched[0]}`);
+    } else if (regex.test(description)) {
+      const added = trusted ? matched : matched.filter((capability) => capability !== "reads_untrusted_content");
+      added.forEach((capability) => capabilities.add(capability));
+      if (trusted && matched.includes("reads_untrusted_content")) sourceEvidence = true;
+      if (added.length > 0) reasons.push(`description:${added[0]}`);
+    }
+  }
+  for (const [signal, matched] of schemaSignals(tool?.inputSchema)) {
+    matched.forEach((capability) => capabilities.add(capability));
+    reasons.push(`schema:${signal}`);
+  }
+  if (annotationCaps.includes("reads_untrusted_content") && (trusted || tool?.annotations?.openWorldHint === true)) sourceEvidence = true;
+
+  const derived = deriveClass(words(toolName), capabilities, sourceEvidence);
+  if (!configured && !annotationClass) reasons.push(`derived:${derived}`);
   return {
-    toolClass: configured ?? annotationClass ?? deriveClass(words(toolName), capabilities),
-    capabilities: [...capabilities]
+    toolClass: configured ?? annotationClass ?? derived,
+    capabilities: [...capabilities],
+    reasons: [...new Set(reasons)]
   };
+}
+
+/** Capabilities implied by input property names, at the top level and one level down. */
+export function schemaSignals(schema: unknown): Array<[string, ToolCapability[]]> {
+  const names = propertyNames(schema, 2);
+  const found: Array<[string, ToolCapability[]]> = [];
+  for (const [regex, capabilities, label] of SCHEMA_SIGNALS) {
+    if (names.some((name) => regex.test(name))) found.push([label, capabilities]);
+  }
+  if (names.some((name) => PATH_FIELD.test(name)) && names.some((name) => WRITE_BODY.test(name))) found.push(["path+content", ["file_write", "writes_local"]]);
+  return found;
+}
+
+function propertyNames(schema: unknown, depth: number): string[] {
+  if (!schema || typeof schema !== "object" || depth === 0) return [];
+  const node = schema as { properties?: unknown; items?: unknown };
+  const names: string[] = [];
+  if (node.properties && typeof node.properties === "object") {
+    for (const [key, child] of Object.entries(node.properties as Record<string, unknown>).slice(0, 200)) {
+      names.push(key, ...propertyNames(child, depth - 1));
+    }
+  }
+  if (node.items) names.push(...propertyNames(node.items, depth));
+  return names;
 }
 
 function classFromAnnotations(annotations?: Record<string, unknown>): ToolClass | undefined {
@@ -85,7 +163,7 @@ function capabilitiesFromAnnotations(annotations?: Record<string, unknown>): Too
   return [...capabilities];
 }
 
-function deriveClass(toolName: string, capabilities: Set<ToolCapability>): ToolClass {
+function deriveClass(toolName: string, capabilities: Set<ToolCapability>, sourceEvidence: boolean): ToolClass {
   if ([...capabilities].some((capability) => [
     "network_egress",
     "file_write",
@@ -100,7 +178,7 @@ function deriveClass(toolName: string, capabilities: Set<ToolCapability>): ToolC
   ].includes(capability))) {
     return "sink";
   }
-  if (capabilities.has("reads_untrusted_content") || SOURCE_RE.test(toolName)) {
+  if (sourceEvidence || SOURCE_RE.test(toolName)) {
     return "source";
   }
   if (SINK_RE.test(toolName)) {

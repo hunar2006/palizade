@@ -99,6 +99,7 @@ export class SqliteTaintStore implements TaintStore {
       );
       create index if not exists idx_temporal_expires on temporal_taint(expires_at);
       create table if not exists session_state (scope_id text primary key, state_json text not null);
+      create table if not exists user_statements (scope_id text not null, key text not null, expires_at integer not null, primary key (scope_id, key));
     `);
     this.ensureColumn("taint_records", "profile_id", "text");
     this.ensureColumn("taint_records", "scope_id", "text");
@@ -164,6 +165,40 @@ export class SqliteTaintStore implements TaintStore {
   }
 
   destinationKey(text: string): string { return hmacSha256Hex(this.hmacKey, text); }
+
+  // Stored as keyed hashes, like fingerprints, so the database never holds the typed values.
+  addUserStatements(sessionId: string, canonicals: string[], ttlMs: number): void {
+    if (canonicals.length === 0) return;
+    const scopeId = this.scopeId(sessionId);
+    const now = Date.now();
+    const insert = this.db.prepare("insert into user_statements (scope_id, key, expires_at) values (?, ?, ?) on conflict(scope_id, key) do update set expires_at = excluded.expires_at");
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare("delete from user_statements where expires_at <= ?").run(now);
+      for (const canonical of canonicals) insert.run(scopeId, this.destinationKey(`user:${canonical}`), now + ttlMs);
+      this.db.exec("commit");
+    } catch (error) { this.db.exec("rollback"); throw error; }
+  }
+
+  verbatimToken(sessionId: string, value: string): TaintMatch | undefined {
+    this.pruneExpired();
+    const wanted = new Set(["", ".", ",", ";", ":", "!", "?"].map((suffix) => hmacSha256Hex(this.hmacKey, canonicalizeToken(value + suffix))));
+    for (const record of this.recordsForScope(sessionId)) {
+      if (!record.classes.includes("untrusted")) continue;
+      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate));
+      if (token) return { taintId: record.id, reason: "token", token, classes: record.classes };
+    }
+    return undefined;
+  }
+
+  hasUserStatements(sessionId: string): boolean {
+    return this.db.prepare("select 1 from user_statements where scope_id = ? and expires_at > ? limit 1").get(this.scopeId(sessionId), Date.now()) !== undefined;
+  }
+
+  isUserStated(sessionId: string, canonical: string): boolean {
+    const row = this.db.prepare("select expires_at from user_statements where scope_id = ? and key = ?").get(this.scopeId(sessionId), this.destinationKey(`user:${canonical}`)) as { expires_at: number } | undefined;
+    return row !== undefined && row.expires_at > Date.now();
+  }
 
   promotePersistent(id: string): void {
     const record = this.get(id);
@@ -390,17 +425,31 @@ function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefi
   return !filter || filter.some((taintClass) => classes.includes(taintClass));
 }
 
+// A tool result is fingerprinted to look up its provenance and again to store it; reuse the work.
+const fingerprintCache = new Map<string, { key: Buffer; normalized: string; base: Omit<TaintFingerprint, "sensitiveFragments"> }>();
+
 function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false): TaintFingerprint {
-  const normalized = normalizeText(input);
-  const fragments = makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment));
-  const tokens = extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token)));
-  return {
-    normalized: hmacSha256Hex(key, normalized),
-    substrings: fragments,
-    tokens,
-    simhash: simhash(normalized),
-    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized).map((fragment) => hmacSha256Hex(key, fragment)) } : {})
-  };
+  let cached = fingerprintCache.get(input);
+  if (!cached || !cached.key.equals(key)) {
+    const normalized = normalizeText(input);
+    cached = {
+      key,
+      normalized,
+      base: {
+        normalized: hmacSha256Hex(key, normalized),
+        substrings: makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment)),
+        tokens: extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token))),
+        simhash: simhash(normalized)
+      }
+    };
+    if (input.length >= 4096) {
+      fingerprintCache.delete(input);
+      fingerprintCache.set(input, cached);
+      if (fingerprintCache.size > 8) fingerprintCache.delete(fingerprintCache.keys().next().value!);
+    }
+  }
+  const base = { ...cached.base, substrings: [...cached.base.substrings], tokens: [...cached.base.tokens] };
+  return sensitive ? { ...base, sensitiveFragments: makeSensitiveFragments(cached.normalized).map((fragment) => hmacSha256Hex(key, fragment)) } : base;
 }
 
 function canonicalizeToken(token: string): string {

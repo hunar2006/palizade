@@ -1,0 +1,24 @@
+# Guarantees the strict preset must keep. Run: palizade policy test policies/tests/strict.test.yaml
+policy: ../strict.yaml
+cases:
+  - name: a destination copied from untrusted content is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [sends_message, network_egress], tainted_destination: true, taint: true }
+    expect: block
+  - name: untrusted text copied into any sink is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [file_write], taint: true }
+    expect: block
+  - name: unknown tools are not allowed silently on untrusted servers
+    context: { direction: request, method: tools/call, tool_class: unknown, trust: untrusted }
+    expect: block
+  - name: strongly suspicious tool output is blocked
+    context: { direction: response, method: tools/call, detector_score: 0.85 }
+    expect: block
+  - name: servers may not use the model
+    context: { direction: request, method: sampling/createMessage }
+    expect: block
+  - name: deleting data after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [deletes_data], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-delete-after-untrusted }
+  - name: changing a password after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [accesses_credentials, reads_sensitive_data, writes_remote], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-credential-change-after-untrusted }

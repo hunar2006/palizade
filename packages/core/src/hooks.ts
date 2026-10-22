@@ -1,11 +1,14 @@
 import { StaticApprovalProvider } from "@palizade/approvals";
 import { AuditLogger, JsonlAuditSink, SqliteAuditSink, type AuditEvent } from "@palizade/audit";
 import { loadPolicyFile } from "@palizade/policy";
-import { SqliteTaintStore } from "@palizade/taint";
+import { SqliteTaintStore, extractStatedObservables } from "@palizade/taint";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
 import { createDetector } from "./factory.js";
-import type { PalizadeConfig, ServerConfig } from "./config.js";
+import { serverConfigSchema, type PalizadeConfig, type ServerConfig } from "./config.js";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { JsonRpcMessage } from "./mcp.js";
 
 export type NativeClient = "claude-code" | "cursor" | "codex";
@@ -71,10 +74,11 @@ export async function createHookEngine(
   config: PalizadeConfig,
   sessionId: string,
   cwd: string,
-  capture: AuditEvent[] = []
+  capture: AuditEvent[] = [],
+  target: { serverName: string; server: ServerConfig } = { serverName: "native-tools", server: { ...HOOK_SERVER, cwd } }
 ): Promise<HookEngineContext> {
   // shortcut: each one-shot hook opens a fresh engine/store, use a persistent daemon if hook startup latency or shared split windows are required.
-  const server: ServerConfig = { ...HOOK_SERVER, cwd };
+  const server = target.server;
   const policy = await loadPolicyFile(config.policy);
   const taintStore = new SqliteTaintStore(config.taint.sqlite, {
     scope: config.taint.scope,
@@ -96,7 +100,7 @@ export async function createHookEngine(
   ], { captureRawPayloads: config.audit.captureRawPayloads });
   const engine = new InterceptionEngine({
     config,
-    serverName: "native-tools",
+    serverName: target.serverName,
     server,
     sessionId,
     policy,
@@ -233,6 +237,87 @@ export function normalizeNativeEvent(client: NativeClient, event: string, payloa
   return undefined;
 }
 
+/** `mcp__<server>__<tool>`, the name Claude Code and Codex give MCP tools in hooks. */
+export function parseMcpToolName(tool: string): { server: string; tool: string } | undefined {
+  const match = /^mcp__(.+?)__(.+)$/u.exec(tool);
+  return match ? { server: match[1]!, tool: match[2]! } : undefined;
+}
+
+type ClientServerEntry = { command?: string; args?: string[]; url?: string };
+
+/**
+ * Finds how the client itself launches an MCP server (command or url), so the tool catalog can
+ * recognize it. Claude Code: ~/.claude.json (user and local scope) and .mcp.json in the project.
+ */
+export function findClientServerEntry(serverName: string, cwd: string, home = homedir()): ClientServerEntry | undefined {
+  const read = (path: string): Record<string, unknown> | undefined => {
+    try { return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> : undefined; } catch { return undefined; }
+  };
+  const pick = (servers: unknown): ClientServerEntry | undefined => {
+    const entry = servers && typeof servers === "object" ? (servers as Record<string, unknown>)[serverName] : undefined;
+    if (!entry || typeof entry !== "object") return undefined;
+    const record = entry as Record<string, unknown>;
+    return {
+      ...(typeof record.command === "string" ? { command: record.command } : {}),
+      ...(Array.isArray(record.args) ? { args: record.args.filter((arg): arg is string => typeof arg === "string") } : {}),
+      ...(typeof record.url === "string" ? { url: record.url } : {})
+    };
+  };
+  const user = read(join(home, ".claude.json"));
+  const projects = user?.projects && typeof user.projects === "object" ? user.projects as Record<string, { mcpServers?: unknown }> : {};
+  return pick(read(join(cwd, ".mcp.json"))?.mcpServers) ?? pick(projects[cwd]?.mcpServers) ?? pick(user?.mcpServers);
+}
+
+/**
+ * The Cursor config key of the MCP server a beforeMCPExecution/afterMCPExecution payload is for.
+ * Cursor currently sends that key in `command` (and no url); if it sends the real command line or
+ * url instead, the entry with that command or url is used.
+ */
+export function cursorServerKey(payload: Record<string, unknown>, cwd: string, home = homedir()): { key: string; entry: ClientServerEntry } | undefined {
+  const roots = Array.isArray(payload.workspace_roots) ? payload.workspace_roots.filter((root): root is string => typeof root === "string") : [];
+  const servers: Record<string, ClientServerEntry> = {};
+  for (const path of [join(home, ".cursor", "mcp.json"), ...[cwd, ...roots].map((root) => join(root, ".cursor", "mcp.json"))]) {
+    try {
+      if (!existsSync(path)) continue;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, ClientServerEntry> };
+      Object.assign(servers, parsed.mcpServers ?? {});
+    } catch {
+      // An unreadable config only means the server is not recognized.
+    }
+  }
+  const command = typeof payload.command === "string" ? payload.command : undefined;
+  const url = typeof payload.url === "string" ? payload.url : undefined;
+  if (command && servers[command]) return { key: command, entry: servers[command]! };
+  for (const [key, entry] of Object.entries(servers)) {
+    if (url && entry.url === url) return { key, entry };
+    if (command && [entry.command, ...(entry.args ?? [])].filter(Boolean).join(" ") === command) return { key, entry };
+  }
+  return undefined;
+}
+
+function isPalizadeWrapperEntry(entry: ClientServerEntry | undefined): boolean {
+  const tokens = [entry?.command ?? "", ...(entry?.args ?? [])];
+  return tokens.includes("wrap") && tokens.some((token) => /palizade/iu.test(token));
+}
+
+/**
+ * The engine target for an MCP tool seen through a hook. A server already wrapped by Palizade is
+ * checked by its proxy, so the hook stands aside; anything else (remote servers that sign in with
+ * OAuth, servers the user did not wrap) is checked here as an untrusted server, recognized by the
+ * catalog from the client's own config when possible.
+ */
+function mcpHookTarget(config: PalizadeConfig, serverName: string, cwd: string, known?: ClientServerEntry): { serverName: string; server: ServerConfig } | "wrapped" {
+  if (config.servers[serverName]) return "wrapped";
+  const entry = known ?? findClientServerEntry(serverName, cwd);
+  if (isPalizadeWrapperEntry(entry)) return "wrapped";
+  const server = serverConfigSchema.parse({
+    ...(entry?.url ? { url: entry.url } : { command: entry?.command ?? `mcp:${serverName}`, args: entry?.args ?? [] }),
+    trust: config.hooks.mcpTrust,
+    cwd
+  });
+  return { serverName, server };
+}
+
 function normalizeToolInput(toolInput: unknown): Record<string, unknown> {
   if (toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)) {
     return toolInput as Record<string, unknown>;
@@ -270,6 +355,44 @@ function enrichToolArguments(normalized: NormalizedNativeEvent): Record<string, 
   return input;
 }
 
+const PROMPT_EVENTS: Record<NativeClient, string> = {
+  "claude-code": "UserPromptSubmit",
+  codex: "UserPromptSubmit",
+  cursor: "beforeSubmitPrompt"
+};
+
+export function isPromptEvent(client: NativeClient, event: string): boolean {
+  return PROMPT_EVENTS[client] === event;
+}
+
+/**
+ * Remembers the destinations a user typed (email addresses, urls, hosts, handles, account
+ * numbers) so later sink calls to them are not treated as copied from untrusted content.
+ * Never blocks the prompt: any failure only means nothing is remembered.
+ */
+export function recordUserPrompt(config: PalizadeConfig, client: NativeClient, payload: unknown, sessionId?: string): HookDecisionOutput {
+  const allow: HookDecisionOutput = { exitCode: 0, output: client === "cursor" ? { continue: true } : undefined, reason: "Prompt recorded." };
+  if (!config.taint.userIntent.enabled) return { ...allow, reason: "User intent tracking is off." };
+  const prompt = payloadField(payload, "prompt", "user_prompt", "message");
+  if (!prompt) return { ...allow, reason: "No prompt text." };
+  const observables = extractStatedObservables(prompt);
+  if (observables.length === 0) return allow;
+  const store = new SqliteTaintStore(config.taint.sqlite, {
+    scope: config.taint.scope,
+    profileId: config.taint.profileId,
+    keyPath: config.taint.keyPath,
+    ttlMs: config.taint.ttlMs,
+    sessionScope: "client",
+    ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
+  });
+  try {
+    store.addUserStatements(sessionId ?? payloadField(payload, "session_id", "conversation_id") ?? "native-session", observables, config.taint.userIntent.ttlMs);
+  } finally {
+    store.close();
+  }
+  return { ...allow, reason: `Remembered ${observables.length} destination(s) from the prompt.` };
+}
+
 export async function evaluateHookEvent(input: {
   config: PalizadeConfig;
   client: NativeClient;
@@ -278,6 +401,13 @@ export async function evaluateHookEvent(input: {
   sessionId?: string;
   cwd?: string;
 }): Promise<HookDecisionOutput> {
+  if (isPromptEvent(input.client, input.event)) {
+    try {
+      return recordUserPrompt(input.config, input.client, input.payload, input.sessionId);
+    } catch {
+      return { exitCode: 0, output: input.client === "cursor" ? { continue: true } : undefined, reason: "Prompt not recorded." };
+    }
+  }
   const normalized = normalizeNativeEvent(input.client, input.event, input.payload);
   if (!normalized) {
     return { exitCode: 0, output: undefined, reason: "Unsupported hook event; no decision." };
@@ -285,7 +415,15 @@ export async function evaluateHookEvent(input: {
   const cwd = input.cwd ?? payloadField(input.payload, "cwd") ?? process.cwd();
   const sessionId = input.sessionId ?? payloadField(input.payload, "session_id", "conversation_id") ?? "native-session";
 
-  const context = await createHookEngine(input.config, sessionId, cwd);
+  const record = input.payload && typeof input.payload === "object" ? input.payload as Record<string, unknown> : {};
+  const cursorServer = input.client === "cursor" && (input.event === "beforeMCPExecution" || input.event === "afterMCPExecution") ? cursorServerKey(record, cwd) : undefined;
+  const mcp = input.client === "cursor" ? (cursorServer ? { server: cursorServer.key, tool: normalized.tool } : undefined) : parseMcpToolName(normalized.tool);
+  const target = mcp ? mcpHookTarget(input.config, mcp.server, cwd, cursorServer?.entry) : undefined;
+  if (target === "wrapped") {
+    return { exitCode: 0, output: undefined, reason: "MCP server is wrapped by Palizade; its proxy checks this call." };
+  }
+  if (mcp) normalized.tool = mcp.tool;
+  const context = await createHookEngine(input.config, sessionId, cwd, [], target);
   try {
     return await withHookTimeout(input.config.hooks.timeoutMs, async () => {
       const id = `hook-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;

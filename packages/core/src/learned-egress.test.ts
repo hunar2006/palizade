@@ -41,3 +41,15 @@ describe("allowlist uses canonical destinations", () => {
     expect(destinationsAllowed(destinationEntries([{ path: "$.to", role: "email_recipient" as const, text: "ops@example.com.evil.test" }]), allowlist)).toBe(false);
   });
 });
+
+describe("learned allowlist editing", () => {
+  it("adds, canonicalizes and removes entries", async () => {
+    const file = join(await mkdtemp(join(tmpdir(), "palizade-allow-")), "palizade.allow.yaml");
+    const learned = new LearnedEgress(file);
+    learned.remember(["host:API.Example.com", "email:Boss@Example.com", "channel_id:C1"]);
+    expect(learned.entries()).toEqual({ hosts: ["api.example.com"], emails: ["boss@example.com"], destinations: ["channel_id:C1"] });
+    expect(destinationsAllowed(["host:api.example.com"], learned.allowlist({ hosts: [], emails: [], destinations: [] }))).toBe(true);
+    expect(learned.forget(["host:api.example.com", "host:missing.example"])).toBe(1);
+    expect(learned.entries().hosts).toEqual([]);
+  });
+});

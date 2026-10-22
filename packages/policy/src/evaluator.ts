@@ -50,10 +50,13 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (condition.pii_detected !== undefined && Boolean(ctx.pii_detected) !== condition.pii_detected) return false;
   if (condition.destination_allowed !== undefined && Boolean(ctx.destination_allowed) !== condition.destination_allowed) return false;
   if (condition.tainted_destination !== undefined && Boolean(ctx.tainted_destination) !== condition.tainted_destination) return false;
+  if (condition.user_stated_destination !== undefined && Boolean(ctx.user_stated_destination) !== condition.user_stated_destination) return false;
+  if (condition.copied_link_only !== undefined && Boolean(ctx.copied_link_only) !== condition.copied_link_only) return false;
   if (condition.lookalike_destination !== undefined && Boolean(ctx.lookalike_destination) !== condition.lookalike_destination) return false;
   if (condition.new_destination !== undefined && Boolean(ctx.new_destination) !== condition.new_destination) return false;
   if (condition.split_match !== undefined && Boolean(ctx.split_match) !== condition.split_match) return false;
   if (condition.rule_of_two !== undefined && Boolean(ctx.rule_of_two) !== condition.rule_of_two) return false;
+  if (condition.session_untrusted !== undefined && Boolean(ctx.session_untrusted) !== condition.session_untrusted) return false;
   if (condition.rate_limited !== undefined && Boolean(ctx.rate_limited) !== condition.rate_limited) return false;
   if (condition.loop_detected !== undefined && Boolean(ctx.loop_detected) !== condition.loop_detected) return false;
   if (condition.critical_path !== undefined && Boolean(ctx.critical_path) !== condition.critical_path) return false;

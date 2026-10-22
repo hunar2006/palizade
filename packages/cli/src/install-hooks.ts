@@ -52,10 +52,7 @@ export function mergeHookEntries(client: string, settings: JsonRecord, cliParts:
   if (client === "claude-code") {
     const hooks = ensureRecord(settings, "hooks");
     for (const [event, groups] of Object.entries(hookDefinition as Record<string, unknown>)) {
-      const list = ensureArray(hooks, event);
-      if (!list.some((group) => groupContainsPalizade(group))) {
-        list.push(groups);
-      }
+      upsert(ensureArray(hooks, event), groups, groupContainsPalizade);
     }
     return settings;
   }
@@ -63,12 +60,8 @@ export function mergeHookEntries(client: string, settings: JsonRecord, cliParts:
     settings.version = settings.version ?? 1;
     const hooks = ensureRecord(settings, "hooks");
     for (const [event, definitions] of Object.entries(hookDefinition as Record<string, unknown>)) {
-      const list = ensureArray(hooks, event);
-      const defs = definitions as unknown[];
-      for (const definition of defs) {
-        if (!list.some((item) => typeof item === "object" && item !== null && isPalizadeHookCommand(item))) {
-          list.push(definition);
-        }
+      for (const definition of definitions as unknown[]) {
+        upsert(ensureArray(hooks, event), definition, isPalizadeHookCommand);
       }
     }
     return settings;
@@ -76,14 +69,37 @@ export function mergeHookEntries(client: string, settings: JsonRecord, cliParts:
   if (client === "codex") {
     const hooks = ensureRecord(settings, "hooks");
     for (const [event, groups] of Object.entries(hookDefinition as Record<string, unknown>)) {
-      const list = ensureArray(hooks, event);
-      if (!list.some((group) => groupContainsPalizade(group))) {
-        list.push(groups);
-      }
+      upsert(ensureArray(hooks, event), groups, groupContainsPalizade);
     }
     return settings;
   }
   throw new Error(`Unsupported hook client '${client}'. Supported: claude-code, cursor, codex.`);
+}
+
+export interface HookCoverage {
+  settingsPath: string;
+  exists: boolean;
+  /** Each event Palizade installs, and whether its entry is there and current. */
+  events: Array<{ event: string; status: "installed" | "outdated" | "missing" }>;
+}
+
+/** Reports which Palizade hook entries a client's settings file has; "outdated" means install-hooks would change it. */
+export async function inspectHooks(client: string, settingsPath = resolveHooksSettingsPath(client)): Promise<HookCoverage> {
+  if (!await exists(settingsPath)) return { settingsPath, exists: false, events: Object.keys(buildHookDefinition(client, ["node", "palizade", "hook"])).map((event) => ({ event, status: "missing" as const })) };
+  const settings = await readSettings(settingsPath);
+  const hooks = isRecord(settings.hooks) ? settings.hooks : {};
+  const expected = buildHookDefinition(client, ["node", "palizade", "hook"]) as Record<string, unknown>;
+  // Compare everything but the command and paths, which differ per machine.
+  const shape = (value: unknown): unknown => JSON.parse(JSON.stringify(value, (key, field) => key === "command" || key === "args" ? undefined : field));
+  const events = Object.entries(expected).map(([event, definition]) => {
+    const list = Array.isArray(hooks[event]) ? hooks[event] as unknown[] : [];
+    const ours = list.find((entry) => client === "cursor" ? isPalizadeHookCommand(entry) : groupContainsPalizade(entry));
+    if (ours === undefined) return { event, status: "missing" as const };
+    const wanted = client === "cursor" ? (definition as unknown[])[0] : definition;
+    const promptArgsOk = client === "cursor" || !event.includes("Prompt") || JSON.stringify(ours).includes(event);
+    return { event, status: JSON.stringify(shape(ours)) === JSON.stringify(shape(wanted)) && promptArgsOk ? "installed" as const : "outdated" as const };
+  });
+  return { settingsPath, exists: true, events };
 }
 
 export function resolveHooksSettingsPath(client: string, platform: string = osPlatform(), homeDir: string = homedir()): string {
@@ -104,13 +120,19 @@ function buildHookDefinition(client: string, cliParts: string[]): JsonRecord {
     const command = cliParts[0]!;
     const args = [...cliParts.slice(1), "claude-code"];
     return {
+      // onFailure: block makes a crashed or missing hook deny the call (Claude Code 2.1.295+).
+      // mcp__.* covers MCP servers that are not wrapped, such as remote servers that sign in with OAuth.
       PreToolUse: {
-        matcher: "Bash|Write|Edit|WebFetch",
-        hooks: [{ type: "command", command, args }]
+        matcher: "Bash|Write|Edit|WebFetch|mcp__.*",
+        hooks: [{ type: "command", command, args, onFailure: "block" }]
       },
       PostToolUse: {
-        matcher: "Read|WebFetch|Grep|Glob",
+        matcher: "Read|WebFetch|Grep|Glob|mcp__.*",
         hooks: [{ type: "command", command, args }]
+      },
+      // Remembers destinations the user typed; never blocks the prompt.
+      UserPromptSubmit: {
+        hooks: [{ type: "command", command, args: [...args, "UserPromptSubmit"] }]
       }
     };
   }
@@ -120,7 +142,8 @@ function buildHookDefinition(client: string, cliParts: string[]): JsonRecord {
       beforeShellExecution: [{ command: commandLine, failClosed: true }],
       beforeMCPExecution: [{ command: commandLine, failClosed: true }],
       afterShellExecution: [{ command: commandLine }],
-      afterMCPExecution: [{ command: commandLine }]
+      afterMCPExecution: [{ command: commandLine }],
+      beforeSubmitPrompt: [{ command: `${commandLine} beforeSubmitPrompt` }]
     };
   }
   const command = cliParts[0]!;
@@ -133,8 +156,18 @@ function buildHookDefinition(client: string, cliParts: string[]): JsonRecord {
     PostToolUse: {
       matcher: "Read|WebFetch|Grep|Glob|mcp__.*",
       hooks: [{ type: "command", command, args, timeout: 30 }]
+    },
+    UserPromptSubmit: {
+      hooks: [{ type: "command", command, args: [...args, "UserPromptSubmit"], timeout: 30 }]
     }
   };
+}
+
+// Re-running install-hooks updates an older Palizade entry in place instead of adding a second one.
+function upsert(list: unknown[], entry: unknown, isOurs: (item: unknown) => boolean): void {
+  const index = list.findIndex(isOurs);
+  if (index === -1) list.push(entry);
+  else list[index] = entry;
 }
 
 function quoteShellArg(value: string): string {
@@ -156,7 +189,8 @@ function isPalizadeHookCommand(hook: unknown): boolean {
   if (!isRecord(hook)) {
     return false;
   }
-  const tokens = [typeof hook.command === "string" ? hook.command : "", ...(Array.isArray(hook.args) ? hook.args.map(String) : [])];
+  // Cursor stores the whole command line in `command`, so split it into words too.
+  const tokens = [...(typeof hook.command === "string" ? hook.command.split(/\s+/u) : []), ...(Array.isArray(hook.args) ? hook.args.map(String) : [])];
   return tokens.some((token) => token.toLowerCase().includes("palizade")) && tokens.includes("hook");
 }
 

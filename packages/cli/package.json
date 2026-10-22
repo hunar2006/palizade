@@ -9,6 +9,7 @@
   },
   "files": [
     "dist/index.cjs",
+    "dist/cli.cjs",
     "README.md"
   ],
   "keywords": [
@@ -42,6 +43,7 @@
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "commander": "^14.0.2",
+    "smol-toml": "1.9.0",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

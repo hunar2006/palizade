@@ -20,6 +20,7 @@ The `persists_memory` capability marks entity/observation/relation, remember/not
 
 - `session_quarantined`: shared session quarantine remains within both TTL and turn bounds. Every enforcing preset requires approval for sinks after hard blocks.
 
+- `session_untrusted`: session has seen untrusted or suspicious content within the exposure lifetime. The enforcing presets use it to ask before deleting data after such exposure.
 - `rule_of_two`: session has seen both untrusted/suspicious and sensitive content within the exposure lifetime (`taint.exposure.ttlMs`, default two hours, refreshed on each exposure); default, strict and interactive approval-gate network, message and remote-write sinks even for paraphrased arguments. Native hook session flags are isolated by client session ID; taint records retain their configured scope. Specific hard blocks run first.
 - `destination_session_trusted`: every destination has an explicit session grant. This suppresses only the Rule of Two gate and approve-new mode, not hard blocks.
 
@@ -27,7 +28,9 @@ The `persists_memory` capability marks entity/observation/relation, remember/not
 
 - `new_destination`: a destination is absent from configured and learned allowlists, including IDs. Strict mode blocks it.
 
-- `tainted_destination`: untrusted observable taint matched a URL, host, mail recipient, repository, channel or account ID after matching normalization/decoding. Temporal taint alone does not set this flag.
+- `tainted_destination`: untrusted observable taint matched a URL, host, mail recipient, repository, channel or account ID after matching normalization/decoding. Temporal taint alone does not set this flag. Destinations the user typed in a prompt are left out of this check (see `user_stated_destination`).
+- `copied_link_only`: the only untrusted data in the call is one or more urls copied exactly as an untrusted source wrote them (a search result, a link in a page), into a tool that only reads (`network_egress` and `reads_untrusted_content`, nothing that writes, sends or runs code), with no sensitive data, secrets or personal data detected and no split match. Following such a link reads more untrusted content but leaks nothing the page's author did not already have. A url with anything added, such as a query built from page or session data, does not count. The default, interactive and coding agent presets allow it (`allow-following-copied-link`) unless the session is under Rule of Two, quarantine, rate or loop limits; strict does not.
+- `user_stated_destination`: the call names at least one destination (email address, exact url, host, @handle or #channel, account or IBAN style number, phone number) that the user typed in a recent prompt. Palizade learns these from the prompt hooks (`UserPromptSubmit` in Claude Code and Codex, `beforeSubmitPrompt` in Cursor). Such values are not counted as copied from untrusted content, since the user asked for them; the rest of the call is checked as usual. Turn this off with `taint.userIntent.enabled: false`; statements expire after `taint.userIntent.ttlMs` (2 hours by default). A stated host does not vouch for a different url on that host.
 - `lookalike_destination`: a Unicode/punycode host skeleton collides with an allowlisted or untrusted-tainted host. Matching does not authorize the lookalike host.
 
 - `direction`: `request` or `response`
@@ -114,6 +117,34 @@ The client's retry `inputResponses` are checked for observable tainted or sensit
 - Semi-trusted server plus unknown tool: require approval.
 - Trusted server plus unknown tool: allow with audit logging.
 - Policy evaluation errors: block in enforcing presets.
+
+## Testing A Policy
+
+Write test cases in YAML: each case gives the decision context Palizade would build and the action or rule you expect. Unknown context fields are errors, so a typo cannot pass by accident.
+
+```yaml
+policy: ../default.yaml          # relative to this file; or pass --policy, or use palizade.yaml's policy
+cases:
+  - name: a destination copied from untrusted content is blocked
+    context: { direction: request, method: tools/call, tool_class: sink, tainted_destination: true }
+    expect: { action: block, rule: block-tainted-destination }
+  - name: a clean read is allowed
+    context: { direction: request, method: tools/call, tool_class: source }
+    expect: allow
+```
+
+Run them with `palizade policy test my-policy.test.yaml`; it exits non zero on any failure, so it fits in CI. The shipped presets have their own cases in `policies/tests`, which run with the test suite.
+
+## How Tools Are Classified
+
+Each tool gets a class (`source`, `sink`, `pure` or `unknown`) and a set of capabilities. The first of these that applies wins:
+
+1. `toolClasses` and `toolCapabilities` in `palizade.yaml`.
+2. The built-in catalog, for servers you configured from a known package, image or url (filesystem, fetch, memory, git, GitHub, Slack, Puppeteer, Playwright, Brave Search, time, sequential thinking). Run `palizade tools --catalog` for the list. Set `catalog: <id>` on a server to use an entry for a custom build, or `catalog: false` to turn it off. Tools the catalog does not name fall through to the next steps.
+3. Annotations. On untrusted and semi trusted servers they can only raise risk: `destructiveHint` or `openWorldHint` makes a tool a sink, `readOnlyHint` is ignored.
+4. Heuristics on the tool name, the input schema and the description. Property names such as `to`, `cmd`, `webhook_url`, `amount`, or a path plus content pair add sink capabilities. On servers that are not trusted, the description and title can add sink capabilities but cannot make a tool a source, since that text comes from the server.
+
+`palizade tools [server]` prints the class, capabilities and reasons for every locked tool without starting any server. Audit events record the same reasons under `metadata.classificationReasons`.
 
 ## Detector Defaults
 

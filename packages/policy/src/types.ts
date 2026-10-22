@@ -43,10 +43,13 @@ export interface PolicyCondition {
   pii_detected?: boolean | undefined;
   destination_allowed?: boolean | undefined;
   tainted_destination?: boolean | undefined;
+  user_stated_destination?: boolean | undefined;
+  copied_link_only?: boolean | undefined;
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
   rule_of_two?: boolean | undefined;
+  session_untrusted?: boolean | undefined;
   rate_limited?: boolean | undefined;
   loop_detected?: boolean | undefined;
   destination_session_trusted?: boolean | undefined;
@@ -92,10 +95,13 @@ export interface PolicyContext {
   pii_detected?: boolean | undefined;
   destination_allowed?: boolean | undefined;
   tainted_destination?: boolean | undefined;
+  user_stated_destination?: boolean | undefined;
+  copied_link_only?: boolean | undefined;
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
   rule_of_two?: boolean | undefined;
+  session_untrusted?: boolean | undefined;
   rate_limited?: boolean | undefined;
   loop_detected?: boolean | undefined;
   destination_session_trusted?: boolean | undefined;

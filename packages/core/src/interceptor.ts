@@ -5,7 +5,7 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText, stripHiddenUnicode } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { expireExposure, expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
+import { expireExposure, maskStatedObservables, expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
@@ -257,13 +257,23 @@ export class InterceptionEngine {
     const ruleOfTwo = session.seenUntrusted && session.seenSensitive;
     const argumentText = flattenArguments(params.arguments);
     const matchCache = new Map<string, TaintMatch[]>();
-    const matchText = (text: string): TaintMatch[] => {
+    // Destinations the user typed are theirs even if untrusted content also mentions them.
+    const userIntent = this.options.config.taint.userIntent.enabled && this.options.taintStore.hasUserStatements(this.options.sessionId);
+    const userStated = new Set<string>();
+    const unstated = (text: string): string => {
+      if (!userIntent) return text;
+      const result = maskStatedObservables(text, (canonical) => this.options.taintStore.isUserStated(this.options.sessionId, canonical));
+      result.masked.forEach((canonical) => userStated.add(canonical));
+      return result.text;
+    };
+    const matchText = (raw: string): TaintMatch[] => {
+      const text = unstated(raw);
       if (!matchCache.has(text)) matchCache.set(text, expandCandidates(text, this.options.config.taint.decode).flatMap((candidate) =>
         this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax })
           .map((match): TaintMatch => ({ ...match, reason: candidate.kind === "original" || match.reason === "temporal" ? match.reason : `decoded:${candidate.kind}` }))));
       return matchCache.get(text)!;
     };
-    const argumentFields = extractArgumentFields(params.arguments, tool, this.options.server.argumentRoles?.[tool]);
+    const argumentFields = extractArgumentFields(params.arguments, tool, { ...classification.argumentRoles, ...this.options.server.argumentRoles?.[tool] });
     const protectedPaths = checkProtectedPaths(argumentFields, this.options.server.cwd ?? process.cwd(), this.options.config);
     const writesFile = classification.capabilities.some((capability) => ["file_write", "writes_local", "deletes_data"].includes(capability));
     const argumentBlocks = extractTextBlocks(params.arguments);
@@ -294,7 +304,10 @@ export class InterceptionEngine {
     for (const entry of gitPush.destinations) if (!entries.includes(entry)) entries.push(entry);
     if (classification.capabilities.includes("persists_memory") && entries.length === 0) entries.push(`memory:${this.options.serverName}`);
     const destinationKeys = entries.map((entry) => this.options.taintStore.destinationKey(entry));
-    const gates = toolClass === "sink" ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
+    // Only outbound calls feed the loop and rate gates: a coding agent running `npm test` ten
+    // times is normal, sending the same email ten times is not.
+    const outbound = entries.length > 0 || classification.capabilities.some((capability) => ["sends_message", "writes_remote", "deletes_data", "persists_memory"].includes(capability));
+    const gates = toolClass === "sink" && outbound ? trackSinkAttempt(this.options.taintStore, this.options.sessionId, this.options.taintStore.destinationKey(`${tool}\0${argumentText}`), destinationKeys, this.options.config.limits) : { rateLimited: false, loopDetected: false };
     const sessionTrusted = destinationKeys.length > 0 && destinationKeys.every((key) => session.trustedDestinations.includes(key));
     const newDestination = entries.length > 0 && !destinationsAllowed(entries, allowlist);
     const outboundPayload = argumentFields.filter((field) => !field.path.includes("<")).flatMap((field) => {
@@ -344,6 +357,17 @@ export class InterceptionEngine {
       allTaintMatches.push(...inputResponseMatches);
     }
 
+    // Following a link exactly as an untrusted page wrote it leaks nothing the page's author did
+    // not already have; building a url from page text, or adding data to it, still counts as copied.
+    const verbatimLinks = toolClass === "sink" && taintedDestination
+      && classification.capabilities.every((capability) => capability === "network_egress" || capability === "reads_untrusted_content")
+      ? argumentFields.filter((field) => field.role === "url" && /^https?:\/\/\S+$/u.test(field.text.trim()) && this.options.taintStore.verbatimToken(this.options.sessionId, field.text.trim()) !== undefined).map((field) => field.text.trim())
+      : [];
+    const copiedLinkOnly = verbatimLinks.length > 0 && !sensitiveTaint && !secretDetected && !piiDetected && !splitMatch && !inputResponseTaint
+      // Derived fields (a url's host, path "url<host>") come from the link itself.
+      && fieldMatches.every(({ field, match }) => match.reason === "temporal" || verbatimLinks.includes(field.text.trim()) || (field.path.includes("<") && verbatimLinks.some((link) => link.toLowerCase().includes(field.text.trim().toLowerCase()))))
+      && !matchText(verbatimLinks.reduce((text, link) => text.split(link).join(" "), argumentText)).some((match) => match.reason !== "temporal");
+
     const policyDecision = evaluatePolicy(this.options.policy, {
       direction: "request",
       method: message.method,
@@ -359,10 +383,13 @@ export class InterceptionEngine {
       pii_detected: piiDetected,
       destination_allowed: destination.allowed,
       tainted_destination: taintedDestination,
+      user_stated_destination: userStated.size > 0,
+      copied_link_only: copiedLinkOnly,
       lookalike_destination: lookalikeDestination,
       new_destination: newDestination,
       split_match: splitMatch,
       rule_of_two: ruleOfTwo,
+      session_untrusted: session.seenUntrusted,
       destination_session_trusted: sessionTrusted,
       session_quarantined: Boolean(session.quarantine),
       rate_limited: gates.rateLimited,
@@ -422,7 +449,8 @@ export class InterceptionEngine {
       secretDetected,
       piiDetected,
       taintClasses: classesFromMatches(allTaintMatches),
-      redacted: policyDecision.action === "redact_secrets"
+      redacted: policyDecision.action === "redact_secrets",
+      ...(userStated.size > 0 ? { metadata: { userStatedDestinations: userStated.size } } : {})
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);
@@ -502,14 +530,24 @@ export class InterceptionEngine {
       });
     }
     const fused = review.labels.length > 0 ? fuseDetections(detections.map((entry) => entry.detection)) : contentFused;
+    // Detections belong to single tools and are decided per tool below, so one suspicious
+    // description withholds that tool instead of the whole server. Fusing every description
+    // together also inflated scores: many ordinary "use this tool when" sentences add up.
+    const toolDetections = new Map<string, DetectionResult>();
+    for (const tool of tools) {
+      const own = detections.filter(({ content }) => content.sourceToolOrResource === tool.name).map(({ detection }) => detection);
+      if (own.length > 0) toolDetections.set(tool.name, fuseDetections(own));
+    }
+    const unattributed = detections.filter(({ content }) => !tools.some((tool) => tool.name === content.sourceToolOrResource)).map(({ detection }) => detection);
+    const listDetection = unattributed.length > 0 ? fuseDetections(unattributed) : { score: 0, labels: [] as string[] };
 
     let decision = evaluatePolicy(this.options.policy, {
       direction: "response",
       method: "tools/list",
       server: this.options.serverName,
       trust: this.options.server.trust,
-      detector_score: fused.score,
-      labels: fused.labels,
+      detector_score: listDetection.score,
+      labels: listDetection.labels,
       lock_status: lockStatus
     });
 
@@ -551,7 +589,7 @@ export class InterceptionEngine {
         : { toClient: [error], toServer: [] };
     }
 
-    const perTool = await this.applyPerToolMetadataDecisions(message, tools, review, startedAt);
+    const perTool = await this.applyPerToolMetadataDecisions(message, tools, review, startedAt, toolDetections);
     const keptTools = perTool.tools;
     for (const tool of keptTools) {
       this.knownTools.set(tool.name, tool);
@@ -625,14 +663,17 @@ export class InterceptionEngine {
     message: JsonRpcResponse,
     tools: McpTool[],
     review: MetadataReview,
-    startedAt: number
+    startedAt: number,
+    toolDetections: Map<string, DetectionResult> = new Map()
   ): Promise<{ tools: McpTool[]; changed: boolean }> {
     const reviews = new Map(review.items.map((item) => [item.name, item]));
     const kept: McpTool[] = [];
     let changed = false;
     for (const tool of tools) {
       const item = reviews.get(tool.name);
-      if (!item?.flagged) {
+      const contentDetection = toolDetections.get(tool.name);
+      const detection = contentDetection && item ? fuseDetections([item.detection, contentDetection]) : contentDetection ?? item?.detection;
+      if (!item?.flagged && (detection?.score ?? 0) < 0.35) {
         this.metadataBlockedTools.delete(tool.name);
         kept.push(tool);
         continue;
@@ -643,25 +684,30 @@ export class InterceptionEngine {
         server: this.options.serverName,
         tool: tool.name,
         trust: this.options.server.trust,
-        detector_score: item.detection.score,
-        labels: item.detection.labels,
-        tool_shadowing_detected: item.shadows.length > 0,
-        name_collision_detected: item.collidesWith.length > 0,
-        hidden_unicode_detected: item.hiddenUnicode.count > 0
+        detector_score: detection?.score ?? 0,
+        labels: detection?.labels ?? [],
+        tool_shadowing_detected: (item?.shadows.length ?? 0) > 0,
+        name_collision_detected: (item?.collidesWith.length ?? 0) > 0,
+        hidden_unicode_detected: (item?.hiddenUnicode.count ?? 0) > 0
       });
+      if (!item?.flagged && (decision.action === "allow" || decision.action === "log_only" || decision.action === "sanitize")) {
+        this.metadataBlockedTools.delete(tool.name);
+        kept.push(tool);
+        continue;
+      }
       const approval = await this.maybeApprove(decision, {
         method: "tools/list",
         tool: tool.name,
         toolClass: "unknown",
         taintMatches: [],
-        summary: formatMetadataApprovalSummary(tool.name, item)
+        summary: item ? formatMetadataApprovalSummary(tool.name, item, detection) : `Tool metadata for ${tool.name} reads like instructions to the model (${(detection?.labels ?? []).join(", ")}).`
       });
       await this.auditDecision(message, "response", approval.decision, startedAt, {
         method: "tools/list",
         tool: tool.name,
-        detector: item.detection,
+        ...(detection ? { detector: detection } : {}),
         approved: approval.approved,
-        metadataReview: item.detection.metadata
+        metadataReview: item?.detection.metadata
       });
       if (!approval.approved || decision.action === "block") {
         this.metadataBlockedTools.set(tool.name, approval.decision);
@@ -669,7 +715,7 @@ export class InterceptionEngine {
         continue;
       }
       this.metadataBlockedTools.delete(tool.name);
-      if (decision.action === "sanitize" && item.hiddenUnicode.count > 0) {
+      if (decision.action === "sanitize" && item && item.hiddenUnicode.count > 0) {
         kept.push(stripHiddenUnicodeDeep(tool));
         changed = true;
         continue;
@@ -875,7 +921,7 @@ export class InterceptionEngine {
           const approval = await this.maybeApprove(decision, {
             method: "sampling/createMessage",
             toolClass: "unknown",
-            classification: { toolClass: "unknown", capabilities: ["invokes_model"] },
+            classification: { toolClass: "unknown", capabilities: ["invokes_model"], reasons: ["sampling"] },
             taintMatches: [],
             summary: `${this.options.serverName} requested model access through an input_required result (${key}).`
           });
@@ -925,7 +971,7 @@ export class InterceptionEngine {
           const approval = await this.maybeApprove(decision, {
             method: "elicitation/create",
             toolClass: "unknown",
-            classification: { toolClass: "unknown", capabilities: ["user_interaction"] },
+            classification: { toolClass: "unknown", capabilities: ["user_interaction"], reasons: ["elicitation"] },
             taintMatches: [],
             summary: `${this.options.serverName} requested user input through an input_required result (${key}).`
           });
@@ -1024,7 +1070,7 @@ export class InterceptionEngine {
     const approval = await this.maybeApprove(decision, {
       method: message.method,
       toolClass: "unknown",
-      classification: { toolClass: "unknown", capabilities: isSampling ? ["invokes_model"] : ["user_interaction"] },
+      classification: { toolClass: "unknown", capabilities: isSampling ? ["invokes_model"] : ["user_interaction"], reasons: [isSampling ? "sampling" : "elicitation"] },
       taintMatches: [],
       summary: `${this.options.serverName} requested model access via ${message.method}.`
     });
@@ -1220,7 +1266,7 @@ export class InterceptionEngine {
     const approval = await this.maybeApprove(decision, {
       method: bucket,
       toolClass: "unknown",
-      classification: { toolClass: "unknown", capabilities: ["reads_untrusted_content"] },
+      classification: { toolClass: "unknown", capabilities: ["reads_untrusted_content"], reasons: ["prompt"] },
       taintMatches: [],
       summary: `${bucket} returned ${descriptors.length} descriptor(s); lock status ${lockStatus}; detector score ${fused.score.toFixed(2)}.`
     });
@@ -1254,7 +1300,7 @@ export class InterceptionEngine {
       trust: this.options.server.trust
     });
     const { fused, detectionsByPath } = await this.detectContents(contents);
-    const classification: ToolClassification = { toolClass: "source", capabilities: ["reads_untrusted_content"] };
+    const classification: ToolClassification = { toolClass: "source", capabilities: ["reads_untrusted_content"], reasons: ["resource"] };
     const taintRecords = this.registerTaintFromContents(pending.method, classification, contents, fused);
     if (fused.score >= this.options.config.taint.quarantine.scoreGte) await this.startQuarantine("High-score source response.");
     if (fused.score >= this.options.config.taint.temporal.detectorScoreGte) {
@@ -1522,6 +1568,7 @@ export class InterceptionEngine {
       metadata: {
         toolClass: extra.toolClass,
         capabilities: extra.classification?.capabilities,
+        classificationReasons: extra.classification?.reasons,
         lockChecks: extra.lockChecks,
         lockStatus: extra.lockStatus,
         approved: extra.approved,
@@ -1618,9 +1665,10 @@ function visibleMetadataContents(contents: ExtractedContent[]): ExtractedContent
   return contents.map((content) => content.text ? { ...content, text: stripHiddenUnicode(content.text) } : content);
 }
 
-function formatMetadataApprovalSummary(tool: string, item: MetadataReview["items"][number]): string {
+function formatMetadataApprovalSummary(tool: string, item: MetadataReview["items"][number], detection?: DetectionResult): string {
   return [
     `Tool metadata for ${tool} was flagged.`,
+    detection && detection.labels.length > 0 ? `Signals: ${detection.labels.join(", ")}.` : undefined,
     item.hiddenUnicode.count > 0 ? `Hidden characters: ${item.hiddenUnicode.count} (${item.hiddenUnicode.codePoints.join(", ")}).` : undefined,
     item.shadows.length > 0 ? `Mentions tools of other servers: ${item.shadows.map((entry) => `${entry.server}/${entry.tool}`).join(", ")}.` : undefined,
     item.collidesWith.length > 0 ? `Name also exposed by: ${item.collidesWith.join(", ")}.` : undefined,

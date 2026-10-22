@@ -8,6 +8,13 @@ defaults:
 rules:
 
   # --- M1: destination provenance ---
+  # Opening a link exactly as an untrusted page wrote it (a search result, a link in a page) only
+  # reads more untrusted content. A url built from page text or carrying other data is still blocked.
+  - id: allow-following-copied-link
+    when: { direction: request, tool_class: sink, copied_link_only: true, lookalike_destination: false, rule_of_two: false, session_quarantined: false, rate_limited: false, loop_detected: false }
+    action: allow
+    reason: Opening a link copied verbatim from untrusted content, with no other data attached.
+
   - id: block-tainted-destination
     when: { direction: request, tool_class: sink, tainted_destination: true }
     action: block
@@ -135,6 +142,26 @@ rules:
       destination_session_trusted: false
     action: require_approval
     reason: This session has seen both untrusted and sensitive content.
+
+  - id: approve-delete-after-untrusted
+    name: Ask before deleting data after untrusted content
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_any: [ deletes_data ]
+      session_untrusted: true
+    action: require_approval
+    reason: This session has seen untrusted content, and deleting data cannot be undone.
+
+  - id: approve-credential-change-after-untrusted
+    name: Ask before changing passwords, keys or tokens after untrusted content
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_all: [ accesses_credentials, writes_remote ]
+      session_untrusted: true
+    action: require_approval
+    reason: A password, key or token change after reading untrusted content could be an account takeover.
 
   # --- M2: session quarantine ---
   - id: approve-quarantined-sink

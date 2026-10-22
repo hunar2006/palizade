@@ -7,6 +7,32 @@ export class InMemoryTaintStore implements TaintStore {
   private readonly records = new Map<string, TaintRecord>();
   private readonly temporalBySession = new Map<string, TemporalTaintState>();
   private readonly sessions = new Map<string, SessionState>();
+  private readonly statements = new Map<string, number>();
+
+  addUserStatements(_sessionId: string, canonicals: string[], ttlMs: number): void {
+    const expiresAt = Date.now() + ttlMs;
+    for (const canonical of canonicals) this.statements.set(sha256(canonical), expiresAt);
+  }
+
+  verbatimToken(sessionId: string, value: string): TaintMatch | undefined {
+    const wanted = new Set(["", ".", ",", ";", ":", "!", "?"].map((suffix) => normalizeText(value + suffix)));
+    for (const record of this.records.values()) {
+      if (record.sessionId !== sessionId && !record.persistent) continue;
+      if (!record.classes.includes("untrusted")) continue;
+      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate));
+      if (token) return { taintId: record.id, reason: "token", token, classes: record.classes };
+    }
+    return undefined;
+  }
+
+  hasUserStatements(_sessionId: string): boolean {
+    const now = Date.now();
+    return [...this.statements.values()].some((expiresAt) => expiresAt > now);
+  }
+
+  isUserStated(_sessionId: string, canonical: string): boolean {
+    return (this.statements.get(sha256(canonical)) ?? 0) > Date.now();
+  }
 
   getSession(sessionId: string): SessionState {
     return structuredClone(this.sessions.get(sessionId) ?? emptySession());

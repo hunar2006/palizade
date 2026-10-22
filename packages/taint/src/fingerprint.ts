@@ -1,4 +1,4 @@
-import { sha256 } from "./hash.js";
+import { hash } from "node:crypto";
 import type { TaintFingerprint } from "./types.js";
 import { HIDDEN_UNICODE, tokenViews } from "./unicode.js";
 
@@ -54,6 +54,20 @@ export function makeSubstrings(normalized: string, k = 32, w = 16, max = 2048): 
   if (normalized.length < k) {
     return normalized.length >= 16 ? [normalized] : [];
   }
+  // Winnowing picks about one k-gram per (w + 1) / 2 characters, so `max` picks cover this much text.
+  const covered = max * Math.ceil((w + 1) / 2);
+  if (normalized.length > covered + k) {
+    // Long pages: split the same budget between the start and the end, where injected text usually sits.
+    const half = Math.floor(covered / 2) + k - 1;
+    const head = winnow(normalized.slice(0, half), k, w, Math.floor(max / 2));
+    // Keep the last picks of the tail slice, so the final characters are always covered.
+    const tail = winnow(normalized.slice(-half), k, w, half).slice(-Math.floor(max / 2));
+    return [...new Set([...head, ...tail])];
+  }
+  return winnow(normalized, k, w, max);
+}
+
+function winnow(normalized: string, k: number, w: number, max: number): string[] {
   // At most one new pick per window, so max * w k-grams always suffices; bounds work on huge pages.
   const grams = Math.min(normalized.length - k + 1, max * w);
   const hashes = new Array<number>(grams);
@@ -82,21 +96,20 @@ function fnv1a(text: string, from: number, to: number): number {
 
 export function simhash(normalized: string): string {
   const shingles = wordShingles(normalized);
-  const vector = new Array<number>(64).fill(0);
+  const vector = new Int32Array(64);
   for (const shingle of shingles) {
-    const hash = sha256(shingle).slice(0, 16);
-    const bits = BigInt(`0x${hash}`);
+    // The top 64 bits of SHA-256, read big endian: bit i lives in byte 7 - (i >> 3).
+    const digest = hash("sha256", shingle, "buffer");
     for (let bit = 0; bit < 64; bit += 1) {
-      vector[bit]! += (bits & (1n << BigInt(bit))) === 0n ? -1 : 1;
+      vector[bit]! += (digest[7 - (bit >> 3)]! >> (bit & 7)) & 1 ? 1 : -1;
     }
   }
-  let result = 0n;
+  const out = Buffer.alloc(8);
   for (let bit = 0; bit < 64; bit += 1) {
-    if ((vector[bit] ?? 0) >= 0) {
-      result |= 1n << BigInt(bit);
-    }
+    if (vector[bit]! >= 0) out[7 - (bit >> 3)] = out[7 - (bit >> 3)]! | (1 << (bit & 7));
   }
-  return result.toString(16).padStart(16, "0");
+  // Same hex as before (BigInt.toString(16) padded to 16), so stored fingerprints stay comparable.
+  return out.toString("hex");
 }
 
 export function hammingDistanceHex(a: string, b: string): number {

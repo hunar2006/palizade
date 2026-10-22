@@ -51,4 +51,55 @@ describe("classifyToolDetailed", () => {
     }
     expect(classifyToolDetailed("get_memory", server).capabilities).not.toContain("persists_memory");
   });
+
+  it("uses the catalog for known servers chosen in config", () => {
+    const fs = { ...server, trust: "untrusted" as const, command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/work"] };
+    expect(classifyToolDetailed("directory_tree", fs)).toMatchObject({ toolClass: "source", reasons: ["catalog:filesystem"] });
+    expect(classifyToolDetailed("write_file", fs).toolClass).toBe("sink");
+    expect(classifyToolDetailed("write_file", fs).argumentRoles).toMatchObject({ path: "file_path" });
+    expect(classifyToolDetailed("list_allowed_directories", fs).toolClass).toBe("pure");
+    const gh = { ...server, url: "https://api.githubcopilot.com/mcp/", command: undefined };
+    expect(classifyToolDetailed("get_issue", gh).toolClass).toBe("source");
+    expect(classifyToolDetailed("create_pull_request", gh).toolClass).toBe("sink");
+    expect(classifyToolDetailed("delete_file", gh).capabilities).toContain("deletes_data");
+    expect(classifyToolDetailed("brand_new_tool", gh).reasons).not.toContain("catalog:github");
+  });
+
+  it("lets annotations raise a catalog class but never lower it", () => {
+    const fs = { ...server, command: "npx", args: ["@modelcontextprotocol/server-filesystem"] };
+    expect(classifyToolDetailed("read_text_file", fs, { name: "read_text_file", inputSchema: {}, annotations: { destructiveHint: true } }).toolClass).toBe("sink");
+    expect(classifyToolDetailed("write_file", fs, { name: "write_file", inputSchema: {}, annotations: { readOnlyHint: true } }).toolClass).toBe("sink");
+  });
+
+  it("honors a catalog override or opt out in config", () => {
+    const custom = { ...server, command: "./my-fs-build", catalog: "filesystem" };
+    expect(classifyToolDetailed("directory_tree", custom).reasons).toContain("catalog:filesystem");
+    const off = { ...server, command: "npx", args: ["@modelcontextprotocol/server-filesystem"], catalog: false as const };
+    expect(classifyToolDetailed("directory_tree", off).reasons).not.toContain("catalog:filesystem");
+  });
+
+  it("does not let an untrusted description make an unknown tool look like a source", () => {
+    const tool = { name: "custom", description: "Read a file and list its lines", inputSchema: {} };
+    expect(classifyToolDetailed("custom", server, tool).toolClass).toBe("unknown");
+    expect(classifyToolDetailed("custom", { ...server, trust: "trusted" }, tool).toolClass).toBe("source");
+    const sends = { name: "custom", description: "Sends an email to the address", inputSchema: {} };
+    expect(classifyToolDetailed("custom", server, sends).toolClass).toBe("sink");
+  });
+
+  it("raises risk from input schema property names", () => {
+    const schema = (properties: Record<string, unknown>) => ({ name: "do_it", inputSchema: { type: "object", properties } });
+    expect(classifyToolDetailed("do_it", server, schema({ to: { type: "string" }, note: {} })).capabilities).toContain("sends_message");
+    expect(classifyToolDetailed("do_it", server, schema({ cmd: {} })).toolClass).toBe("sink");
+    expect(classifyToolDetailed("do_it", server, schema({ path: {}, content: {} })).capabilities).toContain("file_write");
+    expect(classifyToolDetailed("do_it", server, schema({ options: { type: "object", properties: { webhook_url: {} } } })).toolClass).toBe("sink");
+    expect(classifyToolDetailed("do_it", server, schema({ query: {} })).toolClass).toBe("unknown");
+  });
+
+  it("treats membership, sharing and scheduling verbs as remote writes", () => {
+    for (const name of ["add_user_to_channel", "invite_member", "update_settings", "share_file", "forward_email", "cancel_event"]) {
+      expect(classifyToolDetailed(name, server).toolClass, name).toBe("sink");
+    }
+    expect(classifyToolDetailed("get_address", server).toolClass).toBe("source");
+  });
 });
+

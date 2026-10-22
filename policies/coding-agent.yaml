@@ -46,6 +46,13 @@ rules:
     reason: Rule of Two blocks shell network, DNS and ICMP egress.
 
   # --- M1: destination provenance ---
+  # Opening a link exactly as an untrusted page wrote it (a search result, a link in a page) only
+  # reads more untrusted content. A url built from page text or carrying other data is still blocked.
+  - id: allow-following-copied-link
+    when: { direction: request, tool_class: sink, copied_link_only: true, lookalike_destination: false, rule_of_two: false, session_quarantined: false, rate_limited: false, loop_detected: false }
+    action: allow
+    reason: Opening a link copied verbatim from untrusted content, with no other data attached.
+
   - id: block-tainted-destination
     when: { direction: request, tool_class: sink, tainted_destination: true }
     action: block
