@@ -94,5 +94,12 @@ describe("classifyToolDetailed", () => {
     expect(classifyToolDetailed("do_it", server, schema({ options: { type: "object", properties: { webhook_url: {} } } })).toolClass).toBe("sink");
     expect(classifyToolDetailed("do_it", server, schema({ query: {} })).toolClass).toBe("unknown");
   });
+
+  it("treats membership, sharing and scheduling verbs as remote writes", () => {
+    for (const name of ["add_user_to_channel", "invite_member", "update_settings", "share_file", "forward_email", "cancel_event"]) {
+      expect(classifyToolDetailed(name, server).toolClass, name).toBe("sink");
+    }
+    expect(classifyToolDetailed("get_address", server).toolClass).toBe("source");
+  });
 });
 

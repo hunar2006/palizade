@@ -17,7 +17,20 @@ Reproduce with `PALIZADE_PYTHON=/path/to/python pnpm eval:agentdojo` (needs `pip
 - Utility uses the ground truth answer text. Utility under attack can be higher with Palizade than without it, because blocking the injection's writes leaves the environment intact.
 - Every suite tool is treated as one untrusted server. Splitting tools into trusted and untrusted servers would change results.
 
+## Summary (default preset, approvals denied)
+
+| Run | Clean utility | Utility under attack | Attack success |
+|---|---:|---:|---:|
+| No defense | 97/97 (100%) | 579/949 (61.0%) | 593/949 (62.5%) |
+| Palizade, `baseline` (held out) | 67/97 (69.1%) | 665/949 (70.1%) | 42/949 (4.4%) |
+| Palizade, `after-dev-review` | 68/97 (70.1%) | 648/949 (68.3%) | 11/949 (1.2%) |
+
+On the two suites that were not inspected (banking, travel), `after-dev-review` moved clean utility from 29/36 to 30/36 and attack success from 12/284 to 11/284. Most of the remaining utility loss is the cost of the provenance design: a user task that sends to an address or url it read from untrusted content looks the same as an attack, so Palizade blocks it in the default preset.
+
 ## Files
 
 - `baseline/`: first run, before any change made with knowledge of this benchmark. `none` is no defense.
-- Later folders, if any, record changes made after looking at results, and say which suites were inspected.
+- `after-dev-review/`: after two changes made by looking only at the workspace and slack suites (the dev suites); banking and travel stayed held out. The changes are general rather than benchmark specific:
+  1. Verbs that change shared state (add, invite, update, set, assign, grant, share, rename, archive, reply, forward, schedule, cancel) now mark a tool as a remote write, so a tool such as `add_user_to_channel` is no longer "unknown".
+  2. A new rule in the default, interactive and strict presets asks before any delete once the session has seen untrusted content (`approve-delete-after-untrusted`). A delete has no destination to check, so taint on arguments alone missed it.
+  No detector pattern was added from the benchmark's attack text.
