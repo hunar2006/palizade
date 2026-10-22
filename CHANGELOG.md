@@ -35,6 +35,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Presets:** `coding-agent` and `research-readonly`.
 - **Held out evaluation on AgentDojo:** `pnpm eval:agentdojo` replays AgentDojo ground truth traces through Palizade and scores them with AgentDojo's own checks. Results and method are in `results/agentdojo`.
 - **Ask before deletes after untrusted content:** new `session_untrusted` policy field and `approve-delete-after-untrusted` rule in the default, interactive and strict presets.
+- **Docs:** `SECURITY.md` (private reporting and scope) and `CONTRIBUTING.md` (setup, evaluation rules, how to add catalog entries and policy tests).
 - **`palizade policy test`:** YAML test cases for policies, with strict field checking; the default and strict presets ship with their own cases.
 - **`palizade scan`:** one command that checks all MCP client configs and `palizade.yaml` for unprotected servers, plaintext secrets, unpinned packages and images, plain http urls and suspicious locked tool metadata, without starting servers.
 - **`palizade why` and `palizade allow`:** plain language explanations of recent blocks and prompts with suggested fixes, and commands to add, list and remove allowed hosts and email addresses.
@@ -48,7 +49,16 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - Rule of Two exposure flags now expire (2 hours by default), and native hook sessions are isolated per client session.
 - Every Unicode default ignorable code point is treated as hidden, not just a hand picked list.
 - Hosts and email addresses are compared in one canonical form for allowlist and provenance checks.
+- Object keys are scanned: data placed in an argument key (`{"<copied text>": true}`) is checked for taint, secrets and personal data, and data bearing keys in untrusted results are recorded so copies are traced. Short identifier keys such as `id` are treated as structure.
+- Substring fingerprints of long tool results now cover the end as well as the start, within the same storage budget, since injected text is often placed at the bottom of a page.
 - The SSE parser now bounds a partial line and an unterminated event, so a remote server cannot exhaust memory by streaming one endless line or data without a blank line.
+
+### Compatibility fixes
+
+- **Remote servers built with the official SDKs work over the HTTP bridge.** In the 2025-11-25 era, a server may answer a POST with an SSE stream, which the TypeScript and Python SDKs do by default. Palizade only read JSON bodies, so it dropped the replies.
+- **`lock approve` and `lock diff` work with Python stdio servers.** They now send `initialize` and `notifications/initialized` before `tools/list`, which servers built on the Python SDK require. Tool listing also follows `nextCursor`, so paginated tool lists are locked completely, and a server that exits early gives a clear error.
+- **The HTTP lock probe no longer records an empty tool list** when a legacy server answers the first probe with an error; it falls back to the handshake.
+- **Catalog tools are raised to sink only by `destructiveHint`, not `openWorldHint`.** Playwright marks every tool open world, which turned read only tools like `browser_snapshot` into sinks. The Playwright entry also covers its newer tools.
 
 ### Performance
 

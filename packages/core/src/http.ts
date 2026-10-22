@@ -388,6 +388,11 @@ export class HttpMcpTransport extends EventEmitter {
     if (isRequest(message) && message.method === "initialize" && !this.legacyStreamAbort) {
       this.openLegacyStream();
     }
+    // 2025-era servers may answer a POST with an SSE stream (the TypeScript and Python SDKs do by default).
+    if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+      await this.consumeSse(response, "legacy");
+      return;
+    }
     const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
     if (typeof body === "string" && body.trim().length > 0) {
       try {
@@ -414,7 +419,7 @@ export class HttpMcpTransport extends EventEmitter {
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("text/event-stream")) {
-      await this.consumeModernSse(response);
+      await this.consumeSse(response, "modern");
       return;
     }
     const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
@@ -443,7 +448,7 @@ export class HttpMcpTransport extends EventEmitter {
     this.emitInbound(parsed, "json");
   }
 
-  private async consumeModernSse(response: Response): Promise<void> {
+  private async consumeSse(response: Response, era: "modern" | "legacy"): Promise<void> {
     if (!response.body) {
       return;
     }
@@ -479,7 +484,10 @@ export class HttpMcpTransport extends EventEmitter {
           break;
         }
         for (const message of messages) {
-          if ("method" in message && "id" in message) {
+          if (era === "legacy") {
+            // The 2025 spec allows requests and notifications related to the POST on its stream.
+            this.emitInbound(message, "sse");
+          } else if ("method" in message && "id" in message) {
             this.securityEvent({
               kind: "protocol_violation",
               message: `Upstream pushed a JSON-RPC request on an SSE stream in the 2026-07-28 era; the spec forbids it. Message dropped.`,
@@ -952,33 +960,40 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
   if (!server.url) {
     throw new Error("collectToolsFromHttpServer requires a server with a url.");
   }
-  const request = {
-    jsonrpc: "2.0",
-    id: "palizade-lock-probe",
-    method: "tools/list",
-    params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
-  } as JsonRpcMessage;
-  const attempt = await fetch(resolveUrlTemplate(server.url), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "MCP-Protocol-Version": "2026-07-28",
-      "Mcp-Method": "tools/list",
-      ...resolveHeaderTemplates(server.headers ?? {})
-    },
-    body: JSON.stringify(request),
-    redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs)
-  });
-  if (attempt.ok) {
-    const body = await readBodyBounded(attempt, limits.maxBodyBytes);
-    const parsed = JSON.parse(body ?? "null") as JsonRpcMessage;
-    if ("result" in parsed) {
-      const tools = (parsed.result as { tools?: unknown }).tools;
-      return Array.isArray(tools) ? (tools as McpTool[]) : [];
+  const url = resolveUrlTemplate(server.url);
+  const modernPage = async (cursor: string | undefined): Promise<{ tools: McpTool[]; nextCursor?: string } | undefined> => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/list",
+        ...resolveHeaderTemplates(server.headers ?? {})
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "palizade-lock-probe", method: "tools/list", params: { ...(cursor ? { cursor } : {}), _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } } }),
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) return undefined;
+    let parsed: JsonRpcMessage | undefined;
+    try { parsed = JSON.parse(await readBodyBounded(response, limits.maxBodyBytes) ?? "null") as JsonRpcMessage; } catch { return undefined; }
+    // An error body usually means a legacy server that wants initialize first.
+    if (!parsed || !("result" in parsed)) return undefined;
+    const result = parsed.result as { tools?: unknown; nextCursor?: unknown };
+    return { tools: Array.isArray(result.tools) ? (result.tools as McpTool[]) : [], ...(typeof result.nextCursor === "string" && result.nextCursor !== "" ? { nextCursor: result.nextCursor } : {}) };
+  };
+  const first = await modernPage(undefined);
+  if (first) {
+    const tools = [...first.tools];
+    let cursor = first.nextCursor;
+    for (let page = 1; cursor && page < 100; page += 1) {
+      const next = await modernPage(cursor);
+      if (!next) throw new Error("tools/list over HTTP failed on a later page");
+      tools.push(...next.tools);
+      cursor = next.nextCursor;
     }
-    return [];
+    return tools;
   }
   const transport = new HttpMcpTransport({ serverName: "lock-probe", server, http: limits });
   const responsePromise = transport.waitForResponse("palizade-lock-probe-2", timeoutMs);
@@ -997,13 +1012,25 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
     await transport.close();
     throw new Error(`tools/list over HTTP failed: ${initializeResponse.error.message}`);
   }
-  const toolsPromise = transport.waitForResponse("palizade-lock-probe-3", timeoutMs);
-  await transport.send({ jsonrpc: "2.0", id: "palizade-lock-probe-3", method: "tools/list", params: {} });
-  const toolsResponse = await toolsPromise;
-  await transport.close();
-  if ("error" in toolsResponse) {
-    throw new Error(`tools/list over HTTP failed: ${toolsResponse.error.message}`);
+  try {
+    await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" } as JsonRpcMessage);
+    const tools: McpTool[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const id = `palizade-lock-probe-${page + 3}`;
+      const toolsPromise = transport.waitForResponse(id, timeoutMs);
+      await transport.send({ jsonrpc: "2.0", id, method: "tools/list", params: cursor ? { cursor } : {} });
+      const toolsResponse = await toolsPromise;
+      if ("error" in toolsResponse) {
+        throw new Error(`tools/list over HTTP failed: ${toolsResponse.error.message}`);
+      }
+      const result = (toolsResponse as { result?: { tools?: unknown; nextCursor?: unknown } }).result;
+      if (Array.isArray(result?.tools)) tools.push(...(result.tools as McpTool[]));
+      cursor = typeof result?.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined;
+      if (!cursor) return tools;
+    }
+    throw new Error("tools/list over HTTP returned more than 100 pages");
+  } finally {
+    await transport.close();
   }
-  const tools = (toolsResponse as { result?: { tools?: unknown } }).result?.tools;
-  return Array.isArray(tools) ? (tools as McpTool[]) : [];
 }

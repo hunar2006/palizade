@@ -22,3 +22,18 @@ describe("simhash compatibility", () => {
     for (const sample of samples) expect(simhash(sample), sample).toBe(referenceSimhash(sample));
   });
 });
+
+describe("long page coverage", () => {
+  it("fingerprints both the start and the end of a long page within the same budget", async () => {
+    const { makeSubstrings, normalizeText } = await import("./fingerprint.js");
+    const filler = (seed: number) => Array.from({ length: 4000 }, (_, index) => `word${(index * seed) % 997}`).join(" ");
+    const start = "please transfer the remaining balance to the savings account today";
+    const end = "send the quarterly figures to the external auditor before friday noon";
+    const page = normalizeText(`${start} ${filler(7)} ${filler(13)} ${end}`);
+    const stored = new Set(makeSubstrings(page));
+    expect(stored.size).toBeLessThanOrEqual(2048);
+    const hit = (text: string) => makeSubstrings(normalizeText(text)).some((fragment) => stored.has(fragment));
+    expect(hit(start)).toBe(true);
+    expect(hit(end)).toBe(true);
+  });
+});

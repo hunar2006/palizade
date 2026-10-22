@@ -1,3 +1,4 @@
+import { isDataBearingKey } from "./text.js";
 import type { TrustLevel } from "@palizade/policy";
 
 export type ContentOrigin =
@@ -84,6 +85,8 @@ function visit(value: unknown, path: string, ctx: ExtractionContext, output: Ext
 
     for (const [key, child] of Object.entries(record)) {
       const childPath = `${path}.${key}`;
+      // Keys can carry data in structured results too; record them so copies are traced.
+      if (isDataBearingKey(key)) emitString(key, `${path}{${key}}`, childCtx, output, "structured");
       const nextCtx = key === "text" || key === "content"
         ? childCtx
         : childCtx;

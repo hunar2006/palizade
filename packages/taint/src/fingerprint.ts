@@ -54,6 +54,20 @@ export function makeSubstrings(normalized: string, k = 32, w = 16, max = 2048): 
   if (normalized.length < k) {
     return normalized.length >= 16 ? [normalized] : [];
   }
+  // Winnowing picks about one k-gram per (w + 1) / 2 characters, so `max` picks cover this much text.
+  const covered = max * Math.ceil((w + 1) / 2);
+  if (normalized.length > covered + k) {
+    // Long pages: split the same budget between the start and the end, where injected text usually sits.
+    const half = Math.floor(covered / 2) + k - 1;
+    const head = winnow(normalized.slice(0, half), k, w, Math.floor(max / 2));
+    // Keep the last picks of the tail slice, so the final characters are always covered.
+    const tail = winnow(normalized.slice(-half), k, w, half).slice(-Math.floor(max / 2));
+    return [...new Set([...head, ...tail])];
+  }
+  return winnow(normalized, k, w, max);
+}
+
+function winnow(normalized: string, k: number, w: number, max: number): string[] {
   // At most one new pick per window, so max * w k-grams always suffices; bounds work on huge pages.
   const grams = Math.min(normalized.length - k + 1, max * w);
   const hashes = new Array<number>(grams);

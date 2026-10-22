@@ -1,3 +1,4 @@
+import { isDataBearingKey } from "./text.js";
 export type ArgumentRole =
   | "url"
   | "hostname"
@@ -67,10 +68,17 @@ function visit(value: unknown, path: string, fields: ArgumentField[]): void {
   }
   if (value && typeof value === "object") {
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (isDataBearingKey(key)) {
+        // A key is payload, not a named destination: only its own shape can make it a url or address.
+        const role: ArgumentRole = /^https?:\/\//iu.test(key) ? "url" : EMAIL_ONLY.test(key) ? "email_recipient" : "body";
+        fields.push({ path: `${path}{${key}}`, role, text: key });
+      }
       visit(child, `${path}.${key}`, fields);
     }
   }
 }
+
+const EMAIL_ONLY = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/iu;
 
 function inferRole(path: string, value: string): ArgumentRole {
   const lowerPath = path.toLowerCase();

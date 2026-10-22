@@ -55,6 +55,16 @@ program
   .version(__PKG_VERSION__)
   .option("-c, --config <path>", "Path to palizade.yaml", "palizade.yaml");
 
+const STARTER_SERVERS_COMMENT = `
+# install-config adds your client's servers here. To add one by hand:
+#
+# servers:
+#   filesystem:
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-filesystem@<version>", "/path/to/folder"]
+#     trust: untrusted   # known servers are classified by the built in catalog (palizade tools --catalog)
+`;
+
 program.command("init")
   .description("Create a starter palizade.yaml, default policy, and state directory")
   .option("--force", "Overwrite existing files", false)
@@ -67,13 +77,21 @@ program.command("init")
     starter.policy = `policies/${options.preset}.yaml`;
     if (options.preset === "strict") (starter.egress as Record<string, unknown>).mode = "allowlist_only";
     if (options.outputDir) starter.protectedTargets = { outputDirectory: options.outputDir };
+    // The template's demo servers point into this repository; a new user starts with none.
+    starter.servers = {};
     // Keep generated paths relative; loadConfig resolves them against palizade.yaml's directory.
-    await writeIfMissing("palizade.yaml", YAML.stringify(starter), options.force);
+    await writeIfMissing("palizade.yaml", `${YAML.stringify(starter)}${STARTER_SERVERS_COMMENT}`, options.force);
     await writeIfMissing(`policies/${options.preset}.yaml`, preset, options.force);
     await mkdir(".palizade", { recursive: true });
     await ensureListenerToken(".palizade/listener.token");
     console.log(`Initialized Palizade config, ${options.preset} policy, and .palizade state directory.`);
     console.log("Listener bearer token stored at .palizade/listener.token.");
+    console.log("");
+    console.log("Next:");
+    console.log("  palizade scan                                   see which MCP servers on this machine are unprotected");
+    console.log("  palizade install-config --all --client <name>   wrap them (claude-desktop, claude-code, cursor, codex)");
+    console.log("  palizade install-hooks <client>                 also cover native tools (claude-code, cursor, codex)");
+    console.log("  palizade why                                    explain anything Palizade blocks");
   });
 
 program.command("install-config")
@@ -483,15 +501,18 @@ program.command("scan")
   .description("Check every MCP client config on this machine and palizade.yaml for unprotected servers, plaintext secrets, unpinned packages, insecure urls and suspicious tool descriptions; starts no servers")
   .option("--json", "Print JSON", false)
   .option("--fail-on <severity>", "Exit with code 1 when a finding is at least this severe: high, medium, low", "high")
-  .action(async (options: { json: boolean; failOn: string }) => {
-    const result = await scanClientConfigs(clientLocations());
+  .option("--project-only", "Only scan config files in the current directory (for CI on a repository)", false)
+  .option("--skip <checks>", "Comma separated checks to ignore, such as unprotected,unpinned-package")
+  .action(async (options: { json: boolean; failOn: string; projectOnly: boolean; skip?: string }) => {
+    const result = await scanClientConfigs(clientLocations().filter((location) => !options.projectOnly || location.scope === "project"));
     const configPath = resolve(program.opts<{ config: string }>().config);
     if (existsSync(configPath)) {
       const config = await loadConfigForCli(configPath);
       result.findings.push(...await scanPalizadeConfig(config, await new LockfileStore(config.lockfile).read(), configPath));
       result.files.push({ client: "palizade", path: configPath, scope: "project", exists: true, servers: Object.keys(config.servers).length });
     }
-    result.findings = sortFindings(result.findings);
+    const skipped = new Set((options.skip ?? "").split(",").map((check) => check.trim()).filter(Boolean));
+    result.findings = sortFindings(result.findings.filter((finding) => !skipped.has(finding.check)));
     console.log(options.json ? JSON.stringify(result, null, 2) : formatScan(result));
     const order = ["high", "medium", "low", "info"];
     const threshold = order.indexOf(options.failOn);
@@ -566,7 +587,8 @@ const audit = program.command("audit")
   .option("--server <server>", "Filter by server")
   .option("--tool <tool>", "Filter by tool")
   .option("--limit <n>", "Maximum events", "50")
-  .action(async (options: { last: string; action?: string; session?: string; server?: string; tool?: string; limit: string }) => {
+  .option("--json", "Print events as JSON lines", false)
+  .action(async (options: { last: string; action?: string; session?: string; server?: string; tool?: string; limit: string; json: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     const sink = new JsonlAuditSink(config.audit.jsonl);
@@ -587,6 +609,10 @@ const audit = program.command("audit")
     if (options.tool) query.tool = options.tool;
     const events = await sink.query(query);
 
+    if (options.json) {
+      for (const event of events) console.log(JSON.stringify(event));
+      return;
+    }
     if (events.length === 0) {
       console.log("No audit events matched.");
       return;
@@ -662,6 +688,9 @@ program.command("doctor")
     console.log(`Policy: ${config.policy}`);
     console.log(`Lockfile: ${config.lockfile}`);
     console.log(`Audit JSONL: ${config.audit.jsonl}`);
+    if (Object.keys(config.servers).length === 0) {
+      console.log("Servers: none yet. Run palizade scan to find your MCP servers, then palizade install-config --all --client <name>.");
+    }
     for (const [name, server] of Object.entries(config.servers)) {
       if (server.url) {
         console.log(`Server ${name}: url=${server.url} [trust=${server.trust}] [protocolVersion=${server.protocolVersion ?? "auto"}]`);
