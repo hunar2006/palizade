@@ -238,6 +238,7 @@ export async function collectToolsFromStdioServer(
   const collect = async (): Promise<unknown[]> => {
     // Legacy servers (most SDKs today) require the initialize handshake before any request.
     const init = await request("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "palizade", version: "lock" } });
+    if (failure) throw failure;
     const modern = errorOf(init) !== undefined;
     if (!modern) peer.send({ jsonrpc: "2.0", method: "notifications/initialized" } as JsonRpcMessage);
     const tools: unknown[] = [];

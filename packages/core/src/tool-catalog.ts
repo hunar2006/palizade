@@ -11,6 +11,8 @@ export interface CatalogRule {
   toolClass: ToolClass;
   capabilities: ToolCapability[];
   roles?: Record<string, ArgumentRole>;
+  /** The server is known to mark these read tools destructive (for example every POST), so the hint does not raise them. */
+  ignoreDestructiveHint?: true;
 }
 
 export interface CatalogEntry {
@@ -118,7 +120,187 @@ export const TOOL_CATALOG: CatalogEntry[] = [
     id: "brave-search",
     title: "Brave Search MCP server",
     identifiers: /@modelcontextprotocol\/server-brave-search|@brave\/brave-search-mcp-server|\bmcp\/brave-search\b/iu,
-    rules: [{ tools: /^brave_\w*search$/u, toolClass: "source", capabilities: READS }]
+    rules: [{ tools: /^brave_(\w*search|summarizer|llm_context)$/u, toolClass: "source", capabilities: READS }]
+  },
+  {
+    id: "notion",
+    title: "Notion MCP server (local)",
+    identifiers: /@notionhq\/notion-mcp-server/iu,
+    rules: [
+      // Search and data source queries are POST requests that only read.
+      { tools: /^API-(get-|retrieve-|list-)/u, toolClass: "source", capabilities: READS },
+      { tools: /^API-(post-search|query-data-source)$/u, toolClass: "source", capabilities: READS, ignoreDestructiveHint: true },
+      { tools: /^API-delete-/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "deletes_data"] },
+      { tools: /^API-(patch-|post-page$|update-|create-|move-page$)/u, toolClass: "sink", capabilities: REMOTE_WRITE }
+    ]
+  },
+  {
+    id: "context7",
+    title: "Context7 documentation server",
+    identifiers: /@upstash\/context7-mcp|mcp\.context7\.com/iu,
+    rules: [{ tools: /^(resolve-library-id|query-docs|get-library-docs)$/u, toolClass: "source", capabilities: READS }]
+  },
+  {
+    id: "firecrawl",
+    title: "Firecrawl MCP server",
+    identifiers: /\bfirecrawl-mcp\b|mcp\.firecrawl\.dev/iu,
+    rules: [
+      { tools: /^firecrawl_(scrape|map|crawl|interact)$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } },
+      { tools: /^firecrawl_agent$/u, toolClass: "sink", capabilities: BROWSE, roles: { "urls[*]": "url" } },
+      { tools: /^firecrawl_(search|check_crawl_status|agent_status|find_tools|credit_usage|developer_search|gov_search|research_\w+|monitor_(list|get|checks|check))$/u, toolClass: "source", capabilities: READS },
+      // Uploads a local file to Firecrawl for parsing.
+      { tools: /^firecrawl_parse$/u, toolClass: "sink", capabilities: ["network_egress", "reads_sensitive_data"], roles: { filePath: "file_path" } },
+      { tools: /^firecrawl_monitor_create$/u, toolClass: "sink", capabilities: MESSAGE, roles: { email: "email_recipient", webhookUrl: "url" } },
+      { tools: /^firecrawl_monitor_delete$/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "deletes_data"] },
+      { tools: /^firecrawl_(monitor_update|monitor_run|feedback|search_feedback|interact_stop)$/u, toolClass: "sink", capabilities: REMOTE_WRITE }
+    ]
+  },
+  {
+    id: "exa",
+    title: "Exa search server",
+    identifiers: /\bexa-mcp-server\b|mcp\.exa\.ai/iu,
+    rules: [
+      { tools: /^web_search_exa$/u, toolClass: "source", capabilities: READS },
+      { tools: /^web_fetch_exa$/u, toolClass: "sink", capabilities: BROWSE, roles: { "urls[*]": "url" } }
+    ]
+  },
+  {
+    id: "tavily",
+    title: "Tavily search server",
+    identifiers: /\btavily-mcp\b|mcp\.tavily\.com/iu,
+    rules: [
+      { tools: /^tavily_(search|research)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^tavily_extract$/u, toolClass: "sink", capabilities: BROWSE, roles: { "urls[*]": "url" } },
+      { tools: /^tavily_(crawl|map)$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } }
+    ]
+  },
+  {
+    id: "sentry",
+    title: "Sentry MCP server",
+    identifiers: /@sentry\/mcp-server|mcp\.sentry\.dev/iu,
+    rules: [
+      { tools: /^(find_\w+|search_\w+|get_sentry_resource|analyze_issue_with_seer)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^(update_issue|execute_sentry_tool)$/u, toolClass: "sink", capabilities: REMOTE_WRITE }
+    ]
+  },
+  {
+    id: "postgres",
+    title: "MCP Postgres server (read only queries)",
+    identifiers: /@modelcontextprotocol\/server-postgres|\bmcp\/postgres\b/iu,
+    rules: [{ tools: /^query$/u, toolClass: "source", capabilities: READS }]
+  },
+  {
+    id: "chrome-devtools",
+    title: "Chrome DevTools MCP server",
+    identifiers: /\bchrome-devtools-mcp\b/iu,
+    rules: [
+      { tools: /^(navigate_page|new_page)$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } },
+      { tools: /^(take_snapshot|take_screenshot|take_heapsnapshot|list_console_messages|get_console_message|list_network_requests|get_network_request|list_pages|get_css_styles|performance_analyze_insight|lighthouse_audit|wait_for)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^evaluate_script$/u, toolClass: "sink", capabilities: ["executes_code", "network_egress"] },
+      { tools: /^upload_file$/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "reads_sensitive_data"], roles: { "filePaths[*]": "file_path" } },
+      { tools: /^(click|fill|fill_form|hover|drag|press_key|type_text|handle_dialog|emulate)$/u, toolClass: "sink", capabilities: REMOTE_WRITE },
+      { tools: /^(performance_start_trace|performance_stop_trace|screencast_start)$/u, toolClass: "sink", capabilities: LOCAL_WRITE, roles: { filePath: "file_path" } },
+      { tools: /^(select_page|close_page|resize_page|screencast_stop)$/u, toolClass: "pure", capabilities: [] }
+    ]
+  },
+  {
+    id: "heroku",
+    title: "Heroku MCP server",
+    identifiers: /@heroku\/mcp-server/iu,
+    rules: [
+      { tools: /^pg_credentials$/u, toolClass: "source", capabilities: ["accesses_credentials", "reads_sensitive_data"] },
+      { tools: /^(list_\w+|get_\w+|pg_(info|ps|locks|outliers|maintenance|backups)|ps_list|pipelines_(list|info))$/u, toolClass: "source", capabilities: READS },
+      { tools: /^(pg_psql|deploy_one_off_dyno)$/u, toolClass: "sink", capabilities: ["executes_code", "writes_remote", "network_egress"] },
+      { tools: /^deploy_to_heroku$/u, toolClass: "sink", capabilities: REMOTE_WRITE, roles: { rootUri: "url", tarballUri: "url" } },
+      { tools: /^pg_kill$/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "deletes_data"] },
+      { tools: /^(create_app|rename_app|maintenance_on|maintenance_off|create_addon|ps_scale|ps_restart|pipelines_create|pipelines_promote|pg_upgrade)$/u, toolClass: "sink", capabilities: REMOTE_WRITE }
+    ]
+  },
+  {
+    id: "mongodb",
+    title: "MongoDB MCP server",
+    identifiers: /\bmongodb-mcp-server\b/iu,
+    rules: [
+      { tools: /^(aggregate|aggregate-db|collection-indexes|collection-schema|collection-storage-size|count|db-stats|explain|export|find|list-[\w-]+|mongodb-logs|search-knowledge)$/u, toolClass: "source", capabilities: READS },
+      // A connection string from untrusted content could point at an attacker's database.
+      { tools: /^connect$/u, toolClass: "sink", capabilities: ["network_egress"], roles: { connectionString: "url" } },
+      { tools: /^disconnect$/u, toolClass: "pure", capabilities: [] },
+      { tools: /^(delete-many|drop-collection|drop-database|drop-index)$/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "deletes_data"] },
+      { tools: /^(create-collection|create-index|insert-many|update-many|rename-collection)$/u, toolClass: "sink", capabilities: REMOTE_WRITE }
+    ]
+  },
+  {
+    id: "browserbase",
+    title: "Browserbase MCP server",
+    identifiers: /@browserbasehq\/mcp-server-browserbase|\bmcp-server-browserbase\b/iu,
+    rules: [
+      { tools: /^browserbase_stagehand_navigate$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } },
+      { tools: /^browserbase_(stagehand_extract|stagehand_observe|screenshot|stagehand_get_url)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^browserbase_(stagehand_act|stagehand_agent)$/u, toolClass: "sink", capabilities: REMOTE_WRITE },
+      { tools: /^browserbase_session_(create|close)$/u, toolClass: "pure", capabilities: [] }
+    ]
+  },
+  {
+    id: "figma",
+    title: "Figma developer MCP server",
+    identifiers: /\bfigma-developer-mcp\b/iu,
+    rules: [
+      { tools: /^get_figma_data$/u, toolClass: "source", capabilities: READS },
+      { tools: /^download_figma_images$/u, toolClass: "sink", capabilities: LOCAL_WRITE, roles: { localPath: "file_path" } }
+    ]
+  },
+  {
+    id: "desktop-commander",
+    title: "Desktop Commander MCP server",
+    identifiers: /@wonderwhy-er\/desktop-commander/iu,
+    rules: [
+      // read_file also fetches urls (isUrl), so a path copied from untrusted content is checked.
+      { tools: /^read_file$/u, toolClass: "sink", capabilities: BROWSE, roles: { path: "file_path" } },
+      { tools: /^(get_config|read_multiple_files|list_directory|start_search|get_more_search_results|list_searches|get_file_info|read_process_output|list_sessions|list_processes|get_usage_stats|get_recent_tool_calls)$/u, toolClass: "source", capabilities: READS, roles: FILE_ROLES },
+      { tools: /^(start_process|interact_with_process)$/u, toolClass: "sink", capabilities: ["executes_code", "network_egress", "writes_local"], roles: { command: "shell_command" } },
+      { tools: /^move_file$/u, toolClass: "sink", capabilities: [...LOCAL_WRITE, "deletes_data"], roles: FILE_ROLES },
+      { tools: /^(write_file|write_pdf|create_directory|edit_block)$/u, toolClass: "sink", capabilities: LOCAL_WRITE, roles: { ...FILE_ROLES, file_path: "file_path", outputPath: "file_path" } },
+      { tools: /^(set_config_value|force_terminate|kill_process|stop_search)$/u, toolClass: "sink", capabilities: ["writes_local"] },
+      { tools: /^give_feedback_to_desktop_commander$/u, toolClass: "sink", capabilities: ["network_egress"] }
+    ]
+  },
+  {
+    id: "gitlab",
+    title: "MCP GitLab server",
+    identifiers: /@modelcontextprotocol\/server-gitlab|\bmcp\/gitlab\b/iu,
+    rules: [
+      { tools: /^(search_repositories|get_file_contents)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^(create_or_update_file|create_repository|push_files|create_issue|create_merge_request|fork_repository|create_branch)$/u, toolClass: "sink", capabilities: REMOTE_WRITE, roles: { project_id: "repository_destination" } }
+    ]
+  },
+  {
+    id: "google-maps",
+    title: "MCP Google Maps server",
+    identifiers: /@modelcontextprotocol\/server-google-maps|\bmcp\/google-maps\b/iu,
+    rules: [{ tools: /^maps_\w+$/u, toolClass: "source", capabilities: READS }]
+  },
+  {
+    id: "hubspot",
+    title: "HubSpot MCP server",
+    identifiers: /@hubspot\/mcp-server/iu,
+    rules: [
+      { tools: /^hubspot-(get-|list-|search-|batch-read-)/u, toolClass: "source", capabilities: READS },
+      { tools: /^hubspot-generate-feedback-link$/u, toolClass: "pure", capabilities: [] },
+      { tools: /^hubspot-(batch-create-|batch-update-|create-|update-)/u, toolClass: "sink", capabilities: REMOTE_WRITE }
+    ]
+  },
+  {
+    id: "apify",
+    title: "Apify Actors MCP server",
+    identifiers: /@apify\/actors-mcp-server|mcp\.apify\.com/iu,
+    rules: [
+      { tools: /^(search-actors|fetch-actor-details|get-actor-run|get-dataset-items|get-key-value-store-record|search-apify-docs)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^fetch-apify-docs$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } },
+      // Actors are arbitrary cloud programs (scrapers, automations) run with the given input.
+      { tools: /^call-actor$/u, toolClass: "sink", capabilities: ["executes_code", "writes_remote", "network_egress"] },
+      { tools: /^abort-actor-run$/u, toolClass: "sink", capabilities: REMOTE_WRITE },
+      { tools: /^report-problem$/u, toolClass: "sink", capabilities: MESSAGE }
+    ]
   },
   {
     id: "time",

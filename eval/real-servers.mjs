@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Lists tools from real MCP servers and reports how Palizade classifies them and whether the
 // metadata checks flag any (false positives, since these are the official reference servers).
-// usage: node eval/real-servers.mjs servers.yaml [--out results/real-servers.md]
-import { readFile, writeFile } from "node:fs/promises";
+// usage: node eval/real-servers.mjs servers.yaml [--out results/real-servers.md] [--dump dir] [--timeout ms]
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { catalogEntryFor, classifyToolDetailed, collectToolsFromStdioServer, DEFAULT_METADATA_GUARD_CONFIG, InMemoryToolRegistry, parseConfig, reviewMetadata } from "../packages/core/dist/index.js";
 import { HeuristicDetector } from "../packages/detectors/dist/index.js";
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: { out: { type: "string" } } });
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { out: { type: "string" }, dump: { type: "string" }, timeout: { type: "string", default: "20000" } } });
 if (positionals.length !== 1) {
   console.error("usage: node eval/real-servers.mjs servers.yaml [--out file.md]");
   process.exit(2);
@@ -21,7 +22,8 @@ const flagged = [];
 for (const [name, server] of Object.entries(config.servers)) {
   let tools;
   try {
-    tools = await collectToolsFromStdioServer(server, 20_000, { serverName: name });
+    tools = await collectToolsFromStdioServer(server, Number(values.timeout), { serverName: name });
+    if (values.dump) { await mkdir(values.dump, { recursive: true }); await writeFile(join(values.dump, `${name}.json`), JSON.stringify(tools, null, 2)); }
   } catch (error) {
     rows.push({ name, error: String(error?.message ?? error).slice(0, 120) });
     continue;
