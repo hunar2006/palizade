@@ -364,6 +364,38 @@ describe("installClientConfig", () => {
     expect(() => resolveClientConfigPath("vscode")).toThrow("Supported clients: claude-desktop, claude-code, cursor");
   });
 
+  it("wraps Claude Code local scope servers for the current directory only", async () => {
+    const { root, palizadeConfigPath, cliPath, cleanup } = await makeFixture();
+    try {
+      const claudeJson = join(root, ".claude.json");
+      const projectDir = join(root, "work", "app");
+      const other = { mcpServers: { keep: { command: "node", args: ["other.mjs"] } } };
+      await writeFile(claudeJson, JSON.stringify({
+        mcpServers: { userScoped: { command: "node", args: ["user.mjs"] } },
+        projects: {
+          [projectDir.replace(/\\/gu, "/")]: { allowedTools: [], mcpServers: { db: { command: "node", args: ["db.mjs"], env: { DB: "${DB_URL}" } } } },
+          [join(root, "elsewhere")]: other
+        }
+      }), "utf8");
+
+      const result = await installAllClientConfigs({ client: "claude-code", local: true, clientConfigPath: claudeJson, configPath: palizadeConfigPath, cliPath, cwd: projectDir });
+
+      expect(result.wrapped.map((server) => server.name)).toEqual(["db"]);
+      const updated = JSON.parse(await readFile(claudeJson, "utf8")) as { mcpServers: Record<string, unknown>; projects: Record<string, { mcpServers: Record<string, { args: string[] }>; allowedTools: unknown[] }> };
+      expect(updated.mcpServers.userScoped).toEqual({ command: "node", args: ["user.mjs"] });
+      const project = updated.projects[projectDir.replace(/\\/gu, "/")]!;
+      expect(project.allowedTools).toEqual([]);
+      expect(project.mcpServers.db!.args).toContain("wrap");
+      expect(updated.projects[join(root, "elsewhere")]).toEqual(other);
+
+      const missing = await installAllClientConfigs({ client: "claude-code", local: true, clientConfigPath: claudeJson, configPath: palizadeConfigPath, cliPath, cwd: join(root, "nowhere"), dryRun: true });
+      expect(missing.wrapped).toEqual([]);
+      await expect(installAllClientConfigs({ client: "cursor", local: true, configPath: palizadeConfigPath, cliPath, cwd: root })).rejects.toThrow("--local applies only");
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("imports remote servers with their headers, normalizes Cursor placeholders, and skips sse and ws", async () => {
     const { root, palizadeConfigPath, cliPath, cleanup } = await makeFixture();
     try {

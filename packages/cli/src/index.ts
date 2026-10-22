@@ -76,6 +76,7 @@ program.command("install-config")
   .option("--config <path>", "Path to this project's palizade.yaml")
   .option("--client-config <path>", "Override the client config file location")
   .option("--project", "Use the project config in the current directory (.mcp.json or .cursor/mcp.json)", false)
+  .option("--local", "Claude Code only: servers added at the default local scope for the current directory (in ~/.claude.json)", false)
   .option("--name <entryName>", "Name for the mcpServers entry")
   .option("--all", "Wrap every unprotected MCP server in the client config", false)
   .option("--lock", "Print lock approve commands for newly auto-added servers", false)
@@ -86,6 +87,7 @@ program.command("install-config")
     config?: string;
     clientConfig?: string;
     project: boolean;
+    local: boolean;
     name?: string;
     all: boolean;
     lock: boolean;
@@ -104,6 +106,7 @@ program.command("install-config")
         configPath: selectInstallConfigPath(command, program),
         clientConfigPath: options.clientConfig,
         project: options.project,
+        local: options.local,
         dryRun: options.dryRun,
         cliPath: getRunningCliPath()
       });
@@ -152,6 +155,7 @@ program.command("install-config")
       configPath: selectInstallConfigPath(command, program),
       clientConfigPath: options.clientConfig,
       project: options.project,
+      local: options.local,
       entryName: options.name,
       dryRun: options.dryRun,
       force: options.force,
@@ -515,7 +519,8 @@ program.command("doctor")
   .option("--client <name>", "Target client for MCP coverage: claude-desktop, claude-code or cursor", "claude-desktop")
   .option("--client-config <path>", "Override the client config file location for coverage")
   .option("--project", "Check the project config in the current directory", false)
-  .action(async (options: { client: string; clientConfig?: string; project: boolean }) => {
+  .option("--local", "Claude Code only: check servers at the local scope for the current directory", false)
+  .action(async (options: { client: string; clientConfig?: string; project: boolean; local: boolean }) => {
     const configPath = program.opts<{ config: string }>().config;
     const config = await loadConfigForCli(configPath);
     console.log(`Config: ${resolve(configPath)}`);
@@ -540,7 +545,8 @@ program.command("doctor")
     const coverage = await inspectClientCoverage({
       client: options.client,
       clientConfigPath: options.clientConfig,
-      project: options.project
+      project: options.project,
+      local: options.local
     });
     console.log(`Client config: ${coverage.clientConfigPath}`);
     if (!coverage.existed) {

@@ -35,7 +35,13 @@ palizade install-config --all --client claude-code --project   # this repo's .mc
 palizade install-hooks claude-code                             # also cover Bash, Read, Write, WebFetch
 ```
 
-Close Claude Code before running this, since it also writes `~/.claude.json`. Servers added with `claude mcp add` at the default local scope live under a per-project key in that file and are not rewritten yet; add them with `--scope user` or `--scope project`, or wrap them by hand.
+Servers added with plain `claude mcp add` use the local scope, which belongs to one directory. Run this from that directory to wrap them:
+
+```bash
+palizade install-config --all --client claude-code --local
+```
+
+Close Claude Code before running these, since it also writes `~/.claude.json`.
 
 **Cursor**
 

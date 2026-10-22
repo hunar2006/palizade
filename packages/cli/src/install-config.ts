@@ -17,6 +17,7 @@ export interface InstallConfigOptions {
   configPath?: string | undefined;
   clientConfigPath?: string | undefined;
   project?: boolean | undefined;
+  local?: boolean | undefined;
   entryName?: string | undefined;
   dryRun?: boolean | undefined;
   force?: boolean | undefined;
@@ -30,6 +31,7 @@ export interface InstallAllConfigOptions {
   configPath?: string | undefined;
   clientConfigPath?: string | undefined;
   project?: boolean | undefined;
+  local?: boolean | undefined;
   dryRun?: boolean | undefined;
   cwd?: string | undefined;
   cliPath?: string | undefined;
@@ -108,6 +110,7 @@ export async function installClientConfig(options: InstallConfigOptions): Promis
   const clientConfigPath = options.clientConfigPath
     ? resolve(cwd, options.clientConfigPath)
     : resolveClientConfigPath(client, osPlatform(), process.env, homedir(), options.project ? cwd : undefined);
+  const localKey = localScopeKey(client, options.local, cwd);
   const palizadeConfigPath = resolvePalizadeConfigPath(options.configPath, cwd);
   const entryName = options.entryName ?? `palizade-${options.serverName}`;
   const entry = makeEntry({
@@ -120,7 +123,7 @@ export async function installClientConfig(options: InstallConfigOptions): Promis
 
   const existed = await exists(clientConfigPath);
   const config = existed ? await readClientConfig(clientConfigPath) : { mcpServers: {} };
-  const mcpServers = ensureMcpServers(config, clientConfigPath);
+  const mcpServers = ensureMcpServers(config, clientConfigPath, localKey, true);
   if (Object.prototype.hasOwnProperty.call(mcpServers, entryName) && !options.force) {
     throw new Error(
       `MCP server entry '${entryName}' already exists in ${clientConfigPath}. ` +
@@ -180,13 +183,14 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
   const clientConfigPath = options.clientConfigPath
     ? resolve(cwd, options.clientConfigPath)
     : resolveClientConfigPath(client, osPlatform(), process.env, homedir(), options.project ? cwd : undefined);
+  const localKey = localScopeKey(client, options.local, cwd);
   const palizadeConfigPath = resolvePalizadeConfigPath(options.configPath, cwd);
   const cliPath = options.cliPath ?? getRunningCliPath();
   const warnings = await validatePalizadeConfig(palizadeConfigPath);
 
   const existed = await exists(clientConfigPath);
   const config = existed ? await readClientConfig(clientConfigPath) : { mcpServers: {} };
-  const mcpServers = ensureMcpServers(config, clientConfigPath);
+  const mcpServers = ensureMcpServers(config, clientConfigPath, localKey);
 
   const palizadeConfig = await readPalizadeConfig(palizadeConfigPath);
   const palizadeServers = ensurePalizadeServers(palizadeConfig, palizadeConfigPath);
@@ -288,6 +292,7 @@ export async function inspectClientCoverage(options: {
   client?: string | undefined;
   clientConfigPath?: string | undefined;
   project?: boolean | undefined;
+  local?: boolean | undefined;
   cwd?: string | undefined;
 }): Promise<ClientCoverageResult> {
   const client = options.client ?? "claude-desktop";
@@ -295,6 +300,7 @@ export async function inspectClientCoverage(options: {
   const clientConfigPath = options.clientConfigPath
     ? resolve(cwd, options.clientConfigPath)
     : resolveClientConfigPath(client, osPlatform(), process.env, homedir(), options.project ? cwd : undefined);
+  const localKey = localScopeKey(client, options.local, cwd);
 
   if (!await exists(clientConfigPath)) {
     return {
@@ -308,7 +314,7 @@ export async function inspectClientCoverage(options: {
   }
 
   const config = await readClientConfig(clientConfigPath);
-  const mcpServers = ensureMcpServers(config, clientConfigPath);
+  const mcpServers = ensureMcpServers(config, clientConfigPath, localKey);
   const rows = Object.entries(mcpServers).map(([name, rawEntry]): ClientCoverageRow => {
     const wrapped = isPalizadeWrapper(rawEntry);
     const command = isRecord(rawEntry) && typeof rawEntry.command === "string"
@@ -416,7 +422,30 @@ async function readClientConfig(path: string): Promise<JsonRecord> {
   }
 }
 
-function ensureMcpServers(config: JsonRecord, path: string): JsonRecord {
+// Claude Code's default "local" scope keeps servers under projects[<project dir>] in ~/.claude.json.
+function localScopeKey(client: string, local: boolean | undefined, cwd: string): string | undefined {
+  if (!local) return undefined;
+  if (client !== "claude-code") throw new Error("--local applies only to --client claude-code.");
+  return resolve(cwd);
+}
+
+function findProjectKey(projects: JsonRecord, dir: string): string | undefined {
+  // Keys may use either slash style on Windows, and drive letter case can differ.
+  const normalize = (value: string) => value.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+  return Object.keys(projects).find((key) => normalize(key) === normalize(dir));
+}
+
+function ensureMcpServers(config: JsonRecord, path: string, localKey?: string, requireLocal = false): JsonRecord {
+  if (localKey !== undefined) {
+    const projects = isRecord(config.projects) ? config.projects : undefined;
+    const key = projects ? findProjectKey(projects, localKey) : undefined;
+    if (!projects || !key || !isRecord(projects[key])) {
+      if (requireLocal) throw new Error(`${path} has no Claude Code project entry for ${localKey}. Open Claude Code in that directory once, or use --project.`);
+      // Nothing to wrap: Claude Code has no local scope entry for this directory.
+      return {};
+    }
+    return ensureMcpServers(projects[key] as JsonRecord, `${path} projects["${key}"]`);
+  }
   const existing = config.mcpServers;
   if (existing === undefined) {
     const mcpServers: JsonRecord = {};
