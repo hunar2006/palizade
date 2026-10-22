@@ -19,3 +19,6 @@ cases:
   - name: deleting data after untrusted content needs approval
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [deletes_data], session_untrusted: true }
     expect: { action: require_approval, rule: approve-delete-after-untrusted }
+  - name: changing a password after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [accesses_credentials, reads_sensitive_data, writes_remote], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-credential-change-after-untrusted }

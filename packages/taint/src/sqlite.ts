@@ -180,6 +180,17 @@ export class SqliteTaintStore implements TaintStore {
     } catch (error) { this.db.exec("rollback"); throw error; }
   }
 
+  verbatimToken(sessionId: string, value: string): TaintMatch | undefined {
+    this.pruneExpired();
+    const wanted = new Set(["", ".", ",", ";", ":", "!", "?"].map((suffix) => hmacSha256Hex(this.hmacKey, canonicalizeToken(value + suffix))));
+    for (const record of this.recordsForScope(sessionId)) {
+      if (!record.classes.includes("untrusted")) continue;
+      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate));
+      if (token) return { taintId: record.id, reason: "token", token, classes: record.classes };
+    }
+    return undefined;
+  }
+
   hasUserStatements(sessionId: string): boolean {
     return this.db.prepare("select 1 from user_statements where scope_id = ? and expires_at > ? limit 1").get(this.scopeId(sessionId), Date.now()) !== undefined;
   }

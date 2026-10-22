@@ -13,7 +13,7 @@ const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
   [/\b(write|save|edit|create|move|append)\b/iu, ["file_write", "writes_local"]],
   [/\b(delete|remove|rm|destroy)\b/iu, ["deletes_data"]],
   // Verbs that change shared state somewhere else: membership, settings, sharing, scheduling.
-  [/\b(add|invite|update|set|assign|grant|share|rename|archive|reply|forward|schedule|cancel)\b/iu, ["writes_remote"]],
+  [/\b(add|invite|update|set|assign|grant|share|rename|archive|reply|forward|schedule|cancel|change|reset|rotate|revoke)\b/iu, ["writes_remote"]],
   // shortcut: verb match only, so read tools like get_transfer_history also become sinks (over-block, fails closed).
   [/\b(buy|sell|trade|transfer|withdraw|deposit|pay|payment|purchase|refund|place order)\b/iu, ["writes_remote"]],
   [/\b(exec|shell|run|spawn|command|script|terminal)\b/iu, ["executes_code"]],
@@ -64,7 +64,7 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
     reasons.push(`catalog:${catalog.entry.id}`);
     // destructiveHint may still raise a catalog class to sink, never lower it. openWorldHint only says
     // the tool touches the outside world, which the catalog entry already accounts for.
-    const destructive = tool?.annotations?.destructiveHint === true;
+    const destructive = tool?.annotations?.destructiveHint === true && !catalog.rule.ignoreDestructiveHint;
     const toolClass = configured ?? (destructive ? "sink" : catalog.rule.toolClass);
     if (!configured && destructive && catalog.rule.toolClass !== "sink") reasons.push("annotation:raised");
     return { toolClass, capabilities: [...capabilities], reasons, ...(catalog.rule.roles ? { argumentRoles: catalog.rule.roles } : {}) };

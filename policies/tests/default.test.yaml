@@ -4,6 +4,12 @@ cases:
   - name: a destination copied from untrusted content is blocked
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [sends_message, network_egress], tainted_destination: true, taint: true }
     expect: { action: block, rule: block-tainted-destination }
+  - name: opening a link exactly as an untrusted page wrote it is allowed
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress, reads_untrusted_content], tainted_destination: true, taint: true, copied_link_only: true }
+    expect: { action: allow, rule: allow-following-copied-link }
+  - name: a copied link is not followed once the session holds sensitive data
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress, reads_untrusted_content], tainted_destination: true, taint: true, copied_link_only: true, rule_of_two: true }
+    expect: { action: block, rule: block-tainted-destination }
   - name: a lookalike host is blocked
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress], lookalike_destination: true }
     expect: { action: block, rule: block-lookalike-destination }
@@ -37,3 +43,6 @@ cases:
   - name: deleting data after untrusted content needs approval
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [deletes_data], session_untrusted: true }
     expect: { action: require_approval, rule: approve-delete-after-untrusted }
+  - name: changing a password after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [accesses_credentials, reads_sensitive_data, writes_remote], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-credential-change-after-untrusted }

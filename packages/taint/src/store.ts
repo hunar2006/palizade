@@ -14,6 +14,17 @@ export class InMemoryTaintStore implements TaintStore {
     for (const canonical of canonicals) this.statements.set(sha256(canonical), expiresAt);
   }
 
+  verbatimToken(sessionId: string, value: string): TaintMatch | undefined {
+    const wanted = new Set(["", ".", ",", ";", ":", "!", "?"].map((suffix) => normalizeText(value + suffix)));
+    for (const record of this.records.values()) {
+      if (record.sessionId !== sessionId && !record.persistent) continue;
+      if (!record.classes.includes("untrusted")) continue;
+      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate));
+      if (token) return { taintId: record.id, reason: "token", token, classes: record.classes };
+    }
+    return undefined;
+  }
+
   hasUserStatements(_sessionId: string): boolean {
     const now = Date.now();
     return [...this.statements.values()].some((expiresAt) => expiresAt > now);

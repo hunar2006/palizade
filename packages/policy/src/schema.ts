@@ -42,6 +42,7 @@ export const policyConditionSchema = z.object({
   destination_allowed: z.boolean().optional(),
   tainted_destination: z.boolean().optional(),
   user_stated_destination: z.boolean().optional(),
+  copied_link_only: z.boolean().optional(),
   lookalike_destination: z.boolean().optional(),
   new_destination: z.boolean().optional(),
   split_match: z.boolean().optional(),

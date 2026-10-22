@@ -79,6 +79,11 @@ export interface TaintStore {
   addUserStatements(sessionId: string, canonicals: string[], ttlMs: number): void;
   isUserStated(sessionId: string, canonical: string): boolean;
   hasUserStatements(sessionId: string): boolean;
+  /**
+   * The untrusted record that contains `value` as a whole url token, if any: the value was copied
+   * verbatim, not built from parts. Trailing sentence punctuation in the source is ignored.
+   */
+  verbatimToken(sessionId: string, value: string): TaintMatch | undefined;
 }
 
 export interface TemporalTaintConfig {

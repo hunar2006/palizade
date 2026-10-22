@@ -44,6 +44,7 @@ export interface PolicyCondition {
   destination_allowed?: boolean | undefined;
   tainted_destination?: boolean | undefined;
   user_stated_destination?: boolean | undefined;
+  copied_link_only?: boolean | undefined;
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
@@ -95,6 +96,7 @@ export interface PolicyContext {
   destination_allowed?: boolean | undefined;
   tainted_destination?: boolean | undefined;
   user_stated_destination?: boolean | undefined;
+  copied_link_only?: boolean | undefined;
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;

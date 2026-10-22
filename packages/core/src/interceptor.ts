@@ -357,6 +357,17 @@ export class InterceptionEngine {
       allTaintMatches.push(...inputResponseMatches);
     }
 
+    // Following a link exactly as an untrusted page wrote it leaks nothing the page's author did
+    // not already have; building a url from page text, or adding data to it, still counts as copied.
+    const verbatimLinks = toolClass === "sink" && taintedDestination
+      && classification.capabilities.every((capability) => capability === "network_egress" || capability === "reads_untrusted_content")
+      ? argumentFields.filter((field) => field.role === "url" && /^https?:\/\/\S+$/u.test(field.text.trim()) && this.options.taintStore.verbatimToken(this.options.sessionId, field.text.trim()) !== undefined).map((field) => field.text.trim())
+      : [];
+    const copiedLinkOnly = verbatimLinks.length > 0 && !sensitiveTaint && !secretDetected && !piiDetected && !splitMatch && !inputResponseTaint
+      // Derived fields (a url's host, path "url<host>") come from the link itself.
+      && fieldMatches.every(({ field, match }) => match.reason === "temporal" || verbatimLinks.includes(field.text.trim()) || (field.path.includes("<") && verbatimLinks.some((link) => link.toLowerCase().includes(field.text.trim().toLowerCase()))))
+      && !matchText(verbatimLinks.reduce((text, link) => text.split(link).join(" "), argumentText)).some((match) => match.reason !== "temporal");
+
     const policyDecision = evaluatePolicy(this.options.policy, {
       direction: "request",
       method: message.method,
@@ -373,6 +384,7 @@ export class InterceptionEngine {
       destination_allowed: destination.allowed,
       tainted_destination: taintedDestination,
       user_stated_destination: userStated.size > 0,
+      copied_link_only: copiedLinkOnly,
       lookalike_destination: lookalikeDestination,
       new_destination: newDestination,
       split_match: splitMatch,

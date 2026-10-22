@@ -171,6 +171,16 @@ rules:
     action: require_approval
     reason: This session has seen untrusted content, and deleting data cannot be undone.
 
+  - id: approve-credential-change-after-untrusted
+    name: Ask before changing passwords, keys or tokens after untrusted content
+    when:
+      direction: request
+      tool_class: sink
+      capabilities_all: [ accesses_credentials, writes_remote ]
+      session_untrusted: true
+    action: require_approval
+    reason: A password, key or token change after reading untrusted content could be an account takeover.
+
   # --- M2: session quarantine ---
   - id: approve-quarantined-sink
     when: { direction: request, tool_class: sink, session_quarantined: true }
