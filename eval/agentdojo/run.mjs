@@ -11,6 +11,7 @@ const { values } = parseArgs({
   options: {
     policies: { type: "string", default: "default,strict" },
     trust: { type: "string", default: "untrusted" },
+    "user-intent": { type: "string", default: "on" },
     out: { type: "string", default: "results/agentdojo" },
     work: { type: "string", default: ".palizade/agentdojo" },
     refresh: { type: "boolean", default: false },
@@ -40,7 +41,7 @@ if (values.refresh || !existsSync(traces)) {
 run(python, ["-I", join(here, "score.py"), "--decisions", "none", "--traces", traces, "--out", join(out, "none.json"), "--markdown", join(out, "none.md")]);
 for (const policy of values.policies.split(",")) {
   const decisions = join(work, `decisions-${policy}.jsonl`);
-  run(process.execPath, [join(here, "replay.mjs"), "--traces", traces, "--out", decisions, "--policy", policy, "--trust", values.trust]);
+  run(process.execPath, [join(here, "replay.mjs"), "--traces", traces, "--out", decisions, "--policy", policy, "--trust", values.trust, "--user-intent", values["user-intent"]]);
   run(python, ["-I", join(here, "score.py"), "--decisions", decisions, "--out", join(out, `${policy}.json`), "--markdown", join(out, `${policy}.md`)]);
 }
 console.error(`results in ${out}`);

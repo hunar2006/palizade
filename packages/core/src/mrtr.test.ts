@@ -63,6 +63,7 @@ function makeConfig(dir: string): PalizadeConfig {
     hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576 },
     taint: {
       exposure: { ttlMs: 7_200_000 },
+      userIntent: { enabled: true, ttlMs: 7_200_000 },
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1_800_000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },

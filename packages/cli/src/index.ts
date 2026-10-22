@@ -15,6 +15,7 @@ import {
   diffToolsAgainstLock,
   ensureListenerToken,
   evaluateHookEvent,
+  isPromptEvent,
   buildDenyOutput,
   formatToolDiff,
   HttpBridgeProxy,
@@ -793,6 +794,12 @@ program.command("hook")
       }
     } catch {
       const reason = "Hook evaluation failed; check the local configuration and input.";
+      // A prompt hook only records intent; failing closed would block the user's own message.
+      if (isPromptEvent(client as "claude-code" | "cursor" | "codex", hookEvent)) {
+        if (client === "cursor") console.log(JSON.stringify({ continue: true }));
+        console.error(`Palizade prompt hook skipped: ${reason}`);
+        return;
+      }
       if (failMode === "closed") {
         console.log(JSON.stringify(buildDenyOutput(client as "claude-code" | "cursor" | "codex", hookEvent, reason).output));
         console.error(`Palizade hook failed closed: ${reason}`);

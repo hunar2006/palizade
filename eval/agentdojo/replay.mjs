@@ -11,7 +11,7 @@ import { InterceptionEngine, LockfileStore, parseConfig } from "../../packages/c
 import { AuditLogger } from "../../packages/audit/dist/index.js";
 import { HeuristicDetector } from "../../packages/detectors/dist/index.js";
 import { parsePolicy } from "../../packages/policy/dist/index.js";
-import { InMemoryTaintStore } from "../../packages/taint/dist/index.js";
+import { InMemoryTaintStore, extractStatedObservables } from "../../packages/taint/dist/index.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const { values } = parseArgs({
@@ -19,7 +19,9 @@ const { values } = parseArgs({
     traces: { type: "string" },
     out: { type: "string" },
     policy: { type: "string", default: "default" },
-    trust: { type: "string", default: "untrusted" }
+    trust: { type: "string", default: "untrusted" },
+    // "on" feeds the user task prompt to Palizade, as the prompt hooks do in Claude Code, Codex and Cursor.
+    "user-intent": { type: "string", default: "on" }
   }
 });
 if (!values.traces || !values.out) {
@@ -41,7 +43,7 @@ for await (const line of lines) {
   results.push(await replayTrace(record, tools.get(record.suite)));
 }
 await writeFile(values.out, results.map((result) => JSON.stringify(result)).join("\n") + "\n");
-console.error(`replayed ${results.length} traces with policy=${values.policy} trust=${values.trust}`);
+console.error(`replayed ${results.length} traces with policy=${values.policy} trust=${values.trust} user-intent=${values["user-intent"]}`);
 
 async function replayTrace(trace, suiteTools) {
   const dir = await mkdtemp(join(tmpdir(), "palizade-agentdojo-"));
@@ -57,14 +59,19 @@ async function replayTrace(trace, suiteTools) {
     }), dir);
     let current;
     const events = [];
+    const taintStore = new InMemoryTaintStore();
+    const sessionId = `${trace.suite}-${trace.user_task}-${trace.injection_task ?? "clean"}`;
+    if (values["user-intent"] === "on" && typeof trace.prompt === "string") {
+      taintStore.addUserStatements(sessionId, extractStatedObservables(trace.prompt), 3_600_000);
+    }
     const engine = new InterceptionEngine({
       config,
       serverName,
       server: config.servers[serverName],
-      sessionId: `${trace.suite}-${trace.user_task}-${trace.injection_task ?? "clean"}`,
+      sessionId,
       policy,
       detector: new HeuristicDetector(),
-      taintStore: new InMemoryTaintStore(),
+      taintStore,
       audit: new AuditLogger([{ write: async (event) => { events.push(event); } }]),
       // Approve so the scripted trace continues; the decision is recorded as "approval".
       approvals: { requestApproval: async () => { if (current) current.outcome = "approval"; return { approved: true, reason: "replay", approver: "replay" }; } },

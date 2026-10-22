@@ -43,6 +43,7 @@ export interface PolicyCondition {
   pii_detected?: boolean | undefined;
   destination_allowed?: boolean | undefined;
   tainted_destination?: boolean | undefined;
+  user_stated_destination?: boolean | undefined;
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
@@ -93,6 +94,7 @@ export interface PolicyContext {
   pii_detected?: boolean | undefined;
   destination_allowed?: boolean | undefined;
   tainted_destination?: boolean | undefined;
+  user_stated_destination?: boolean | undefined;
   lookalike_destination?: boolean | undefined;
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;

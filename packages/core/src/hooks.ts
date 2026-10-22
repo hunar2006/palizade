@@ -1,7 +1,7 @@
 import { StaticApprovalProvider } from "@palizade/approvals";
 import { AuditLogger, JsonlAuditSink, SqliteAuditSink, type AuditEvent } from "@palizade/audit";
 import { loadPolicyFile } from "@palizade/policy";
-import { SqliteTaintStore } from "@palizade/taint";
+import { SqliteTaintStore, extractStatedObservables } from "@palizade/taint";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
 import { createDetector } from "./factory.js";
@@ -270,6 +270,44 @@ function enrichToolArguments(normalized: NormalizedNativeEvent): Record<string, 
   return input;
 }
 
+const PROMPT_EVENTS: Record<NativeClient, string> = {
+  "claude-code": "UserPromptSubmit",
+  codex: "UserPromptSubmit",
+  cursor: "beforeSubmitPrompt"
+};
+
+export function isPromptEvent(client: NativeClient, event: string): boolean {
+  return PROMPT_EVENTS[client] === event;
+}
+
+/**
+ * Remembers the destinations a user typed (email addresses, urls, hosts, handles, account
+ * numbers) so later sink calls to them are not treated as copied from untrusted content.
+ * Never blocks the prompt: any failure only means nothing is remembered.
+ */
+export function recordUserPrompt(config: PalizadeConfig, client: NativeClient, payload: unknown, sessionId?: string): HookDecisionOutput {
+  const allow: HookDecisionOutput = { exitCode: 0, output: client === "cursor" ? { continue: true } : undefined, reason: "Prompt recorded." };
+  if (!config.taint.userIntent.enabled) return { ...allow, reason: "User intent tracking is off." };
+  const prompt = payloadField(payload, "prompt", "user_prompt", "message");
+  if (!prompt) return { ...allow, reason: "No prompt text." };
+  const observables = extractStatedObservables(prompt);
+  if (observables.length === 0) return allow;
+  const store = new SqliteTaintStore(config.taint.sqlite, {
+    scope: config.taint.scope,
+    profileId: config.taint.profileId,
+    keyPath: config.taint.keyPath,
+    ttlMs: config.taint.ttlMs,
+    sessionScope: "client",
+    ...(process.env.PALIZADE_RUN_ID ? { runId: process.env.PALIZADE_RUN_ID } : {})
+  });
+  try {
+    store.addUserStatements(sessionId ?? payloadField(payload, "session_id", "conversation_id") ?? "native-session", observables, config.taint.userIntent.ttlMs);
+  } finally {
+    store.close();
+  }
+  return { ...allow, reason: `Remembered ${observables.length} destination(s) from the prompt.` };
+}
+
 export async function evaluateHookEvent(input: {
   config: PalizadeConfig;
   client: NativeClient;
@@ -278,6 +316,13 @@ export async function evaluateHookEvent(input: {
   sessionId?: string;
   cwd?: string;
 }): Promise<HookDecisionOutput> {
+  if (isPromptEvent(input.client, input.event)) {
+    try {
+      return recordUserPrompt(input.config, input.client, input.payload, input.sessionId);
+    } catch {
+      return { exitCode: 0, output: input.client === "cursor" ? { continue: true } : undefined, reason: "Prompt not recorded." };
+    }
+  }
   const normalized = normalizeNativeEvent(input.client, input.event, input.payload);
   if (!normalized) {
     return { exitCode: 0, output: undefined, reason: "Unsupported hook event; no decision." };

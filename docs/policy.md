@@ -28,7 +28,8 @@ The `persists_memory` capability marks entity/observation/relation, remember/not
 
 - `new_destination`: a destination is absent from configured and learned allowlists, including IDs. Strict mode blocks it.
 
-- `tainted_destination`: untrusted observable taint matched a URL, host, mail recipient, repository, channel or account ID after matching normalization/decoding. Temporal taint alone does not set this flag.
+- `tainted_destination`: untrusted observable taint matched a URL, host, mail recipient, repository, channel or account ID after matching normalization/decoding. Temporal taint alone does not set this flag. Destinations the user typed in a prompt are left out of this check (see `user_stated_destination`).
+- `user_stated_destination`: the call names at least one destination (email address, exact url, host, @handle or #channel, account or IBAN style number, phone number) that the user typed in a recent prompt. Palizade learns these from the prompt hooks (`UserPromptSubmit` in Claude Code and Codex, `beforeSubmitPrompt` in Cursor). Such values are not counted as copied from untrusted content, since the user asked for them; the rest of the call is checked as usual. Turn this off with `taint.userIntent.enabled: false`; statements expire after `taint.userIntent.ttlMs` (2 hours by default). A stated host does not vouch for a different url on that host.
 - `lookalike_destination`: a Unicode/punycode host skeleton collides with an allowlisted or untrusted-tainted host. Matching does not authorize the lookalike host.
 
 - `direction`: `request` or `response`

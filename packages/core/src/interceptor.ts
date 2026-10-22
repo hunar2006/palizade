@@ -5,7 +5,7 @@ import type { DetectionResult, Detector } from "@palizade/detectors";
 import { fuseDetections, hasPiiLabel, hasSecretLabel, maskKnownSensitiveText, maskSensitiveText, stripHiddenUnicode } from "@palizade/detectors";
 import { evaluatePolicy, type PolicyDecision, type PolicyDocument, type ToolClass } from "@palizade/policy";
 import type { TaintClass, TaintMatch, TaintRecord, TaintStore } from "@palizade/taint";
-import { expireExposure, expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
+import { expireExposure, maskStatedObservables, expandCandidates, canonicalHost, hostSkeleton, OutboundWindow, sha256 } from "@palizade/taint";
 import { extractArgumentFields, argumentRolesSummary, type ArgumentField } from "./arguments.js";
 import { classifyToolDetailed, type ToolClassification } from "./classifier.js";
 import type { PalizadeConfig, ServerConfig } from "./config.js";
@@ -257,7 +257,17 @@ export class InterceptionEngine {
     const ruleOfTwo = session.seenUntrusted && session.seenSensitive;
     const argumentText = flattenArguments(params.arguments);
     const matchCache = new Map<string, TaintMatch[]>();
-    const matchText = (text: string): TaintMatch[] => {
+    // Destinations the user typed are theirs even if untrusted content also mentions them.
+    const userIntent = this.options.config.taint.userIntent;
+    const userStated = new Set<string>();
+    const unstated = (text: string): string => {
+      if (!userIntent.enabled) return text;
+      const result = maskStatedObservables(text, (canonical) => this.options.taintStore.isUserStated(this.options.sessionId, canonical));
+      result.masked.forEach((canonical) => userStated.add(canonical));
+      return result.text;
+    };
+    const matchText = (raw: string): TaintMatch[] => {
+      const text = unstated(raw);
       if (!matchCache.has(text)) matchCache.set(text, expandCandidates(text, this.options.config.taint.decode).flatMap((candidate) =>
         this.options.taintStore.match(this.options.sessionId, candidate.text, { fuzzyHammingMax: this.options.config.taint.fuzzyHammingMax })
           .map((match): TaintMatch => ({ ...match, reason: candidate.kind === "original" || match.reason === "temporal" ? match.reason : `decoded:${candidate.kind}` }))));
@@ -359,6 +369,7 @@ export class InterceptionEngine {
       pii_detected: piiDetected,
       destination_allowed: destination.allowed,
       tainted_destination: taintedDestination,
+      user_stated_destination: userStated.size > 0,
       lookalike_destination: lookalikeDestination,
       new_destination: newDestination,
       split_match: splitMatch,
@@ -423,7 +434,8 @@ export class InterceptionEngine {
       secretDetected,
       piiDetected,
       taintClasses: classesFromMatches(allTaintMatches),
-      redacted: policyDecision.action === "redact_secrets"
+      redacted: policyDecision.action === "redact_secrets",
+      ...(userStated.size > 0 ? { metadata: { userStatedDestinations: userStated.size } } : {})
     });
 
     this.options.taintStore.consumeTurn(this.options.sessionId);

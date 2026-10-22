@@ -35,6 +35,8 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Presets:** `coding-agent` and `research-readonly`.
 - **Held out evaluation on AgentDojo:** `pnpm eval:agentdojo` replays AgentDojo ground truth traces through Palizade and scores them with AgentDojo's own checks. Results and method are in `results/agentdojo`.
 - **Ask before deletes after untrusted content:** new `session_untrusted` policy field and `approve-delete-after-untrusted` rule in the default, interactive and strict presets.
+- **Destinations you type:** prompt hooks (`UserPromptSubmit` for Claude Code and Codex, `beforeSubmitPrompt` for Cursor) record the destinations in your prompt, as keyed hashes, and calls to them are no longer blocked as copied from untrusted content. New `user_stated_destination` policy field and `taint.userIntent` settings. Prompt hooks never block a prompt.
+- **Safer hook installs:** Claude Code tool hooks get `onFailure: block`. Re-running `install-hooks` updates Palizade's entries in place instead of adding duplicates (Cursor entries were duplicated before).
 - **Docs:** `SECURITY.md` (private reporting and scope) and `CONTRIBUTING.md` (setup, evaluation rules, how to add catalog entries and policy tests).
 - **`palizade policy test`:** YAML test cases for policies, with strict field checking; the default and strict presets ship with their own cases.
 - **`palizade scan`:** one command that checks all MCP client configs and `palizade.yaml` for unprotected servers, plaintext secrets, unpinned packages and images, plain http urls and suspicious locked tool metadata, without starting servers.

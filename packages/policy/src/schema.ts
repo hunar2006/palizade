@@ -41,6 +41,7 @@ export const policyConditionSchema = z.object({
   pii_detected: z.boolean().optional(),
   destination_allowed: z.boolean().optional(),
   tainted_destination: z.boolean().optional(),
+  user_stated_destination: z.boolean().optional(),
   lookalike_destination: z.boolean().optional(),
   new_destination: z.boolean().optional(),
   split_match: z.boolean().optional(),

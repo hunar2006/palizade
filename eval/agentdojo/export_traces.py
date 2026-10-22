@@ -6,7 +6,7 @@ a worst case agent that obeys the injection after doing the user's task.
 
 Output (JSONL, one object per line):
   {"kind": "tools", "suite": ..., "tools": [{name, description, inputSchema}]}
-  {"kind": "trace", "suite", "user_task", "injection_task" (or null), "calls": [{phase, function, args, output}]}
+  {"kind": "trace", "suite", "user_task", "injection_task" (or null), "prompt", "calls": [{phase, function, args, output}]}
 """
 
 import argparse
@@ -61,7 +61,7 @@ def main():
             # Clean run: the user's task with the default (benign) placeholder text.
             env = suite.load_and_inject_default_environment({})
             calls = run_calls(FunctionsRuntime(suite.tools), env, user_task.ground_truth(env), "user")
-            out.write(json.dumps({"kind": "trace", "suite": suite_name, "user_task": user_id, "injection_task": None, "calls": calls}, default=str) + "\n")
+            out.write(json.dumps({"kind": "trace", "suite": suite_name, "user_task": user_id, "injection_task": None, "prompt": user_task.PROMPT, "calls": calls}, default=str) + "\n")
 
             for injection_id, injection_task in suite.injection_tasks.items():
                 try:
@@ -72,7 +72,7 @@ def main():
                 runtime = FunctionsRuntime(suite.tools)
                 calls = run_calls(runtime, env, user_task.ground_truth(env), "user")
                 calls += run_calls(runtime, env, injection_task.ground_truth(env), "injection")
-                out.write(json.dumps({"kind": "trace", "suite": suite_name, "user_task": user_id, "injection_task": injection_id, "calls": calls}, default=str) + "\n")
+                out.write(json.dumps({"kind": "trace", "suite": suite_name, "user_task": user_id, "injection_task": injection_id, "prompt": user_task.PROMPT, "calls": calls}, default=str) + "\n")
     if out is not sys.stdout:
         out.close()
 

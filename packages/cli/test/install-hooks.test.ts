@@ -39,6 +39,26 @@ describe("mergeHookEntries", () => {
     expect(group.hooks[0]?.args).toContain("codex");
   });
 
+  it("adds prompt hooks, fails Claude Code tool hooks closed, and updates old entries in place", () => {
+    const old = { hooks: { PreToolUse: [{ matcher: "Bash|Write|Edit|WebFetch", hooks: [{ type: "command", command: "C:/node/node.exe", args: [...cliParts.slice(1), "claude-code"] }] }] } };
+    const merged = mergeHookEntries("claude-code", old, cliParts, "C:/proj/palizade.yaml");
+    const hooks = merged.hooks as Record<string, Array<{ hooks: Array<{ args: string[]; onFailure?: string }> }>>;
+    expect(hooks.PreToolUse).toHaveLength(1);
+    expect(hooks.PreToolUse[0]!.hooks[0]!.onFailure).toBe("block");
+    expect(hooks.UserPromptSubmit[0]!.hooks[0]!.args.slice(-2)).toEqual(["claude-code", "UserPromptSubmit"]);
+    expect(hooks.UserPromptSubmit[0]!.hooks[0]!.onFailure).toBeUndefined();
+
+    const cursor = mergeHookEntries("cursor", mergeHookEntries("cursor", {}, cliParts, "x"), cliParts, "x");
+    const cursorHooks = cursor.hooks as Record<string, Array<{ command: string; failClosed?: boolean }>>;
+    expect(cursorHooks.beforeShellExecution).toHaveLength(1);
+    expect(cursorHooks.beforeSubmitPrompt).toHaveLength(1);
+    expect(cursorHooks.beforeSubmitPrompt[0]!.command.endsWith("cursor beforeSubmitPrompt")).toBe(true);
+    expect(cursorHooks.beforeSubmitPrompt[0]!.failClosed).toBeUndefined();
+
+    const codex = mergeHookEntries("codex", {}, cliParts, "x").hooks as Record<string, unknown[]>;
+    expect(codex.UserPromptSubmit).toHaveLength(1);
+  });
+
   it("preserves existing hooks and refuses malformed settings", () => {
     const settings = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo hi" }] }] } };
     const merged = mergeHookEntries("claude-code", settings, cliParts, "C:/proj/palizade.yaml");

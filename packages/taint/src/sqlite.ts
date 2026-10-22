@@ -99,6 +99,7 @@ export class SqliteTaintStore implements TaintStore {
       );
       create index if not exists idx_temporal_expires on temporal_taint(expires_at);
       create table if not exists session_state (scope_id text primary key, state_json text not null);
+      create table if not exists user_statements (scope_id text not null, key text not null, expires_at integer not null, primary key (scope_id, key));
     `);
     this.ensureColumn("taint_records", "profile_id", "text");
     this.ensureColumn("taint_records", "scope_id", "text");
@@ -164,6 +165,25 @@ export class SqliteTaintStore implements TaintStore {
   }
 
   destinationKey(text: string): string { return hmacSha256Hex(this.hmacKey, text); }
+
+  // Stored as keyed hashes, like fingerprints, so the database never holds the typed values.
+  addUserStatements(sessionId: string, canonicals: string[], ttlMs: number): void {
+    if (canonicals.length === 0) return;
+    const scopeId = this.scopeId(sessionId);
+    const now = Date.now();
+    const insert = this.db.prepare("insert into user_statements (scope_id, key, expires_at) values (?, ?, ?) on conflict(scope_id, key) do update set expires_at = excluded.expires_at");
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare("delete from user_statements where expires_at <= ?").run(now);
+      for (const canonical of canonicals) insert.run(scopeId, this.destinationKey(`user:${canonical}`), now + ttlMs);
+      this.db.exec("commit");
+    } catch (error) { this.db.exec("rollback"); throw error; }
+  }
+
+  isUserStated(sessionId: string, canonical: string): boolean {
+    const row = this.db.prepare("select expires_at from user_statements where scope_id = ? and key = ?").get(this.scopeId(sessionId), this.destinationKey(`user:${canonical}`)) as { expires_at: number } | undefined;
+    return row !== undefined && row.expires_at > Date.now();
+  }
 
   promotePersistent(id: string): void {
     const record = this.get(id);

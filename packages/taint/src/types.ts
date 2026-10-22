@@ -75,6 +75,9 @@ export interface TaintStore {
   markTemporal(sessionId: string, sourceTaintIds: string[], config: TemporalTaintConfig): void;
   consumeTurn(sessionId: string): void;
   hasTemporal(sessionId: string): boolean;
+  /** Records destination values the user typed (canonical forms from extractStatedObservables). */
+  addUserStatements(sessionId: string, canonicals: string[], ttlMs: number): void;
+  isUserStated(sessionId: string, canonical: string): boolean;
 }
 
 export interface TemporalTaintConfig {
