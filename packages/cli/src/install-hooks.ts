@@ -76,6 +76,32 @@ export function mergeHookEntries(client: string, settings: JsonRecord, cliParts:
   throw new Error(`Unsupported hook client '${client}'. Supported: claude-code, cursor, codex.`);
 }
 
+export interface HookCoverage {
+  settingsPath: string;
+  exists: boolean;
+  /** Each event Palizade installs, and whether its entry is there and current. */
+  events: Array<{ event: string; status: "installed" | "outdated" | "missing" }>;
+}
+
+/** Reports which Palizade hook entries a client's settings file has; "outdated" means install-hooks would change it. */
+export async function inspectHooks(client: string, settingsPath = resolveHooksSettingsPath(client)): Promise<HookCoverage> {
+  if (!await exists(settingsPath)) return { settingsPath, exists: false, events: Object.keys(buildHookDefinition(client, ["node", "palizade", "hook"])).map((event) => ({ event, status: "missing" as const })) };
+  const settings = await readSettings(settingsPath);
+  const hooks = isRecord(settings.hooks) ? settings.hooks : {};
+  const expected = buildHookDefinition(client, ["node", "palizade", "hook"]) as Record<string, unknown>;
+  // Compare everything but the command and paths, which differ per machine.
+  const shape = (value: unknown): unknown => JSON.parse(JSON.stringify(value, (key, field) => key === "command" || key === "args" ? undefined : field));
+  const events = Object.entries(expected).map(([event, definition]) => {
+    const list = Array.isArray(hooks[event]) ? hooks[event] as unknown[] : [];
+    const ours = list.find((entry) => client === "cursor" ? isPalizadeHookCommand(entry) : groupContainsPalizade(entry));
+    if (ours === undefined) return { event, status: "missing" as const };
+    const wanted = client === "cursor" ? (definition as unknown[])[0] : definition;
+    const promptArgsOk = client === "cursor" || !event.includes("Prompt") || JSON.stringify(ours).includes(event);
+    return { event, status: JSON.stringify(shape(ours)) === JSON.stringify(shape(wanted)) && promptArgsOk ? "installed" as const : "outdated" as const };
+  });
+  return { settingsPath, exists: true, events };
+}
+
 export function resolveHooksSettingsPath(client: string, platform: string = osPlatform(), homeDir: string = homedir()): string {
   if (client === "claude-code") {
     return posix.join(homeDir, ".claude", "settings.json");

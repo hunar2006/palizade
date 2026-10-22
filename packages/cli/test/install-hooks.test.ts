@@ -67,3 +67,25 @@ describe("mergeHookEntries", () => {
     expect(pre[0]).toMatchObject({ matcher: "Bash" });
   });
 });
+
+describe("inspectHooks", () => {
+  it("reports missing, outdated and installed entries", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { inspectHooks } = await import("../src/install-hooks.js");
+    const dir = await mkdtemp(join(tmpdir(), "palizade-inspect-hooks-"));
+    try {
+      const path = join(dir, "settings.json");
+      expect((await inspectHooks("claude-code", path)).events.every((entry) => entry.status === "missing")).toBe(true);
+      const old = { hooks: { PreToolUse: [{ matcher: "Bash|Write|Edit|WebFetch", hooks: [{ type: "command", command: "node", args: ["/x/palizade/dist/index.cjs", "hook", "claude-code"] }] }] } };
+      await writeFile(path, JSON.stringify(old));
+      const before = Object.fromEntries((await inspectHooks("claude-code", path)).events.map((entry) => [entry.event, entry.status]));
+      expect(before).toEqual({ PreToolUse: "outdated", PostToolUse: "missing", UserPromptSubmit: "missing" });
+      await writeFile(path, JSON.stringify(mergeHookEntries("claude-code", old, cliParts, "x")));
+      expect((await inspectHooks("claude-code", path)).events.every((entry) => entry.status === "installed")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

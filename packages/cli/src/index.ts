@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { loadPolicyFile, parsePolicyTests, runPolicyTests, type PolicyTestResult } from "@palizade/policy";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { loadPolicyFile, parsePolicy, parsePolicyTests, runPolicyTests, type PolicyTestResult } from "@palizade/policy";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import YAML from "yaml";
@@ -37,9 +37,10 @@ import {
   installClientConfig,
   selectInstallConfigPath
 } from "./install-config.js";
-import { installHooks, type InstallHooksResult } from "./install-hooks.js";
+import { inspectHooks, installHooks, type InstallHooksResult } from "./install-hooks.js";
 import { formatLearnDraft, learnFromAudit } from "./learn.js";
 import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
+import { upgradePolicyText } from "./policy-upgrade.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
 import { explainEvent, formatExplanation, isInteresting } from "./why.js";
@@ -457,6 +458,32 @@ policyCommand.command("test")
     if (failed > 0) process.exitCode = 1;
   });
 
+policyCommand.command("upgrade")
+  .description("Add rules from the shipped preset that your policy file is missing (new releases add protections); rules you wrote or changed are kept")
+  .argument("[file]", "Policy file (defaults to the policy in palizade.yaml)")
+  .option("--preset <name>", "Preset to compare with (defaults to the file's name, such as default or strict)")
+  .option("--dry-run", "Show what would be added without writing", false)
+  .action(async (file: string | undefined, options: { preset?: string; dryRun: boolean }) => {
+    const policyFile = file ? resolve(file) : (await loadConfigForCli(program.opts<{ config: string }>().config)).policy;
+    const presetName = options.preset ?? basename(policyFile).replace(/\.ya?ml$/u, "");
+    const preset = __POLICY_PRESETS__[presetName];
+    if (!preset) throw new Error(`No shipped preset named '${presetName}'. Pass --preset with one of: ${Object.keys(__POLICY_PRESETS__).join(", ")}.`);
+    const current = await readFile(policyFile, "utf8");
+    const result = upgradePolicyText(current, preset);
+    for (const id of result.added) console.log(`${options.dryRun ? "Would add" : "Added"} ${id}`);
+    for (const id of result.differs) console.log(`Kept your version of ${id} (differs from the ${presetName} preset)`);
+    if (result.added.length === 0) {
+      console.log(`${policyFile} already has every rule of the ${presetName} preset.`);
+      return;
+    }
+    if (options.dryRun) return;
+    // Validate before writing, so a merge never leaves an unusable policy.
+    parsePolicy(result.text, policyFile);
+    await copyFile(policyFile, `${policyFile}.bak`);
+    await writeFile(policyFile, result.text, "utf8");
+    console.log(`Updated ${policyFile} (backup: ${policyFile}.bak)`);
+  });
+
 policyCommand.command("check")
   .description("Validate a policy: schema, unknown keys, unreachable rules, impossible conditions, unknown servers and tools")
   .argument("[file]", "Policy file (defaults to the policy in palizade.yaml)")
@@ -779,6 +806,24 @@ program.command("doctor")
     }
     if (coverage.nativeToolsNote) {
       console.log(coverage.nativeToolsNote);
+    }
+    if (["claude-code", "cursor", "codex"].includes(options.client)) {
+      const hooks = await inspectHooks(options.client);
+      const missing = hooks.events.filter((entry) => entry.status !== "installed");
+      console.log(`Hooks: ${hooks.settingsPath}`);
+      for (const entry of hooks.events) console.log(`  ${entry.status === "installed" ? "installed" : entry.status.toUpperCase()} ${entry.event}`);
+      if (missing.length > 0) console.log(`  Run palizade install-hooks ${options.client} to ${hooks.exists ? "add or update" : "install"} them.`);
+    }
+    const presetName = basename(config.policy).replace(/\.ya?ml$/u, "");
+    const preset = __POLICY_PRESETS__[presetName];
+    if (preset && existsSync(config.policy)) {
+      const upgrade = upgradePolicyText(await readFile(config.policy, "utf8"), preset);
+      if (upgrade.added.length > 0) {
+        console.log(`Policy is missing ${upgrade.added.length} rule(s) from the ${presetName} preset: ${upgrade.added.join(", ")}`);
+        console.log("  Run palizade policy upgrade to add them (your own rules are kept).");
+      } else {
+        console.log(`Policy has every rule of the ${presetName} preset.`);
+      }
     }
   });
 

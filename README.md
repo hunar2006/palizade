@@ -364,6 +364,7 @@ v0.4 behavior changes:
 Select a starter with `palizade init --preset coding-agent` or `palizade init --preset research-readonly --output-dir ./output`. Initialization copies the current embedded preset and preserves existing files unless `--force` is supplied. Ordinary `init` selects default; strict initialization also sets allowlist-only egress.
 
 ```bash
+palizade setup <client> [--project] [--lock] [--dry-run]
 palizade init [--preset <name>] [--output-dir <path>]
 palizade install-config <serverName>
 palizade install-config --all
@@ -374,6 +375,7 @@ palizade hook <client> [event]
 palizade install-hooks <client>
 palizade policy check [file] [--json] [--strict]
 palizade policy test <files...> [--policy <file>]
+palizade policy upgrade [file] [--dry-run]
 palizade learn --from-audit --since 7d [--server <name>]
 palizade lock approve <serverName>
 palizade lock diff <serverName>
@@ -391,8 +393,12 @@ palizade audit prune --older-than 30d
 palizade taint prune [--include-persistent]
 palizade session quarantine --clear [--session <id>]
 palizade session reset [--session <id>]
-palizade doctor
+palizade doctor [--client <name>]
 ```
+
+### Upgrading
+
+New releases add rules to the shipped presets, but your `policies/<preset>.yaml` is your copy and is never overwritten. `palizade doctor` says when it is missing rules, and `palizade policy upgrade` adds them in the right place, keeping your own rules, edits and comments (a `.bak` is written first). `doctor --client <name>` also reports hook entries that are missing or out of date; `palizade install-hooks <client>` updates them in place.
 
 ### Checking a machine
 
