@@ -301,6 +301,11 @@ palizade lock approve <serverName>
 palizade lock diff <serverName>
 palizade detectors install promptguard2
 palizade detectors verify heuristic
+palizade why [--last 24h] [--limit 5]
+palizade tools [serverName] [--catalog]
+palizade allow host|email <value...>
+palizade allow list
+palizade allow remove host:<host> | email:<address>
 palizade audit --last 1h
 palizade audit verify
 palizade audit prune --older-than 30d
@@ -309,6 +314,10 @@ palizade session quarantine --clear [--session <id>]
 palizade session reset [--session <id>]
 palizade doctor
 ```
+
+### When something is blocked
+
+`palizade why` explains the last few blocks and approval prompts in plain language: which rule fired, where the tainted data came from, the destination, and what you can do (classify a tool, allow a host, approve, or reset the session). `palizade allow host api.example.com` or `palizade allow email *@example.com` adds destinations to `palizade.allow.yaml`; `palizade allow list` shows them next to the ones in `palizade.yaml`. Allowing a destination never overrides a block on a destination that was copied from untrusted content.
 
 ### Tool classification
 

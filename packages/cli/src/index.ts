@@ -6,6 +6,7 @@ import { Command } from "commander";
 import YAML from "yaml";
 import {
   catalogEntryFor,
+  LearnedEgress,
   collectToolsFromHttpServer,
   collectToolsFromStdioServer,
   createRuntime,
@@ -37,6 +38,7 @@ import { formatLearnDraft, learnFromAudit } from "./learn.js";
 import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
+import { explainEvent, formatExplanation, isInteresting } from "./why.js";
 import { describeServerTools, formatCatalog, formatServerTools } from "./tools-command.js";
 
 declare const __PKG_VERSION__: string;
@@ -430,6 +432,65 @@ program.command("tools")
     const config = await loadConfigForCli(program.opts<{ config: string }>().config);
     const reports = describeServerTools(config, await new LockfileStore(config.lockfile).read(), serverName);
     console.log(options.json ? JSON.stringify(reports, null, 2) : formatServerTools(reports));
+  });
+
+program.command("why")
+  .description("Explain recent blocks and approval prompts in plain language, with what you can do about each")
+  .option("--last <duration>", "How far back to look, such as 1h or 2d", "24h")
+  .option("--limit <n>", "Maximum decisions to explain", "5")
+  .option("--server <server>", "Only this server")
+  .option("--tool <tool>", "Only this tool")
+  .option("--json", "Print JSON", false)
+  .action(async (options: { last: string; limit: string; server?: string; tool?: string; json: boolean }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const events = await new JsonlAuditSink(config.audit.jsonl).query({
+      since: new Date(Date.now() - parseDuration(options.last)),
+      limit: Number.MAX_SAFE_INTEGER,
+      ...(options.server ? { server: options.server } : {}),
+      ...(options.tool ? { tool: options.tool } : {})
+    });
+    const explanations = events.filter(isInteresting).slice(-Number(options.limit)).map(explainEvent);
+    if (options.json) {
+      console.log(JSON.stringify(explanations, null, 2));
+    } else if (explanations.length === 0) {
+      console.log(`Nothing was blocked or held for approval in the last ${options.last}.`);
+    } else {
+      console.log(explanations.map(formatExplanation).join("\n\n"));
+    }
+  });
+
+const allow = program.command("allow")
+  .description("Manage destinations Palizade may send to (palizade.allow.yaml); configured egress.allowlist entries are not changed");
+for (const kind of ["host", "email"] as const) {
+  allow.command(kind)
+    .description(kind === "host" ? "Allow a host, or every subdomain with *.example.com" : "Allow an email address, or a whole domain with *@example.com")
+    .argument("<values...>")
+    .action(async (values: string[]) => {
+      const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+      new LearnedEgress(config.egress.learnedFile).remember(values.map((value) => `${kind}:${value}`));
+      console.log(`Allowed ${values.join(", ")} in ${config.egress.learnedFile}.`);
+    });
+}
+allow.command("list")
+  .description("Show learned and configured destinations")
+  .action(async () => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const learned = new LearnedEgress(config.egress.learnedFile).entries();
+    const configured = config.egress.allowlist;
+    const print = (label: string, values: string[]) => console.log(`${label}: ${values.length ? values.join(", ") : "-"}`);
+    console.log(`Learned (${config.egress.learnedFile}):`);
+    print("  hosts", learned.hosts); print("  emails", learned.emails); print("  other", learned.destinations);
+    console.log("Configured (palizade.yaml egress.allowlist):");
+    print("  hosts", configured.hosts); print("  emails", configured.emails); print("  other", configured.destinations);
+  });
+allow.command("remove")
+  .description("Remove learned destinations, written as host:<host>, email:<address>, or the exact other entry")
+  .argument("<entries...>")
+  .action(async (entries: string[]) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const removed = new LearnedEgress(config.egress.learnedFile).forget(entries);
+    console.log(removed > 0 ? `Removed ${removed} entr${removed === 1 ? "y" : "ies"}.` : "Nothing matched; entries from palizade.yaml must be removed there.");
+    if (removed === 0) process.exitCode = 1;
   });
 
 const audit = program.command("audit")

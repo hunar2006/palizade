@@ -48,18 +48,42 @@ export class LearnedEgress {
     return this.lastGood;
   }
 
+  /** The learned file's own entries, without the configured allowlist. */
+  entries(): z.infer<typeof learnedSchema> {
+    return this.current();
+  }
+
   remember(destinations: string[]): void {
+    this.update((learned) => {
+      for (const entry of destinations) {
+        if (entry.startsWith("invalid:")) throw new Error("Invalid egress destination");
+        const [key, value] = learnedSlot(entry);
+        if (!learned[key].includes(value)) learned[key].push(value);
+      }
+    });
+  }
+
+  /** Removes entries; returns how many were present. */
+  forget(destinations: string[]): number {
+    let removed = 0;
+    this.update((learned) => {
+      for (const entry of destinations) {
+        const [key, value] = learnedSlot(entry);
+        const before = learned[key].length;
+        learned[key] = learned[key].filter((existing) => existing !== value);
+        removed += before - learned[key].length;
+      }
+    });
+    return removed;
+  }
+
+  private update(change: (learned: z.infer<typeof learnedSchema>) => void): void {
     const lock = `${this.path}.lock`;
     const fd = openSync(lock, "wx", 0o600);
     const temporary = `${this.path}.${randomUUID()}.tmp`;
     try {
       const learned = this.read();
-      for (const entry of destinations) {
-        if (entry.startsWith("invalid:")) throw new Error("Invalid egress destination");
-        const key = entry.startsWith("host:") ? "hosts" : entry.startsWith("email:") ? "emails" : "destinations";
-        const value = key === "destinations" ? entry : entry.slice(entry.indexOf(":") + 1);
-        if (!learned[key].includes(value)) learned[key].push(value);
-      }
+      change(learned);
       writeFileSync(temporary, YAML.stringify(learned), { mode: 0o600 });
       renameSync(temporary, this.path);
     } finally {
@@ -74,6 +98,12 @@ export class LearnedEgress {
     if (statSync(this.path).size > 1024 * 1024) throw new Error("Learned allowlist exceeds size limit");
     return parseYamlWithSchema(learnedSchema, readFileSync(this.path, "utf8"), this.path);
   }
+}
+
+function learnedSlot(entry: string): ["hosts" | "emails" | "destinations", string] {
+  if (entry.startsWith("host:")) return ["hosts", canonicalHost(entry.slice(5))];
+  if (entry.startsWith("email:")) return ["emails", canonicalEmail(entry.slice(6))];
+  return ["destinations", entry];
 }
 
 export function destinationsAllowed(entries: string[], allowlist: PalizadeConfig["egress"]["allowlist"]): boolean {

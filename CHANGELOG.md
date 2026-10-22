@@ -32,6 +32,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Optional sandboxed launch** for stdio servers: docker (including Windows), bubblewrap and seatbelt.
 - **Operations:** hot reload, `palizade policy check`, `palizade status`, `palizade learn --from-audit`, optional metrics JSONL, and `doctor` coverage reports.
 - **Presets:** `coding-agent` and `research-readonly`.
+- **`palizade why` and `palizade allow`:** plain language explanations of recent blocks and prompts with suggested fixes, and commands to add, list and remove allowed hosts and email addresses.
 - **Tool catalog and schema signals:** built in classes for common MCP servers, chosen by the package, image or url in your config; input schema property names raise risk; `palizade tools` shows each tool's class and the reasons; audit events record `classificationReasons`.
 - **CI** on Windows, macOS and Linux with Node 22 and 24, and a tag-only release workflow with npm provenance.
 
