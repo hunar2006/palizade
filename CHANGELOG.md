@@ -12,6 +12,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 
 - **Stricter config validation.** Unknown keys in `palizade.yaml` and policy files are now errors, reported with the YAML path, line number and a fix hint.
 - **New rules in the shipped presets.** `default`, `interactive`, `strict` and `egress` now block destinations that were copied from untrusted content and lookalike hosts, ask before outbound actions once a session has seen both untrusted and sensitive data (Rule of Two), ask before writes to critical files (agent and IDE configs, CI workflows, git hooks, `package.json`, `.env*`, shell rc files), and gate quarantined, rate limited and looping sessions. Regenerate your policy with `palizade init --force`, or merge the new rules by hand.
+- **More tools count as remote writes.** Names with add, invite, update, set, assign, grant, share, rename, archive, reply, forward, schedule or cancel are now sinks, so they get taint and destination checks instead of the unknown tool rules.
 - **Descriptions from untrusted servers can only raise risk.** On `semi` and `untrusted` servers, a tool description or title can add sink capabilities but no longer turns an unknown tool into a source. Such tools now hit the unknown tool rules (block on untrusted, approval on semi) unless the catalog or `toolClasses` names them.
 - **Annotations from untrusted servers can only raise risk.** On `semi` and `untrusted` servers, `readOnlyHint` no longer turns a risky or unknown tool into a source.
 - **Hooks fail closed.** Any hook error (bad config, oversized or invalid input, timeout) denies the tool call with exit code 2 unless `hooks.failMode: open`.
@@ -32,6 +33,8 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Optional sandboxed launch** for stdio servers: docker (including Windows), bubblewrap and seatbelt.
 - **Operations:** hot reload, `palizade policy check`, `palizade status`, `palizade learn --from-audit`, optional metrics JSONL, and `doctor` coverage reports.
 - **Presets:** `coding-agent` and `research-readonly`.
+- **Held out evaluation on AgentDojo:** `pnpm eval:agentdojo` replays AgentDojo ground truth traces through Palizade and scores them with AgentDojo's own checks. Results and method are in `results/agentdojo`.
+- **Ask before deletes after untrusted content:** new `session_untrusted` policy field and `approve-delete-after-untrusted` rule in the default, interactive and strict presets.
 - **`palizade policy test`:** YAML test cases for policies, with strict field checking; the default and strict presets ship with their own cases.
 - **`palizade scan`:** one command that checks all MCP client configs and `palizade.yaml` for unprotected servers, plaintext secrets, unpinned packages and images, plain http urls and suspicious locked tool metadata, without starting servers.
 - **`palizade why` and `palizade allow`:** plain language explanations of recent blocks and prompts with suggested fixes, and commands to add, list and remove allowed hosts and email addresses.

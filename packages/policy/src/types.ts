@@ -47,6 +47,7 @@ export interface PolicyCondition {
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
   rule_of_two?: boolean | undefined;
+  session_untrusted?: boolean | undefined;
   rate_limited?: boolean | undefined;
   loop_detected?: boolean | undefined;
   destination_session_trusted?: boolean | undefined;
@@ -96,6 +97,7 @@ export interface PolicyContext {
   new_destination?: boolean | undefined;
   split_match?: boolean | undefined;
   rule_of_two?: boolean | undefined;
+  session_untrusted?: boolean | undefined;
   rate_limited?: boolean | undefined;
   loop_detected?: boolean | undefined;
   destination_session_trusted?: boolean | undefined;

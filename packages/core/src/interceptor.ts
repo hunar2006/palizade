@@ -363,6 +363,7 @@ export class InterceptionEngine {
       new_destination: newDestination,
       split_match: splitMatch,
       rule_of_two: ruleOfTwo,
+      session_untrusted: session.seenUntrusted,
       destination_session_trusted: sessionTrusted,
       session_quarantined: Boolean(session.quarantine),
       rate_limited: gates.rateLimited,

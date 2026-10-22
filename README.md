@@ -72,6 +72,18 @@ palizade doctor --client <name>    # shows which servers and tools are protected
 
 Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` (Claude Code) and `${env:NAME}` (Cursor) are filled from your environment when Palizade starts the server or connects to its url. A header whose variable is unset is left out; a url whose variable is unset is an error. Remote servers with no static credentials are skipped, because they usually sign in with OAuth, which the stdio wrapper cannot do; run those through `palizade serve`, or pass `--include-remote` if they need no sign in. Servers using the legacy `sse` or `ws` transports are skipped with a message, since Palizade proxies stdio and Streamable HTTP only.
 
+## Held Out Evaluation (AgentDojo)
+
+[AgentDojo](https://github.com/ethz-spylab/agentdojo) v1.2.2 with the `important_instructions` attack, replaying each suite's scripted ground truth (an agent that does the user's task and then fully obeys the injection) through the default preset with every tool untrusted, and refusing every approval prompt:
+
+| | Clean utility | Attack success |
+|---|---:|---:|
+| No defense | 97/97 (100%) | 593/949 (62.5%) |
+| Palizade, first run (held out) | 67/97 (69.1%) | 42/949 (4.4%) |
+| Palizade, after reviewing two suites | 68/97 (70.1%) | 11/949 (1.2%) |
+
+This is a replay, not an LLM run, and the utility cost is real: tasks that send to an address read from untrusted content are blocked like attacks. Method, per suite numbers, approval modes and limits: [results/agentdojo](results/agentdojo/README.md). Reproduce with `pnpm eval:agentdojo`.
+
 ## How It Works
 
 Palizade's core control is provenance, not content classification. Data returned by untrusted or source-classed tools is tagged as tainted. If that data later appears in a sink tool call, such as write, send, delete, shell, publish, or network egress, policy can block it, redact it, log it, or require user approval.

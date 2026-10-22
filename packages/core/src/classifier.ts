@@ -12,6 +12,8 @@ const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
   [/\b(email|mail|send|sms|slack|discord|message|publish)\b/iu, ["sends_message", "writes_remote", "network_egress"]],
   [/\b(write|save|edit|create|move|append)\b/iu, ["file_write", "writes_local"]],
   [/\b(delete|remove|rm|destroy)\b/iu, ["deletes_data"]],
+  // Verbs that change shared state somewhere else: membership, settings, sharing, scheduling.
+  [/\b(add|invite|update|set|assign|grant|share|rename|archive|reply|forward|schedule|cancel)\b/iu, ["writes_remote"]],
   // shortcut: verb match only, so read tools like get_transfer_history also become sinks (over-block, fails closed).
   [/\b(buy|sell|trade|transfer|withdraw|deposit|pay|payment|purchase|refund|place order)\b/iu, ["writes_remote"]],
   [/\b(exec|shell|run|spawn|command|script|terminal)\b/iu, ["executes_code"]],

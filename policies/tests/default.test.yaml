@@ -34,3 +34,6 @@ cases:
   - name: a clean write with no taint is allowed
     context: { direction: request, method: tools/call, tool_class: sink, trust: untrusted, capabilities: [file_write] }
     expect: allow
+  - name: deleting data after untrusted content needs approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [deletes_data], session_untrusted: true }
+    expect: { action: require_approval, rule: approve-delete-after-untrusted }

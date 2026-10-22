@@ -20,6 +20,7 @@ The `persists_memory` capability marks entity/observation/relation, remember/not
 
 - `session_quarantined`: shared session quarantine remains within both TTL and turn bounds. Every enforcing preset requires approval for sinks after hard blocks.
 
+- `session_untrusted`: session has seen untrusted or suspicious content within the exposure lifetime. The enforcing presets use it to ask before deleting data after such exposure.
 - `rule_of_two`: session has seen both untrusted/suspicious and sensitive content within the exposure lifetime (`taint.exposure.ttlMs`, default two hours, refreshed on each exposure); default, strict and interactive approval-gate network, message and remote-write sinks even for paraphrased arguments. Native hook session flags are isolated by client session ID; taint records retain their configured scope. Specific hard blocks run first.
 - `destination_session_trusted`: every destination has an explicit session grant. This suppresses only the Rule of Two gate and approve-new mode, not hard blocks.
 
