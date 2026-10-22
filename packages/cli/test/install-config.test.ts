@@ -396,6 +396,20 @@ describe("installClientConfig", () => {
     }
   });
 
+  it("skips remote servers without static credentials unless asked", async () => {
+    const { root, clientConfigPath, palizadeConfigPath, cliPath, cleanup } = await makeFixture();
+    try {
+      await writeFile(clientConfigPath, JSON.stringify({ mcpServers: { notion: { type: "http", url: "https://mcp.notion.example/mcp" } } }), "utf8");
+      const skipped = await installAllClientConfigs({ clientConfigPath, configPath: palizadeConfigPath, cliPath, cwd: root, dryRun: true });
+      expect(skipped.wrapped).toEqual([]);
+      expect(skipped.skipped[0]?.reason).toContain("OAuth");
+      const included = await installAllClientConfigs({ clientConfigPath, configPath: palizadeConfigPath, cliPath, cwd: root, dryRun: true, includeRemote: true });
+      expect(included.wrapped.map((server) => server.name)).toEqual(["notion"]);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("imports remote servers with their headers, normalizes Cursor placeholders, and skips sse and ws", async () => {
     const { root, palizadeConfigPath, cliPath, cleanup } = await makeFixture();
     try {

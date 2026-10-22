@@ -2,6 +2,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
 import { basename, dirname, posix, resolve, win32 } from "node:path";
 import YAML from "yaml";
+import { parseCodexConfig, renderCodexConfig, type CodexState } from "./codex-config.js";
 import { normalizeEnvPlaceholders } from "@palizade/core";
 
 type JsonRecord = Record<string, unknown>;
@@ -32,6 +33,8 @@ export interface InstallAllConfigOptions {
   clientConfigPath?: string | undefined;
   project?: boolean | undefined;
   local?: boolean | undefined;
+  /** Also wrap remote servers that have no static credentials (they may sign in with OAuth). */
+  includeRemote?: boolean | undefined;
   dryRun?: boolean | undefined;
   cwd?: string | undefined;
   cliPath?: string | undefined;
@@ -122,7 +125,7 @@ export async function installClientConfig(options: InstallConfigOptions): Promis
   const warnings = await validatePalizadeConfig(palizadeConfigPath);
 
   const existed = await exists(clientConfigPath);
-  const config = existed ? await readClientConfig(clientConfigPath) : { mcpServers: {} };
+  const config = existed ? await readClientConfig(clientConfigPath) : emptyClientConfig(clientConfigPath);
   const mcpServers = ensureMcpServers(config, clientConfigPath, localKey, true);
   if (Object.prototype.hasOwnProperty.call(mcpServers, entryName) && !options.force) {
     throw new Error(
@@ -132,7 +135,7 @@ export async function installClientConfig(options: InstallConfigOptions): Promis
   }
 
   mcpServers[entryName] = entry;
-  const configJson = `${JSON.stringify(config, null, 2)}\n`;
+  const configJson = serializeClientConfig(config);
   if (options.dryRun) {
     return {
       client,
@@ -189,7 +192,7 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
   const warnings = await validatePalizadeConfig(palizadeConfigPath);
 
   const existed = await exists(clientConfigPath);
-  const config = existed ? await readClientConfig(clientConfigPath) : { mcpServers: {} };
+  const config = existed ? await readClientConfig(clientConfigPath) : emptyClientConfig(clientConfigPath);
   const mcpServers = ensureMcpServers(config, clientConfigPath, localKey);
 
   const palizadeConfig = await readPalizadeConfig(palizadeConfigPath);
@@ -210,6 +213,11 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
       continue;
     }
     const original = normalizeClientEntry(name, rawEntry, clientConfigPath);
+    // The stdio wrapper sends only static headers, so an OAuth sign in would stop working.
+    if (original.url && Object.keys(original.headers ?? {}).length === 0 && !options.includeRemote) {
+      skipped.push({ name, reason: "remote server with no static credentials; it probably signs in with OAuth, which the wrapper cannot do. Use palizade serve for it, or add --include-remote if it needs no sign in" });
+      continue;
+    }
     const addedToPalizadeConfig = !Object.prototype.hasOwnProperty.call(palizadeServers, name);
     if (addedToPalizadeConfig) {
       palizadeServers[name] = makeAutoServerConfig(original);
@@ -227,7 +235,7 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
     wrapped.push({ name, entry, original, addedToPalizadeConfig });
   }
 
-  const configJson = `${JSON.stringify(config, null, 2)}\n`;
+  const configJson = serializeClientConfig(config);
   const palizadeConfigJson = YAML.stringify(palizadeConfig);
   const lockCommands = wrapped
     .filter((server) => server.addedToPalizadeConfig)
@@ -359,11 +367,15 @@ export function resolveClientConfigPath(client: string, platform = osPlatform(),
     // User scope lives at the top level of ~/.claude.json; project scope is .mcp.json.
     return projectDir ? join(projectDir, ".mcp.json") : join(homeDir, ".claude.json");
   }
+  if (client === "codex") {
+    const codexHome = env.CODEX_HOME && env.CODEX_HOME.trim() !== "" ? env.CODEX_HOME : join(homeDir, ".codex");
+    return projectDir ? join(projectDir, ".codex", "config.toml") : join(codexHome, "config.toml");
+  }
   if (client === "cursor") {
     return projectDir ? join(projectDir, ".cursor", "mcp.json") : join(homeDir, ".cursor", "mcp.json");
   }
   if (client !== "claude-desktop") {
-    throw new Error(`Unsupported client '${client}'. Supported clients: claude-desktop, claude-code, cursor. For Codex, see the README.`);
+    throw new Error(`Unsupported client '${client}'. Supported clients: claude-desktop, claude-code, cursor, codex.`);
   }
   if (projectDir) {
     throw new Error("Claude Desktop has no project config; drop --project.");
@@ -408,8 +420,28 @@ function cliOptionValue(options: OptionValueReader, name: string): string | unde
   return typeof value === "string" ? value : undefined;
 }
 
+const codexStates = new WeakMap<JsonRecord, CodexState>();
+
+function emptyClientConfig(path: string): JsonRecord {
+  const config: JsonRecord = { mcpServers: {} };
+  if (path.endsWith(".toml")) codexStates.set(config, { text: "", tables: {}, before: {} });
+  return config;
+}
+
+/** JSON clients are rewritten whole; Codex TOML only has the changed server tables replaced. */
+export function serializeClientConfig(config: JsonRecord): string {
+  const codex = codexStates.get(config);
+  return codex ? renderCodexConfig(codex, config.mcpServers as JsonRecord) : `${JSON.stringify(config, null, 2)}\n`;
+}
+
 async function readClientConfig(path: string): Promise<JsonRecord> {
   const raw = await readFile(path, "utf8");
+  if (path.endsWith(".toml")) {
+    const { mcpServers, state } = parseCodexConfig(raw, path);
+    const config: JsonRecord = { mcpServers };
+    codexStates.set(config, state);
+    return config;
+  }
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) {

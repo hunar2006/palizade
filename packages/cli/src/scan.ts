@@ -12,6 +12,7 @@ import {
   type PalizadeLock
 } from "@palizade/core";
 import { HeuristicDetector, hasSecretLabel, SensitiveDataDetector } from "@palizade/detectors";
+import { parseCodexConfig } from "./codex-config.js";
 import { isPalizadeWrapper, resolveClientConfigPath } from "./install-config.js";
 
 export type Severity = "high" | "medium" | "low" | "info";
@@ -75,7 +76,9 @@ export function clientLocations(options: { cwd?: string; homeDir?: string; platf
     { client: "claude-code", path: resolveClientConfigPath("claude-code", platform, env, home), scope: "user", flags: " --client claude-code" },
     { client: "claude-code", path: resolveClientConfigPath("claude-code", platform, env, home, cwd), scope: "project", flags: " --client claude-code --project" },
     { client: "cursor", path: resolveClientConfigPath("cursor", platform, env, home), scope: "user", flags: " --client cursor" },
-    { client: "cursor", path: resolveClientConfigPath("cursor", platform, env, home, cwd), scope: "project", flags: " --client cursor --project" }
+    { client: "cursor", path: resolveClientConfigPath("cursor", platform, env, home, cwd), scope: "project", flags: " --client cursor --project" },
+    { client: "codex", path: resolveClientConfigPath("codex", platform, env, home), scope: "user", flags: " --client codex" },
+    { client: "codex", path: resolveClientConfigPath("codex", platform, env, home, cwd), scope: "project", flags: " --client codex --project" }
   );
   // Run from the home folder, project and user paths can be the same file.
   return locations.filter((location, index) => locations.findIndex((other) => other.path === location.path) === index);
@@ -91,7 +94,8 @@ export async function scanClientConfigs(locations: Location[]): Promise<ScanResu
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(location.path, "utf8"));
+      const text = await readFile(location.path, "utf8");
+      parsed = location.path.endsWith(".toml") ? { mcpServers: parseCodexConfig(text, location.path).mcpServers } : JSON.parse(text);
     } catch (error) {
       files.push({ ...location, exists: true, servers: 0 });
       findings.push({ severity: "medium", source: location.path, server: "-", check: "unreadable-config", message: `Could not parse this file: ${error instanceof Error ? error.message : String(error)}` });

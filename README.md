@@ -54,16 +54,12 @@ palizade install-hooks cursor
 **Codex**
 
 ```bash
+palizade install-config --all --client codex             # ~/.codex/config.toml (or $CODEX_HOME)
+palizade install-config --all --client codex --project   # this repo's .codex/config.toml
 palizade install-hooks codex
 ```
 
-Codex keeps MCP servers in `~/.codex/config.toml`, which `install-config` does not edit. Add the server to `palizade.yaml`, then point Codex at the wrapper:
-
-```toml
-[mcp_servers.github]
-command = "palizade"
-args = ["wrap", "github", "-c", "/absolute/path/to/palizade.yaml"]
-```
+Only the `[mcp_servers.<name>]` tables of wrapped servers are rewritten; the rest of the file, comments included, is left alone, and per tool settings such as `approval_mode` are kept. Variables the server needed (`env_vars`, `bearer_token_env_var`, `env_http_headers`) are forwarded to Palizade.
 
 **Any other MCP client** that launches stdio servers: use `palizade wrap <server> -c /absolute/path/to/palizade.yaml` as the server command.
 
@@ -74,7 +70,7 @@ palizade lock approve <server>     # install-config prints these for you
 palizade doctor --client <name>    # shows which servers and tools are protected
 ```
 
-Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` (Claude Code) and `${env:NAME}` (Cursor) are filled from your environment when Palizade starts the server or connects to its url. A header whose variable is unset is left out; a url whose variable is unset is an error. Servers using the legacy `sse` or `ws` transports are skipped with a message, since Palizade proxies stdio and Streamable HTTP only.
+Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` (Claude Code) and `${env:NAME}` (Cursor) are filled from your environment when Palizade starts the server or connects to its url. A header whose variable is unset is left out; a url whose variable is unset is an error. Remote servers with no static credentials are skipped, because they usually sign in with OAuth, which the stdio wrapper cannot do; run those through `palizade serve`, or pass `--include-remote` if they need no sign in. Servers using the legacy `sse` or `ws` transports are skipped with a message, since Palizade proxies stdio and Streamable HTTP only.
 
 ## How It Works
 

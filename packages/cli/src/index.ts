@@ -78,11 +78,12 @@ program.command("init")
 program.command("install-config")
   .description("Install a Palizade wrapper entry into an MCP client config")
   .argument("[serverName]", "Server name from palizade.yaml")
-  .option("--client <name>", "Target client: claude-desktop, claude-code or cursor", "claude-desktop")
+  .option("--client <name>", "Target client: claude-desktop, claude-code, cursor or codex", "claude-desktop")
   .option("--config <path>", "Path to this project's palizade.yaml")
   .option("--client-config <path>", "Override the client config file location")
-  .option("--project", "Use the project config in the current directory (.mcp.json or .cursor/mcp.json)", false)
+  .option("--project", "Use the project config in the current directory (.mcp.json, .cursor/mcp.json or .codex/config.toml)", false)
   .option("--local", "Claude Code only: servers added at the default local scope for the current directory (in ~/.claude.json)", false)
+  .option("--include-remote", "With --all, also wrap remote servers that have no static credentials", false)
   .option("--name <entryName>", "Name for the mcpServers entry")
   .option("--all", "Wrap every unprotected MCP server in the client config", false)
   .option("--lock", "Print lock approve commands for newly auto-added servers", false)
@@ -94,6 +95,7 @@ program.command("install-config")
     clientConfig?: string;
     project: boolean;
     local: boolean;
+    includeRemote: boolean;
     name?: string;
     all: boolean;
     lock: boolean;
@@ -113,6 +115,7 @@ program.command("install-config")
         clientConfigPath: options.clientConfig,
         project: options.project,
         local: options.local,
+        includeRemote: options.includeRemote,
         dryRun: options.dryRun,
         cliPath: getRunningCliPath()
       });
@@ -616,7 +619,7 @@ taint.command("prune")
 
 program.command("doctor")
   .description("Validate local Palizade configuration")
-  .option("--client <name>", "Target client for MCP coverage: claude-desktop, claude-code or cursor", "claude-desktop")
+  .option("--client <name>", "Target client for MCP coverage: claude-desktop, claude-code, cursor or codex", "claude-desktop")
   .option("--client-config <path>", "Override the client config file location for coverage")
   .option("--project", "Check the project config in the current directory", false)
   .option("--local", "Claude Code only: check servers at the local scope for the current directory", false)
@@ -828,5 +831,5 @@ async function exists(path: string): Promise<boolean> {
 }
 
 function clientLabel(client: string): string {
-  return client === "claude-code" ? "Claude Code" : client === "cursor" ? "Cursor" : "Claude Desktop (fully quit and reopen)";
+  return client === "claude-code" ? "Claude Code" : client === "cursor" ? "Cursor" : client === "codex" ? "Codex" : "Claude Desktop (fully quit and reopen)";
 }
