@@ -50,6 +50,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 ### Performance
 
 - Stdio framing copies a large message once instead of once per chunk: a 20 MB tool result in 64 KB chunks now takes about 60 ms instead of about 800 ms.
+- Large tool results are fingerprinted once instead of twice, and SimHash no longer uses BigInt (same output, so stored fingerprints still match): a 5 MB result goes from about 10 s to about 3 s of Palizade time.
 
 ### Known limits
 

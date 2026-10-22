@@ -1,4 +1,4 @@
-import { sha256 } from "./hash.js";
+import { hash } from "node:crypto";
 import type { TaintFingerprint } from "./types.js";
 import { HIDDEN_UNICODE, tokenViews } from "./unicode.js";
 
@@ -82,21 +82,20 @@ function fnv1a(text: string, from: number, to: number): number {
 
 export function simhash(normalized: string): string {
   const shingles = wordShingles(normalized);
-  const vector = new Array<number>(64).fill(0);
+  const vector = new Int32Array(64);
   for (const shingle of shingles) {
-    const hash = sha256(shingle).slice(0, 16);
-    const bits = BigInt(`0x${hash}`);
+    // The top 64 bits of SHA-256, read big endian: bit i lives in byte 7 - (i >> 3).
+    const digest = hash("sha256", shingle, "buffer");
     for (let bit = 0; bit < 64; bit += 1) {
-      vector[bit]! += (bits & (1n << BigInt(bit))) === 0n ? -1 : 1;
+      vector[bit]! += (digest[7 - (bit >> 3)]! >> (bit & 7)) & 1 ? 1 : -1;
     }
   }
-  let result = 0n;
+  const out = Buffer.alloc(8);
   for (let bit = 0; bit < 64; bit += 1) {
-    if ((vector[bit] ?? 0) >= 0) {
-      result |= 1n << BigInt(bit);
-    }
+    if (vector[bit]! >= 0) out[7 - (bit >> 3)] = out[7 - (bit >> 3)]! | (1 << (bit & 7));
   }
-  return result.toString(16).padStart(16, "0");
+  // Same hex as before (BigInt.toString(16) padded to 16), so stored fingerprints stay comparable.
+  return out.toString("hex");
 }
 
 export function hammingDistanceHex(a: string, b: string): number {

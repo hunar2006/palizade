@@ -390,17 +390,31 @@ function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefi
   return !filter || filter.some((taintClass) => classes.includes(taintClass));
 }
 
+// A tool result is fingerprinted to look up its provenance and again to store it; reuse the work.
+const fingerprintCache = new Map<string, { key: Buffer; normalized: string; base: Omit<TaintFingerprint, "sensitiveFragments"> }>();
+
 function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false): TaintFingerprint {
-  const normalized = normalizeText(input);
-  const fragments = makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment));
-  const tokens = extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token)));
-  return {
-    normalized: hmacSha256Hex(key, normalized),
-    substrings: fragments,
-    tokens,
-    simhash: simhash(normalized),
-    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized).map((fragment) => hmacSha256Hex(key, fragment)) } : {})
-  };
+  let cached = fingerprintCache.get(input);
+  if (!cached || !cached.key.equals(key)) {
+    const normalized = normalizeText(input);
+    cached = {
+      key,
+      normalized,
+      base: {
+        normalized: hmacSha256Hex(key, normalized),
+        substrings: makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment)),
+        tokens: extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token))),
+        simhash: simhash(normalized)
+      }
+    };
+    if (input.length >= 4096) {
+      fingerprintCache.delete(input);
+      fingerprintCache.set(input, cached);
+      if (fingerprintCache.size > 8) fingerprintCache.delete(fingerprintCache.keys().next().value!);
+    }
+  }
+  const base = { ...cached.base, substrings: [...cached.base.substrings], tokens: [...cached.base.tokens] };
+  return sensitive ? { ...base, sensitiveFragments: makeSensitiveFragments(cached.normalized).map((fragment) => hmacSha256Hex(key, fragment)) } : base;
 }
 
 function canonicalizeToken(token: string): string {
