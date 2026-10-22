@@ -62,9 +62,11 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
   if (catalog) {
     catalog.rule.capabilities.forEach((capability) => capabilities.add(capability));
     reasons.push(`catalog:${catalog.entry.id}`);
-    // Annotations may still raise a catalog class to sink, never lower it.
-    const toolClass = configured ?? (raisingAnnotation ? "sink" : catalog.rule.toolClass);
-    if (!configured && raisingAnnotation && catalog.rule.toolClass !== "sink") reasons.push("annotation:raised");
+    // destructiveHint may still raise a catalog class to sink, never lower it. openWorldHint only says
+    // the tool touches the outside world, which the catalog entry already accounts for.
+    const destructive = tool?.annotations?.destructiveHint === true;
+    const toolClass = configured ?? (destructive ? "sink" : catalog.rule.toolClass);
+    if (!configured && destructive && catalog.rule.toolClass !== "sink") reasons.push("annotation:raised");
     return { toolClass, capabilities: [...capabilities], reasons, ...(catalog.rule.roles ? { argumentRoles: catalog.rule.roles } : {}) };
   }
 

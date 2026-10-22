@@ -106,10 +106,11 @@ export const TOOL_CATALOG: CatalogEntry[] = [
     identifiers: /@playwright\/mcp|\bmcp\/playwright\b/iu,
     rules: [
       { tools: /^browser_(navigate|navigate_back|navigate_forward)$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } },
-      { tools: /^browser_(snapshot|take_screenshot|console_messages|network_requests|wait_for)$/u, toolClass: "source", capabilities: READS },
-      { tools: /^browser_(evaluate|run_code)$/u, toolClass: "sink", capabilities: ["executes_code", "network_egress"] },
-      { tools: /^browser_file_upload$/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "reads_sensitive_data"] },
-      { tools: /^browser_(click|type|fill_form|select_option|press_key|drag|hover|handle_dialog)$/u, toolClass: "sink", capabilities: REMOTE_WRITE },
+      { tools: /^browser_(snapshot|take_screenshot|console_messages|network_requests|network_request|wait_for|find)$/u, toolClass: "source", capabilities: READS },
+      { tools: /^browser_(evaluate|run_code|run_code_unsafe)$/u, toolClass: "sink", capabilities: ["executes_code", "network_egress"] },
+      { tools: /^browser_(file_upload|drop)$/u, toolClass: "sink", capabilities: [...REMOTE_WRITE, "reads_sensitive_data"] },
+      { tools: /^browser_tabs$/u, toolClass: "sink", capabilities: BROWSE, roles: { url: "url" } },
+      { tools: /^browser_(click|type|fill_form|select_option|press_key|drag|hover|handle_dialog|emulate_media)$/u, toolClass: "sink", capabilities: REMOTE_WRITE },
       { tools: /^browser_(close|resize|install)$/u, toolClass: "pure", capabilities: [] }
     ]
   },

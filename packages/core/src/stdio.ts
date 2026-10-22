@@ -211,33 +211,55 @@ export async function collectToolsFromStdioServer(
     audit: context.audit
   });
   const peer = new LineJsonRpcPeer(child.stdout, child.stdin);
-  const id = randomUUID();
-
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error("Timed out waiting for tools/list"));
-    }, timeoutMs);
-
-    peer.on("message", (message: JsonRpcMessage) => {
-      if ("id" in message && message.id === id && "result" in message) {
-        clearTimeout(timeout);
-        child.kill();
-        resolve(((message.result as { tools?: unknown[] }).tools) ?? []);
-      }
-      if ("id" in message && message.id === id && "error" in message) {
-        clearTimeout(timeout);
-        child.kill();
-        reject(new Error(message.error.message));
-      }
-    });
-    peer.on("error", (error) => {
-      clearTimeout(timeout);
-      child.kill();
-      reject(error);
-    });
-    peer.send({ jsonrpc: "2.0", id, method: "tools/list", params: {} });
+  const waiting = new Map<string, { resolve: (message: JsonRpcMessage) => void }>();
+  let failure: Error | undefined;
+  const failAll = (error: Error) => {
+    failure ??= error;
+    for (const entry of waiting.values()) entry.resolve({ jsonrpc: "2.0", id: "failed", error: { code: -1, message: error.message } } as JsonRpcMessage);
+    waiting.clear();
+  };
+  peer.on("message", (message: JsonRpcMessage) => {
+    if ("id" in message && typeof message.id === "string" && waiting.has(message.id) && ("result" in message || "error" in message)) {
+      waiting.get(message.id)!.resolve(message);
+      waiting.delete(message.id);
+    }
   });
+  peer.on("error", (error: Error) => failAll(error));
+  child.on("exit", (code) => failAll(new Error(`Server exited (code ${code ?? "unknown"}) before listing its tools`)));
+  const request = (method: string, params: Record<string, unknown>) => new Promise<JsonRpcMessage>((resolveRequest) => {
+    if (failure) return resolveRequest({ jsonrpc: "2.0", id: "failed", error: { code: -1, message: failure.message } } as JsonRpcMessage);
+    const id = randomUUID();
+    waiting.set(id, { resolve: resolveRequest });
+    peer.send({ jsonrpc: "2.0", id, method, params } as JsonRpcMessage);
+  });
+  const errorOf = (message: JsonRpcMessage) => ("error" in message ? (message.error as { message?: string }).message ?? "error" : undefined);
+
+  const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timed out waiting for tools/list")), timeoutMs).unref());
+  const collect = async (): Promise<unknown[]> => {
+    // Legacy servers (most SDKs today) require the initialize handshake before any request.
+    const init = await request("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "palizade", version: "lock" } });
+    const modern = errorOf(init) !== undefined;
+    if (!modern) peer.send({ jsonrpc: "2.0", method: "notifications/initialized" } as JsonRpcMessage);
+    const tools: unknown[] = [];
+    let cursor: string | undefined;
+    // Follow nextCursor so servers that paginate their tool list are locked completely.
+    for (let page = 0; page < 100; page += 1) {
+      const params: Record<string, unknown> = { ...(cursor ? { cursor } : {}), ...(modern ? { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } } : {}) };
+      const response = await request("tools/list", params);
+      const error = errorOf(response);
+      if (error !== undefined) throw new Error(modern ? `${error} (initialize also failed: ${errorOf(init)})` : error);
+      const result = (response as { result: { tools?: unknown[]; nextCursor?: unknown } }).result;
+      tools.push(...(result.tools ?? []));
+      cursor = typeof result.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined;
+      if (!cursor) return tools;
+    }
+    throw new Error("tools/list returned more than 100 pages");
+  };
+  try {
+    return await Promise.race([collect(), timeout]);
+  } finally {
+    child.kill();
+  }
 }
 
 async function handleEnvelope(

@@ -25,7 +25,8 @@
     "demo:secret-block": "node examples/secret-egress-block-demo.mjs",
     "demo:pii-redact": "node examples/pii-redact-demo.mjs",
     "demo:egress-allowlist": "node examples/egress-allowlist-demo.mjs",
-    "smoke:filesystem": "node examples/real-filesystem-smoke.mjs"
+    "smoke:filesystem": "node examples/real-filesystem-smoke.mjs",
+    "eval:real": "node eval/real-servers.mjs eval/real-servers.example.yaml --out results/real-servers.md"
   },
   "keywords": [
     "mcp",

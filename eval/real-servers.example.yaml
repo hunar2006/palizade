@@ -1,0 +1,35 @@
+# Reference MCP servers for `node eval/real-servers.mjs eval/real-servers.example.yaml`.
+# Needs network access for npx and uvx on first run. Versions are the ones last checked.
+servers:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem@2.0.0", "."]
+    trust: untrusted
+  memory:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory@2.0.0"]
+    trust: untrusted
+  sequential-thinking:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking@2.0.0"]
+    trust: untrusted
+  everything:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-everything@2.0.0"]
+    trust: untrusted
+  playwright:
+    command: npx
+    args: ["-y", "@playwright/mcp@0.0.83", "--headless"]
+    trust: untrusted
+  fetch:
+    command: uvx
+    args: ["mcp-server-fetch"]
+    trust: untrusted
+  git:
+    command: uvx
+    args: ["mcp-server-git", "--repository", "."]
+    trust: untrusted
+  time:
+    command: uvx
+    args: ["mcp-server-time"]
+    trust: untrusted
