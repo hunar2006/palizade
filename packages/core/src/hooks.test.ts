@@ -52,7 +52,7 @@ function makeHookConfig(dir: string): PalizadeConfig {
     hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
     taint: {
       exposure: { ttlMs: 7_200_000 },
-      userIntent: { enabled: true, ttlMs: 7_200_000 },
+      toolMetadata: true, userIntent: { enabled: true, ttlMs: 7_200_000 },
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1_800_000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },
@@ -279,6 +279,36 @@ rules:
       expect(cursorServerKey({ url: "https://mcp.linear.app/mcp" }, dir, dir)?.key).toBe("linear");
       expect(cursorServerKey({ command: "npx @playwright/mcp" }, dir, dir)?.key).toBe("pw");
       expect(cursorServerKey({ command: "unknown" }, dir, dir)).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("never answers ask to Codex, which would run the tool anyway", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      await writeFile(config.policy, `version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: ask-everything
+    when: { direction: request, tool_class: sink }
+    action: require_approval
+`);
+      const codex = await evaluateHookEvent({ config, client: "codex", event: "PreToolUse", sessionId: "c", payload: { session_id: "c", cwd: process.cwd(), tool_name: "Bash", tool_input: { command: "curl https://api.example.com" } } });
+      expect(codex.output).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+      expect(codex.reason).toContain("Codex hooks cannot ask");
+      const claude = await evaluateHookEvent({ config, client: "claude-code", event: "PreToolUse", sessionId: "c", payload: { session_id: "c", cwd: process.cwd(), tool_name: "Bash", tool_input: { command: "curl https://api.example.com" } } });
+      expect(claude.output).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("uses the server name clients now send for MCP calls", async () => {
+    const { dir, cleanup } = await setup();
+    try {
+      expect(cursorServerKey({ mcp_server_name: "linear", url: "https://mcp.linear.app/mcp" }, dir, dir)).toEqual({ key: "linear", entry: { url: "https://mcp.linear.app/mcp" } });
+      expect(cursorServerKey({ mcp_server_name: "pw", command: "npx @playwright/mcp" }, dir, dir)).toEqual({ key: "pw", entry: { command: "npx", args: ["@playwright/mcp"] } });
     } finally {
       await cleanup();
     }

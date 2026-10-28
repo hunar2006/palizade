@@ -286,7 +286,13 @@ export function cursorServerKey(payload: Record<string, unknown>, cwd: string, h
     }
   }
   const command = typeof payload.command === "string" ? payload.command : undefined;
-  const url = typeof payload.url === "string" ? payload.url : undefined;
+  const url = typeof payload.url === "string" ? payload.url : typeof payload.mcp_server_url === "string" ? payload.mcp_server_url : undefined;
+  // Current Cursor sends mcp_server_name, plus url (HTTP) or the launch command (stdio).
+  const named = typeof payload.mcp_server_name === "string" ? payload.mcp_server_name : undefined;
+  if (named) {
+    const entry = servers[named] ?? (url ? { url } : command ? { command: command.split(" ")[0]!, args: command.split(" ").slice(1) } : {});
+    return { key: named, entry };
+  }
   if (command && servers[command]) return { key: command, entry: servers[command]! };
   for (const [key, entry] of Object.entries(servers)) {
     if (url && entry.url === url) return { key, entry };
@@ -417,7 +423,14 @@ export async function evaluateHookEvent(input: {
 
   const record = input.payload && typeof input.payload === "object" ? input.payload as Record<string, unknown> : {};
   const cursorServer = input.client === "cursor" && (input.event === "beforeMCPExecution" || input.event === "afterMCPExecution") ? cursorServerKey(record, cwd) : undefined;
-  const mcp = input.client === "cursor" ? (cursorServer ? { server: cursorServer.key, tool: normalized.tool } : undefined) : parseMcpToolName(normalized.tool);
+  const parsed = input.client === "cursor" ? undefined : parseMcpToolName(normalized.tool);
+  // Claude Code 2.1.274+ names the server in mcp_server; prefer it over splitting the tool name.
+  const declared = record.mcp_server && typeof record.mcp_server === "object" ? (record.mcp_server as Record<string, unknown>).name : undefined;
+  const mcp = input.client === "cursor"
+    ? (cursorServer ? { server: cursorServer.key, tool: normalized.tool } : undefined)
+    : parsed && typeof declared === "string" && normalized.tool.startsWith(`mcp__${declared}__`)
+      ? { server: declared, tool: normalized.tool.slice(`mcp__${declared}__`.length) }
+      : parsed;
   const target = mcp ? mcpHookTarget(input.config, mcp.server, cwd, cursorServer?.entry) : undefined;
   if (target === "wrapped") {
     return { exitCode: 0, output: undefined, reason: "MCP server is wrapped by Palizade; its proxy checks this call." };
@@ -507,6 +520,10 @@ export function buildDenyOutput(client: NativeClient, event: string, reason: str
 }
 
 function buildAskOutput(client: NativeClient, event: string, reason: string): HookDecisionOutput {
+  // Codex parses "ask" but runs the tool anyway, so an approval there must be a deny.
+  if (client === "codex") {
+    return buildDenyOutput(client, event, `Palizade needs your approval for this call, and Codex hooks cannot ask; run it yourself if you approve. ${reason}`);
+  }
   if (client === "claude-code") {
     return {
       exitCode: 0,
