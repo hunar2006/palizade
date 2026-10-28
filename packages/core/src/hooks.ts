@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JsonRpcMessage } from "./mcp.js";
 
-export type NativeClient = "claude-code" | "cursor" | "codex";
+export type NativeClient = "claude-code" | "cursor" | "codex" | "gemini";
 
 export interface HookDecisionOutput {
   exitCode: 0 | 2;
@@ -43,7 +43,18 @@ const HOOK_SERVER: Omit<ServerConfig, "cwd"> & { cwd?: string } = {
     WebFetch: "sink",
     Read: "source",
     Grep: "source",
-    Glob: "source"
+    Glob: "source",
+    // Gemini CLI built in tools.
+    run_shell_command: "sink",
+    write_file: "sink",
+    replace: "sink",
+    web_fetch: "sink",
+    read_file: "source",
+    read_many_files: "source",
+    list_directory: "source",
+    glob: "source",
+    grep_search: "source",
+    google_web_search: "source"
   },
   toolCapabilities: {
     Bash: ["executes_code", "network_egress", "writes_local"],
@@ -52,7 +63,11 @@ const HOOK_SERVER: Omit<ServerConfig, "cwd"> & { cwd?: string } = {
     Write: ["file_write", "writes_local"],
     Edit: ["file_write", "writes_local"],
     apply_patch: ["file_write", "writes_local"],
-    WebFetch: ["network_egress", "reads_untrusted_content"]
+    WebFetch: ["network_egress", "reads_untrusted_content"],
+    run_shell_command: ["executes_code", "network_egress", "writes_local"],
+    write_file: ["file_write", "writes_local"],
+    replace: ["file_write", "writes_local"],
+    web_fetch: ["network_egress", "reads_untrusted_content"]
   },
   argumentRoles: {
     Bash: { command: "shell_command", urls: "url", hosts: "hostname", redirectTargets: "file_path" },
@@ -61,7 +76,12 @@ const HOOK_SERVER: Omit<ServerConfig, "cwd"> & { cwd?: string } = {
     Write: { file_path: "file_path", content: "body" },
     Edit: { file_path: "file_path", old_string: "body", new_string: "body" },
     apply_patch: { file_path: "file_path", patch: "body" },
-    WebFetch: { url: "url" }
+    WebFetch: { url: "url" },
+    run_shell_command: { command: "shell_command", urls: "url", hosts: "hostname", redirectTargets: "file_path" },
+    write_file: { file_path: "file_path", content: "body" },
+    replace: { file_path: "file_path", old_string: "body", new_string: "body" },
+    // web_fetch takes a prompt with up to 20 urls; urls inside it are found as url fields.
+    web_fetch: { prompt: "body" }
   },
   sensitive: false,
   sensitiveTools: {},
@@ -224,6 +244,22 @@ export function normalizeNativeEvent(client: NativeClient, event: string, payloa
     return undefined;
   }
 
+  if (client === "gemini") {
+    if (event === "BeforeTool") return { kind: "pre", tool: String(record.tool_name ?? "unknown"), input: normalizeToolInput(toolInput) };
+    if (event === "AfterTool") {
+      // tool_response is { llmContent, returnDisplay, error? }; llmContent is what the model reads.
+      const response = record.tool_response && typeof record.tool_response === "object" ? record.tool_response as Record<string, unknown> : {};
+      const content = response.llmContent;
+      return {
+        kind: "post",
+        tool: String(record.tool_name ?? "unknown"),
+        input: normalizeToolInput(toolInput),
+        response: typeof content === "string" ? { content: [{ type: "text", text: content }] } : content ?? response
+      };
+    }
+    return undefined;
+  }
+
   if (client === "codex") {
     if (event === "PreToolUse") {
       return { kind: "pre", tool: String(record.tool_name ?? "unknown"), input: normalizeToolInput(toolInput) };
@@ -235,6 +271,27 @@ export function normalizeNativeEvent(client: NativeClient, event: string, payloa
   }
 
   return undefined;
+}
+
+/**
+ * Gemini CLI names MCP tools `mcp_<server>_<tool>` with single underscores, so the server is the
+ * longest configured name (in ~/.gemini/settings.json or the project's .gemini/settings.json)
+ * that fits.
+ */
+export function parseGeminiMcpToolName(tool: string, cwd: string, home = homedir()): { server: string; tool: string; entry: ClientServerEntry } | undefined {
+  if (!tool.startsWith("mcp_")) return undefined;
+  const servers: Record<string, ClientServerEntry & { httpUrl?: string }> = {};
+  for (const path of [join(home, ".gemini", "settings.json"), join(cwd, ".gemini", "settings.json")]) {
+    try {
+      if (existsSync(path)) Object.assign(servers, (JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, ClientServerEntry> }).mcpServers ?? {});
+    } catch {
+      // An unreadable settings file only means the server is not recognized.
+    }
+  }
+  const name = Object.keys(servers).filter((candidate) => tool.startsWith(`mcp_${candidate}_`)).sort((a, b) => b.length - a.length)[0];
+  if (!name) return undefined;
+  const raw = servers[name]!;
+  return { server: name, tool: tool.slice(`mcp_${name}_`.length), entry: { ...(raw.command ? { command: raw.command } : {}), ...(raw.args ? { args: raw.args } : {}), ...(raw.url ?? raw.httpUrl ? { url: raw.url ?? raw.httpUrl } : {}) } };
 }
 
 /** `mcp__<server>__<tool>`, the name Claude Code and Codex give MCP tools in hooks. */
@@ -351,7 +408,7 @@ function payloadField(payload: unknown, ...names: string[]): string | undefined 
 function enrichToolArguments(normalized: NormalizedNativeEvent): Record<string, unknown> {
   const input: Record<string, unknown> = { ...normalized.input };
   const command = typeof input.command === "string" ? input.command : undefined;
-  if (command !== undefined && (normalized.tool === "Bash" || normalized.tool === "Shell" || normalized.tool === "shell")) {
+  if (command !== undefined && (normalized.tool === "Bash" || normalized.tool === "Shell" || normalized.tool === "shell" || normalized.tool === "run_shell_command")) {
     const analysis = analyzeShellCommand(command);
     if (analysis.urls.length > 0) input.urls = analysis.urls;
     if (analysis.hosts.length > 0) input.hosts = analysis.hosts;
@@ -364,7 +421,8 @@ function enrichToolArguments(normalized: NormalizedNativeEvent): Record<string, 
 const PROMPT_EVENTS: Record<NativeClient, string> = {
   "claude-code": "UserPromptSubmit",
   codex: "UserPromptSubmit",
-  cursor: "beforeSubmitPrompt"
+  cursor: "beforeSubmitPrompt",
+  gemini: "BeforeAgent"
 };
 
 export function isPromptEvent(client: NativeClient, event: string): boolean {
@@ -423,7 +481,8 @@ export async function evaluateHookEvent(input: {
 
   const record = input.payload && typeof input.payload === "object" ? input.payload as Record<string, unknown> : {};
   const cursorServer = input.client === "cursor" && (input.event === "beforeMCPExecution" || input.event === "afterMCPExecution") ? cursorServerKey(record, cwd) : undefined;
-  const parsed = input.client === "cursor" ? undefined : parseMcpToolName(normalized.tool);
+  const gemini = input.client === "gemini" ? parseGeminiMcpToolName(normalized.tool, cwd) : undefined;
+  const parsed = input.client === "cursor" ? undefined : input.client === "gemini" ? gemini : parseMcpToolName(normalized.tool);
   // Claude Code 2.1.274+ names the server in mcp_server; prefer it over splitting the tool name.
   const declared = record.mcp_server && typeof record.mcp_server === "object" ? (record.mcp_server as Record<string, unknown>).name : undefined;
   const mcp = input.client === "cursor"
@@ -431,7 +490,7 @@ export async function evaluateHookEvent(input: {
     : parsed && typeof declared === "string" && normalized.tool.startsWith(`mcp__${declared}__`)
       ? { server: declared, tool: normalized.tool.slice(`mcp__${declared}__`.length) }
       : parsed;
-  const target = mcp ? mcpHookTarget(input.config, mcp.server, cwd, cursorServer?.entry) : undefined;
+  const target = mcp ? mcpHookTarget(input.config, mcp.server, cwd, cursorServer?.entry ?? gemini?.entry) : undefined;
   if (target === "wrapped") {
     return { exitCode: 0, output: undefined, reason: "MCP server is wrapped by Palizade; its proxy checks this call." };
   }
@@ -486,6 +545,9 @@ async function withHookTimeout<T>(timeoutMs: number, run: () => Promise<T>): Pro
 }
 
 export function buildDenyOutput(client: NativeClient, event: string, reason: string): HookDecisionOutput {
+  if (client === "gemini") {
+    return { exitCode: 0, output: { decision: "deny", reason }, reason };
+  }
   if (client === "claude-code") {
     return {
       exitCode: 0,
@@ -521,8 +583,9 @@ export function buildDenyOutput(client: NativeClient, event: string, reason: str
 
 function buildAskOutput(client: NativeClient, event: string, reason: string): HookDecisionOutput {
   // Codex parses "ask" but runs the tool anyway, so an approval there must be a deny.
-  if (client === "codex") {
-    return buildDenyOutput(client, event, `Palizade needs your approval for this call, and Codex hooks cannot ask; run it yourself if you approve. ${reason}`);
+  // Gemini CLI has no ask at all.
+  if (client === "codex" || client === "gemini") {
+    return buildDenyOutput(client, event, `Palizade needs your approval for this call, and ${client === "codex" ? "Codex" : "Gemini CLI"} hooks cannot ask; run it yourself if you approve. ${reason}`);
   }
   if (client === "claude-code") {
     return {
