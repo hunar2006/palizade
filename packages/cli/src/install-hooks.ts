@@ -66,14 +66,14 @@ export function mergeHookEntries(client: string, settings: JsonRecord, cliParts:
     }
     return settings;
   }
-  if (client === "codex") {
+  if (client === "codex" || client === "gemini") {
     const hooks = ensureRecord(settings, "hooks");
     for (const [event, groups] of Object.entries(hookDefinition as Record<string, unknown>)) {
       upsert(ensureArray(hooks, event), groups, groupContainsPalizade);
     }
     return settings;
   }
-  throw new Error(`Unsupported hook client '${client}'. Supported: claude-code, cursor, codex.`);
+  throw new Error(`Unsupported hook client '${client}'. Supported: claude-code, cursor, codex, gemini.`);
 }
 
 export interface HookCoverage {
@@ -112,7 +112,10 @@ export function resolveHooksSettingsPath(client: string, platform: string = osPl
   if (client === "codex") {
     return posix.join(homeDir, ".codex", "hooks.json");
   }
-  throw new Error(`Unsupported hook client '${client}'. Supported: claude-code, cursor, codex.`);
+  if (client === "gemini") {
+    return posix.join(homeDir, ".gemini", "settings.json");
+  }
+  throw new Error(`Unsupported hook client '${client}'. Supported: claude-code, cursor, codex, gemini.`);
 }
 
 function buildHookDefinition(client: string, cliParts: string[]): JsonRecord {
@@ -144,6 +147,15 @@ function buildHookDefinition(client: string, cliParts: string[]): JsonRecord {
       afterShellExecution: [{ command: commandLine }],
       afterMCPExecution: [{ command: commandLine }],
       beforeSubmitPrompt: [{ command: `${commandLine} beforeSubmitPrompt` }]
+    };
+  }
+  if (client === "gemini") {
+    // Gemini runs `command` through a shell; it has no args field. Timeouts are in milliseconds.
+    const line = (event: string) => [...cliParts, "gemini", event].map(quoteShellArg).join(" ");
+    return {
+      BeforeTool: { matcher: "run_shell_command|write_file|replace|web_fetch|mcp_.*", hooks: [{ type: "command", name: "palizade", command: line("BeforeTool"), timeout: 30000 }] },
+      AfterTool: { matcher: "read_file|read_many_files|web_fetch|grep_search|glob|list_directory|google_web_search|mcp_.*", hooks: [{ type: "command", name: "palizade", command: line("AfterTool"), timeout: 30000 }] },
+      BeforeAgent: { hooks: [{ type: "command", name: "palizade", command: line("BeforeAgent"), timeout: 30000 }] }
     };
   }
   const command = cliParts[0]!;

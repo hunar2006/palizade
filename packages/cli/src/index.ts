@@ -95,7 +95,7 @@ program.command("setup")
   .option("--timeout <duration>", "Per server timeout for --lock, such as 60s", "60s")
   .option("--dry-run", "Show what would change without writing", false)
   .action(async (client: string, options: { project: boolean; preset: string; hooks: boolean; lock: boolean; timeout: string; dryRun: boolean }) => {
-    if (!["claude-desktop", "claude-code", "cursor", "codex"].includes(client)) throw new Error(`Unknown client '${client}'. Choose claude-desktop, claude-code, cursor or codex.`);
+    if (!["claude-desktop", "claude-code", "cursor", "codex", "gemini"].includes(client)) throw new Error(`Unknown client '${client}'. Choose claude-desktop, claude-code, cursor, codex or gemini.`);
     const configPath = resolve(program.opts<{ config: string }>().config);
     const step = (text: string) => console.log(`\n== ${text}`);
     step("palizade.yaml");
@@ -109,11 +109,15 @@ program.command("setup")
     }
 
     step(`${clientLabel(client)} MCP servers`);
-    const result = await installAllClientConfigs({ client, configPath, project: options.project, dryRun: options.dryRun, cliPath: getRunningCliPath() });
+    // Gemini CLI MCP servers are not rewritten; its BeforeTool hook checks their calls instead.
+    const result = client === "gemini"
+      ? { warnings: [] as string[], skipped: [] as Array<{ name: string; reason: string }>, wrapped: [] as Array<{ name: string; addedToPalizadeConfig: boolean }>, lockCommands: [] as string[], clientConfigPath: "", backupPath: undefined as string | undefined }
+      : await installAllClientConfigs({ client, configPath, project: options.project, dryRun: options.dryRun, cliPath: getRunningCliPath() });
+    if (client === "gemini") console.log("Gemini CLI MCP servers are checked through its hooks, not wrapped.");
     result.warnings.forEach((warning) => console.warn(warning));
     result.skipped.forEach((skipped) => console.log(`Skipped ${skipped.name}: ${skipped.reason}`));
     result.wrapped.forEach((wrapped) => console.log(`${options.dryRun ? "Would wrap" : "Wrapped"} ${wrapped.name}${wrapped.addedToPalizadeConfig ? " (added to palizade.yaml as untrusted)" : ""}`));
-    if (result.wrapped.length === 0) console.log("No unprotected MCP servers found.");
+    if (result.wrapped.length === 0 && client !== "gemini") console.log("No unprotected MCP servers found.");
     else if (!options.dryRun) console.log(`Updated ${result.clientConfigPath}${result.backupPath ? ` (backup: ${result.backupPath})` : ""}`);
 
     if (options.hooks && client !== "claude-desktop") {
@@ -807,7 +811,7 @@ program.command("doctor")
     if (coverage.nativeToolsNote) {
       console.log(coverage.nativeToolsNote);
     }
-    if (["claude-code", "cursor", "codex"].includes(options.client)) {
+    if (["claude-code", "cursor", "codex", "gemini"].includes(options.client)) {
       const hooks = await inspectHooks(options.client);
       const missing = hooks.events.filter((entry) => entry.status !== "installed");
       console.log(`Hooks: ${hooks.settingsPath}`);
@@ -853,7 +857,7 @@ program.command("status")
 
 program.command("hook")
   .description("Evaluate a native client hook event (JSON on stdin) and print the client's decision format")
-  .argument("<client>", "claude-code, cursor, or codex")
+  .argument("<client>", "claude-code, cursor, codex or gemini")
   .argument("[event]", "Hook event name (read from stdin hook_event_name when omitted)")
   .option("--session <id>", "Override the native client session identifier")
   .option("--cwd <dir>", "Override the working directory used for path checks")
@@ -873,7 +877,7 @@ program.command("hook")
       hookEvent = payloadEvent;
       const result = await evaluateHookEvent({
         config,
-        client: client as "claude-code" | "cursor" | "codex",
+        client: client as "claude-code" | "cursor" | "codex" | "gemini",
         event: hookEvent,
         payload,
         ...(options.session ? { sessionId: options.session } : {}),
@@ -888,13 +892,13 @@ program.command("hook")
     } catch {
       const reason = "Hook evaluation failed; check the local configuration and input.";
       // A prompt hook only records intent; failing closed would block the user's own message.
-      if (isPromptEvent(client as "claude-code" | "cursor" | "codex", hookEvent)) {
+      if (isPromptEvent(client as "claude-code" | "cursor" | "codex" | "gemini", hookEvent)) {
         if (client === "cursor") console.log(JSON.stringify({ continue: true }));
         console.error(`Palizade prompt hook skipped: ${reason}`);
         return;
       }
       if (failMode === "closed") {
-        console.log(JSON.stringify(buildDenyOutput(client as "claude-code" | "cursor" | "codex", hookEvent, reason).output));
+        console.log(JSON.stringify(buildDenyOutput(client as "claude-code" | "cursor" | "codex" | "gemini", hookEvent, reason).output));
         console.error(`Palizade hook failed closed: ${reason}`);
         process.exitCode = 2;
         return;
@@ -905,7 +909,7 @@ program.command("hook")
 
 program.command("install-hooks")
   .description("Install Palizade hook entries into a native client's settings file")
-  .argument("<client>", "claude-code, cursor, or codex")
+  .argument("<client>", "claude-code, cursor, codex or gemini")
   .option("--config <path>", "Path to palizade.yaml")
   .option("--settings <path>", "Override the client settings file location")
   .option("--dry-run", "Print the resulting settings JSON without writing", false)
@@ -1024,5 +1028,5 @@ async function exists(path: string): Promise<boolean> {
 }
 
 function clientLabel(client: string): string {
-  return client === "claude-code" ? "Claude Code" : client === "cursor" ? "Cursor" : client === "codex" ? "Codex" : "Claude Desktop (fully quit and reopen)";
+  return client === "claude-code" ? "Claude Code" : client === "cursor" ? "Cursor" : client === "codex" ? "Codex" : client === "gemini" ? "Gemini CLI" : "Claude Desktop (fully quit and reopen)";
 }
