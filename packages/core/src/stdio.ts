@@ -13,6 +13,8 @@ import type { PalizadeConfig } from "./config.js";
 
 export class LineJsonRpcPeer extends EventEmitter {
   private buffer = Buffer.alloc(0);
+  /** Bytes a Content-Length frame still waits for; until then chunks are not joined. */
+  private neededBytes = 0;
   private pending: Buffer[] = [];
   private pendingBytes = 0;
   private readonly maxMessageBytes: number;
@@ -41,12 +43,16 @@ export class LineJsonRpcPeer extends EventEmitter {
     if (this.buffer.length + this.pendingBytes > this.maxBufferedBytes) {
       this.emit("error", new Error(`JSON-RPC buffer exceeded ${this.maxBufferedBytes} bytes`));
       this.buffer = Buffer.alloc(0);
+      this.neededBytes = 0;
       this.pending = [];
       this.pendingBytes = 0;
       return;
     }
     // Join chunks only once a message can be complete, so a large message is copied once, not per chunk.
     if (!this.allowContentLength && !chunk.includes(0x0a)) {
+      return;
+    }
+    if (this.allowContentLength && this.buffer.length + this.pendingBytes < this.neededBytes) {
       return;
     }
     this.buffer = Buffer.concat([this.buffer, ...this.pending]);
@@ -82,11 +88,14 @@ export class LineJsonRpcPeer extends EventEmitter {
   private tryReadContentLengthFrame(): string | "need-more" | undefined {
     const headerEnd = this.buffer.indexOf("\r\n\r\n");
     if (headerEnd === -1) {
-      return undefined;
+      // A header that has not ended yet: wait, rather than read its first line as a JSON message.
+      return /^content-(?:length|type):/iu.test(this.buffer.toString("ascii", 0, Math.min(this.buffer.length, 64))) ? "need-more" : undefined;
     }
 
     const header = this.buffer.toString("ascii", 0, headerEnd);
-    if (!/^content-length:/imu.test(header)) {
+    // Only a frame when the buffer starts with a header line; otherwise a JSON line before the
+    // frame was read as part of its header and dropped.
+    if (!/^content-(?:length|type):/iu.test(header) || !/^content-length:/imu.test(header)) {
       return undefined;
     }
 
@@ -101,8 +110,10 @@ export class LineJsonRpcPeer extends EventEmitter {
     const bodyStart = headerEnd + 4;
     const bodyEnd = bodyStart + length;
     if (this.buffer.length < bodyEnd) {
+      this.neededBytes = bodyEnd;
       return "need-more";
     }
+    this.neededBytes = 0;
 
     const body = this.buffer.toString("utf8", bodyStart, bodyEnd);
     this.buffer = this.buffer.subarray(bodyEnd);
