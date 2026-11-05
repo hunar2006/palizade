@@ -444,6 +444,15 @@ Widely used servers are classified from a built in catalog, so their tools work 
 
 Hooks reuse the same SQLite taint store, policy, and audit as the proxy: Bash/Shell/apply_patch commands run the full sink check (shell-command role, network destinations, critical-path redirects), Write/Edit are gated on critical paths and tainted content, WebFetch URLs run destination checks, and PostToolUse of Read/WebFetch/Grep/Glob registers taint that later commands are matched against. Hooks fail closed by default (`hooks.failMode: closed`): a crash or timeout exits 2 (block), never allow. Claude Code tool hooks are also installed with `onFailure: block`, so a missing or crashing hook command denies the call instead of letting it through (Claude Code 2.1.295 or newer).
 
+| Client | Status | Payload source for the contract tests |
+|---|---|---|
+| Claude Code | payload tested only | the hooks reference's own examples |
+| Gemini CLI | payload tested only | the field lists in the hooks reference (it has no full example) |
+| Cursor | payload tested only | the fields Palizade's adapter reads; not rechecked against Cursor's docs |
+| Codex | payload tested only | the fields Palizade's adapter reads; not rechecked against Codex's docs |
+
+"Payload tested" means `packages/cli/test/hook-contract.test.ts` runs the client's sample payloads through `palizade hook` and checks the exact JSON and exit code for allow, deny, ask, invalid input, a post tool event and a prompt. No client has been run live against Palizade in these tests; a live run needs the client and a model. Sources are noted in `packages/cli/test/hook-payloads/`.
+
 ### Faster hooks: `palizade daemon` (optional)
 
 Each hook call starts a new Node process that loads Palizade and parses its config, about 180 ms per call on a Linux container. `palizade daemon` (run it from the project, or pass `-c` with the same config path the hooks use) keeps one process running. Hooks then load only a small client, which hands the call to the daemon over a Unix socket in `~/.palizade/run` (macOS, Linux) or a named pipe (Windows), and answers in about 50 ms p50 ([results](results/hook-latency.md), `pnpm bench:hooks`). The daemon answers exactly as the in process hook would. It rereads the config and policy text on every call, so edits apply at once. If the daemon is not running, does not answer within 10 s, or anything about the exchange fails, the hook runs in process and fails closed as before. `PALIZADE_NO_DAEMON=1` turns the client off. Requests and replies are signed with a key in `~/.palizade/run` that only you can read, so another process listening on the same socket or pipe cannot answer for Palizade. A program that runs as you can still start its own daemon when none is running; that gives it nothing it could not already do as you.
