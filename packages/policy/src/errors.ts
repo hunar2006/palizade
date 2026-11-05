@@ -27,7 +27,11 @@ export function parseYamlWithSchema<S extends z.ZodType>(schema: S, raw: string,
     const line = error.linePos?.[0]?.line;
     throw new SchemaValidationError(file, [{ path: "(root)", line, message: `YAML syntax error: ${error.code}`, hint: "Fix the indentation or quoting on this line; YAML uses spaces, not tabs." }]);
   }
-  const result = schema.safeParse(doc.toJS());
+  let value: unknown;
+  // toJS refuses alias bombs (ReferenceError); report that like any other invalid file.
+  try { value = doc.toJS(); }
+  catch (error) { throw new SchemaValidationError(file, [{ path: "(root)", message: `YAML could not be loaded: ${error instanceof Error ? error.message : String(error)}`, hint: "Remove the repeated anchors and aliases (&name, *name)." }]); }
+  const result = schema.safeParse(value);
   if (result.success) return result.data;
   throw new SchemaValidationError(file, schemaProblems(schema, result.error.issues, doc, lineCounter));
 }

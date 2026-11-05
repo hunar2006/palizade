@@ -3,7 +3,9 @@ import type { TaintFingerprint } from "./types.js";
 import { HIDDEN_UNICODE, tokenViews } from "./unicode.js";
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"')]+/giu;
-const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
+// Starts only where a run of local part characters starts: with \b, a long "a.a.a..." run was
+// retried from every letter, which took seconds on a few tens of KB.
+const EMAIL_RE = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 const BASE64_RE = /\b[A-Za-z0-9+/]{40,}={0,2}\b/gu;
 const HEX_RE = /\b[a-fA-F0-9]{48,}\b/gu;
 
@@ -21,7 +23,8 @@ export function extractAtomicTokens(input: string): string[] {
   const tokens = new Set<string>();
   for (const regex of [URL_RE, EMAIL_RE, BASE64_RE, HEX_RE, /(?<![\p{L}\p{N}@._-])[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)+/gu, /\b[A-Z][A-Z0-9_-]*\d[A-Z0-9_-]*\b/gu]) {
     for (const match of input.normalize("NFKC").replace(HIDDEN_UNICODE, "").matchAll(regex)) {
-      for (const token of tokenViews(match[0])) tokens.add(token);
+      // Leading punctuation was never part of an email match under \b; keep tokens the same.
+      for (const token of tokenViews(regex === EMAIL_RE ? match[0].replace(/^[.%+-]+/u, "") : match[0])) tokens.add(token);
     }
   }
   return [...tokens];
