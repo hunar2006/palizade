@@ -1,12 +1,13 @@
 import { StaticApprovalProvider } from "@palizade/approvals";
 import { AuditLogger, JsonlAuditSink, SqliteAuditSink, type AuditEvent } from "@palizade/audit";
-import { loadPolicyFile } from "@palizade/policy";
+import { parsePolicy, type PolicyDocument } from "@palizade/policy";
 import { SqliteTaintStore, extractStatedObservables } from "@palizade/taint";
 import { InterceptionEngine } from "./interceptor.js";
 import { LockfileStore } from "./lockfile.js";
 import { createDetector } from "./factory.js";
 import { serverConfigSchema, type PalizadeConfig, type ServerConfig } from "./config.js";
 import { existsSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JsonRpcMessage } from "./mcp.js";
@@ -90,6 +91,14 @@ const HOOK_SERVER: Omit<ServerConfig, "cwd"> & { cwd?: string } = {
   allowShell: false
 };
 
+// A long running daemon reuses the parsed policy while the file text is unchanged.
+let policyCache: { path: string; raw: string; policy: PolicyDocument } | undefined;
+async function loadPolicyCached(path: string): Promise<PolicyDocument> {
+  const raw = await readFile(path, "utf8");
+  if (policyCache?.path !== path || policyCache.raw !== raw) policyCache = { path, raw, policy: parsePolicy(raw, path) };
+  return structuredClone(policyCache.policy);
+}
+
 export async function createHookEngine(
   config: PalizadeConfig,
   sessionId: string,
@@ -97,9 +106,9 @@ export async function createHookEngine(
   capture: AuditEvent[] = [],
   target: { serverName: string; server: ServerConfig } = { serverName: "native-tools", server: { ...HOOK_SERVER, cwd } }
 ): Promise<HookEngineContext> {
-  // shortcut: each one-shot hook opens a fresh engine/store, use a persistent daemon if hook startup latency or shared split windows are required.
+  // shortcut: each hook call opens a fresh engine/store, also under `palizade daemon`; keep them open if shared split windows are required.
   const server = target.server;
-  const policy = await loadPolicyFile(config.policy);
+  const policy = await loadPolicyCached(config.policy);
   const taintStore = new SqliteTaintStore(config.taint.sqlite, {
     scope: config.taint.scope,
     profileId: config.taint.profileId,
@@ -464,6 +473,8 @@ export async function evaluateHookEvent(input: {
   payload: unknown;
   sessionId?: string;
   cwd?: string;
+  /** Used when neither cwd nor the payload names a directory; defaults to process.cwd(). */
+  fallbackCwd?: string;
 }): Promise<HookDecisionOutput> {
   if (isPromptEvent(input.client, input.event)) {
     try {
@@ -476,7 +487,7 @@ export async function evaluateHookEvent(input: {
   if (!normalized) {
     return { exitCode: 0, output: undefined, reason: "Unsupported hook event; no decision." };
   }
-  const cwd = input.cwd ?? payloadField(input.payload, "cwd") ?? process.cwd();
+  const cwd = input.cwd ?? payloadField(input.payload, "cwd") ?? input.fallbackCwd ?? process.cwd();
   const sessionId = input.sessionId ?? payloadField(input.payload, "session_id", "conversation_id") ?? "native-session";
 
   const record = input.payload && typeof input.payload === "object" ? input.payload as Record<string, unknown> : {};
