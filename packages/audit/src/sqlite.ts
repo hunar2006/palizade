@@ -2,6 +2,10 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AuditEvent, AuditQuery, AuditSink } from "./types.js";
 import { auditEventSchema } from "./types.js";
+import type { VerifyInput } from "./jsonl.js";
+import { pruneAnchors } from "./logger.js";
+
+const COLUMNS = ["ts", "session", "server", "tool", "direction", "method", "action", "payload_hash"] as const;
 
 type SqliteDatabase = {
   exec(sql: string): void;
@@ -66,12 +70,34 @@ export class SqliteAuditSink implements AuditSink {
     this.db = undefined;
   }
 
+  /** Rows in insert order, for `audit verify`. A row whose columns disagree with its JSON is unreadable. */
+  async readForVerify(): Promise<VerifyInput> {
+    await this.ensureInit();
+    if (!this.db) throw new Error("SQLite audit sink is unavailable");
+    const input: VerifyInput = { records: [], positions: [], unreadable: [], anchors: (this.db.prepare("select hash from audit_anchors").all() as Array<{ hash: string }>).map((row) => row.hash) };
+    for (const row of this.db.prepare(`select id, ${COLUMNS.join(", ")}, json from audit_events order by id`).all() as Array<Record<string, unknown> & { id: number; json: string }>) {
+      try {
+        const value: unknown = JSON.parse(row.json);
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not a JSON object");
+        const record = value as Record<string, unknown>;
+        const changed = COLUMNS.filter((column) => (row[column] ?? null) !== (record[column] ?? null));
+        if (changed.length > 0) throw new Error(`column ${changed.join(", ")} differs from the stored event`);
+        input.records.push(record);
+        input.positions.push(row.id);
+      } catch (error) { input.unreadable.push({ position: row.id, reason: `not a valid event: ${(error as Error).message}` }); }
+    }
+    return input;
+  }
+
   async prune(before: Date): Promise<number> {
     await this.ensureInit();
     if (!this.db) {
       throw new Error("SQLite audit sink is unavailable");
     }
     const beforeCount = this.db.prepare("select count(*) as count from audit_events").get() as { count: number };
+    const parse = (rows: unknown[]) => (rows as Array<{ json: string }>).map((row) => JSON.parse(row.json) as Record<string, unknown>);
+    const anchors = pruneAnchors(parse(this.db.prepare("select json from audit_events where ts < ?").all(before.toISOString())), parse(this.db.prepare("select json from audit_events where ts >= ?").all(before.toISOString())));
+    for (const hash of anchors) this.db.prepare("insert or ignore into audit_anchors (hash) values (?)").run(hash);
     this.db.prepare("delete from audit_events where ts < ?").run(before.toISOString());
     const afterCount = this.db.prepare("select count(*) as count from audit_events").get() as { count: number };
     return beforeCount.count - afterCount.count;
@@ -102,6 +128,7 @@ export class SqliteAuditSink implements AuditSink {
         create index if not exists idx_audit_ts on audit_events(ts);
         create index if not exists idx_audit_session on audit_events(session);
         create index if not exists idx_audit_action on audit_events(action);
+        create table if not exists audit_anchors (hash text primary key);
     `);
   }
 }

@@ -175,6 +175,10 @@ Sensitive origins can be declared per server, per tool, or by path-pattern hints
 
 Audit events include identity/scope, tool/method, provenance IDs, detector labels, rule/action/reason, latency, payload hash and a hash chain. Egress metadata includes classes, roles, redaction and destination status, with copied destinations masked. Raw capture is off by default; captured payloads with observable taint are replaced by a redaction marker, and other captured text receives known-secret/PII masking. The chain is tamper-evident only while logs are protected.
 
+`palizade audit verify [--jsonl] [--sqlite]` walks the chains in both stores in write order (JSONL line order, SQLite row id) and prints the first broken link with its line or row, then exits 1. Each process starts its own chain and several processes may append to one log, so chains interleave: every event must extend the latest event of some chain or start a new one, and each event may be extended once. It reports an event whose content changed (hash mismatch, including an added field, since raw records are hashed rather than schema parsed), a missing or reordered predecessor, a duplicate, an unreadable line, and in SQLite an indexed column that differs from the stored JSON. `audit prune` records the hashes of removed events that kept events point to (`audit.jsonl.anchors`, table `audit_anchors`), so a pruned log still verifies.
+
+What it cannot detect: removing the newest events of a chain, or a whole chain. Every native hook call is its own process, so each hook event is a one event chain, and deleting one is not detected; only wrapped servers (`palizade wrap`, `serve`), which keep one chain per process, get deletion detection. Anyone who can write the log can also rewrite it from scratch with valid hashes, or add anchors; the chain only shows edits made without recomputing it.
+
 ## Simplifications
 
 - Stdio and Streamable HTTP are both implemented; the transparent listener shares one upstream session per served server (use the stdio bridge for per-client legacy sessions).
