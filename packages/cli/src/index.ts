@@ -29,7 +29,7 @@ import {
   type McpTool,
   type PalizadeConfig
 } from "@palizade/core";
-import { AuditLogger, JsonlAuditSink, SqliteAuditSink, parseDuration, verifyAuditChain } from "@palizade/audit";
+import { AuditLogger, JsonlAuditSink, SqliteAuditSink, parseDuration, verifyAuditChain, type VerifyInput } from "@palizade/audit";
 import { HeuristicDetector, PromptGuard2Detector, downloadPromptGuard2, PROMPT_GUARD_2_ONNX_MODEL } from "@palizade/detectors";
 import { emptySession, SqliteTaintStore } from "@palizade/taint";
 import {
@@ -716,19 +716,39 @@ const audit = program.command("audit")
   });
 
 audit.command("verify")
-  .description("Verify the audit JSONL hash chain")
-  .action(async () => {
-    const configPath = program.opts<{ config: string }>().config;
-    const config = await loadConfigForCli(configPath);
-    const events = await new JsonlAuditSink(config.audit.jsonl).query({ limit: Number.MAX_SAFE_INTEGER });
-    const result = verifyAuditChain(events);
-    if (result.ok) {
-      const legacy = result.legacyCount > 0 ? `; skipped ${result.legacyCount} legacy unhashed event(s)` : "";
-      console.log(`Audit chain OK (${events.length - result.legacyCount} hashed event(s), ${result.segmentCount} segment(s)${legacy}).`);
-      return;
+  .description("Walk the audit hash chains in the JSONL log and the SQLite store; report the first broken link and exit 1")
+  .option("--jsonl", "Only the JSONL log", false)
+  .option("--sqlite", "Only the SQLite store", false)
+  .action(async (options: { jsonl: boolean; sqlite: boolean }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    const both = !options.jsonl && !options.sqlite;
+    const stores: Array<{ label: string; path: string; unit: string; read: () => Promise<VerifyInput> }> = [];
+    if ((both || options.jsonl) && existsSync(config.audit.jsonl)) stores.push({ label: "JSONL", path: config.audit.jsonl, unit: "line", read: () => new JsonlAuditSink(config.audit.jsonl).readForVerify() });
+    if ((both || options.sqlite) && existsSync(config.audit.sqlite)) {
+      stores.push({ label: "SQLite", path: config.audit.sqlite, unit: "row", read: async () => {
+        const sink = new SqliteAuditSink(config.audit.sqlite);
+        try { return await sink.readForVerify(); } finally { sink.close(); }
+      } });
     }
-    console.log(JSON.stringify(result.failures, null, 2));
-    process.exitCode = 1;
+    if (stores.length === 0) { console.log("No audit log to verify."); return; }
+    for (const store of stores) {
+      const input = await store.read();
+      const result = verifyAuditChain(input.records, input.anchors);
+      const problems = [
+        ...input.unreadable.map((entry) => ({ position: entry.position, eventId: undefined as string | undefined, reason: entry.reason })),
+        ...result.failures.map((failure) => ({ position: input.positions[failure.index]!, eventId: failure.eventId, reason: failure.reason }))
+      ].sort((a, b) => a.position - b.position);
+      const hashed = input.records.length - result.legacyCount;
+      if (problems.length === 0) {
+        const legacy = result.legacyCount > 0 ? `; skipped ${result.legacyCount} older event(s) without hashes` : "";
+        console.log(`${store.label} ${store.path}: chain OK (${hashed} event(s) in ${result.segmentCount} chain(s)${legacy}).`);
+        continue;
+      }
+      const first = problems[0]!;
+      console.log(`${store.label} ${store.path}: chain BROKEN at ${store.unit} ${first.position}${first.eventId ? ` (event ${first.eventId})` : ""}: ${first.reason}.`);
+      if (problems.length > 1) console.log(`  ${problems.length - 1} more problem(s) after it; the first is where to look.`);
+      process.exitCode = 1;
+    }
   });
 
 audit.command("prune")
