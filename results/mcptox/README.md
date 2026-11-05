@@ -15,6 +15,8 @@
 
 "Every tool classified" drops `block-untrusted-unknown-tool`: in the shipped row most stops come from that rule, because these servers are not in Palizade's catalog, and it would also stop the user's own calls. The last two rows show what the taint rules add once tools are classified. Treating text in untrusted tool descriptions as taint (`taint.toolMetadata`) and asking when a call copies it (`approve-arguments-from-tool-descriptions`) took this from 0.7% to 24.6% of successful attacks, at 1.6% of normal calls stopped. AgentDojo results did not change.
 
+Classifying more unknown tools from names and schemas (later change) lowered the shipped default row to 553 (41.1%) attacks and 1028 (20.6%) normal calls stopped: [classification/](classification/README.md).
+
 ## What still gets through
 
 Most remaining `Success` calls change a parameter of a read or search tool (add `LIMIT 1`, search a different id, rewrite a query). That corrupts what the user sees but moves no data out, and Palizade checks sinks, not reads, so it allows them. Short values (`"1"`, `13`) are also too short to match as copied text.

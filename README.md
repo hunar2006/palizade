@@ -107,6 +107,8 @@ This is a replay, not an LLM run, and the utility cost is real: tasks that send 
 | Without tool description taint | 10/1347 (0.7%) | 24/4997 (0.5%) |
 | With it (default now) | 331/1347 (24.6%) | 80/4997 (1.6%) |
 
+Under the shipped default, which blocks tools it cannot classify on untrusted servers, the same replay stopped 1313/4997 (26.3%) normal calls; classifying more tools from their names and schemas brings that to 1028/4997 (20.6%), and to 676/4997 (13.5%) when the replay also gives each tool's description and arguments. Attacks stopped under the default fall too, from 689 to 553 of 1347, because many were stopped only by blocking every unclassified tool. See [results/mcptox/classification](results/mcptox/classification/README.md) and `palizade learn --session <id> --write` to classify the rest.
+
 Spotting poisoned descriptions by their wording catches only 0.8%, since they read like ordinary instructions; what helps is treating values written in an untrusted server's tool descriptions as untrusted data. Most attacks still allowed only change a read or search parameter, which moves no data out. Details and how to reproduce: [results/mcptox](results/mcptox/README.md).
 
 ## How It Works
@@ -273,7 +275,7 @@ Operate a running setup:
 
 - `palizade status [--json]` shows each server's transport, configured and last seen protocol era, lock state and sandbox; the policy file and hash; taint record counts (normal and persistent); quarantined sessions; sessions where the Rule of Two is armed (untrusted and sensitive content both seen); and the last 10 blocks.
 - `palizade policy check [file]` validates a policy before you deploy it: schema and unknown keys (with a "did you mean" hint), rules that can never run because an earlier rule matches everything, conditions that can never be true (`labels_any: []`, `detector_score_gte` above `detector_score_lt`, an invalid `argument_regex`), and `server` or `tool` names that are not in `palizade.yaml` or `palizade.lock`. It exits 1 on errors, and on warnings too with `--strict`.
-- `palizade learn --from-audit --since 7d` prints a draft YAML of tool classes and allowlist entries observed in audit. It never writes a file, and it does not suggest destinations that were only seen in blocked calls or with tainted data.
+- `palizade learn --since 7d` prints a draft YAML of tool classes and allowlist entries observed in audit, and does not suggest destinations that were only seen in blocked calls or with tainted data. `--session <id>` limits it to one session. For a tool Palizade saw as unknown it proposes a class from the locked tool's name, description and schema, as if you trusted the server (Palizade does not use an untrusted server's description by itself). `--write` then shows the proposals and adds them to `palizade.yaml` as `toolClasses` only if you answer yes at the terminal, keeping your comments and writing a `.bak` first. Without `--write` it never writes a file.
 - Edits to `palizade.yaml`, the policy file and `palizade.allow.yaml` are picked up by running `wrap` and `serve` processes within about a second. An invalid edit is rejected: the previous version keeps running, the failure is audited and printed on stderr with the YAML path and a fix hint. Turn this off with `reload: { enabled: false }`; change the poll interval with `reload.intervalMs`.
 - For SIEM ingestion, `metrics: { jsonl: .palizade/metrics.jsonl }` writes one line per decision with counters only (no payloads), rotating at `metrics.maxBytes` (default 64 MiB).
 
@@ -396,7 +398,7 @@ palizade install-hooks <client>
 palizade policy check [file] [--json] [--strict]
 palizade policy test <files...> [--policy <file>]
 palizade policy upgrade [file] [--dry-run]
-palizade learn --from-audit --since 7d [--server <name>]
+palizade learn [--since 7d] [--server <name>] [--session <id>] [--write]
 palizade lock approve <serverName>
 palizade lock diff <serverName>
 palizade detectors install promptguard2
