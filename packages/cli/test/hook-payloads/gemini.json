@@ -1,0 +1,6 @@
+{
+  "source": "Built from the field lists in Gemini CLI docs/hooks/reference.md (https://github.com/google-gemini/gemini-cli), read 2026-11-05: base fields session_id, transcript_path, cwd, hook_event_name, timestamp; BeforeTool tool_name and tool_input; AfterTool tool_response with llmContent and returnDisplay; BeforeAgent prompt. The page has no complete example payload, so values are made up.",
+  "pre": { "session_id": "gemini-session", "transcript_path": "/home/user/.gemini/tmp/chat.json", "cwd": "/home/user/my-project", "hook_event_name": "BeforeTool", "timestamp": "2026-11-05T00:00:00.000Z", "tool_name": "run_shell_command", "tool_input": { "command": "npm test" } },
+  "post": { "session_id": "gemini-session", "transcript_path": "/home/user/.gemini/tmp/chat.json", "cwd": "/home/user/my-project", "hook_event_name": "AfterTool", "timestamp": "2026-11-05T00:00:01.000Z", "tool_name": "read_file", "tool_input": { "absolute_path": "/home/user/my-project/README.md" }, "tool_response": { "llmContent": "Project readme text", "returnDisplay": "Read README.md" } },
+  "prompt": { "session_id": "gemini-session", "transcript_path": "/home/user/.gemini/tmp/chat.json", "cwd": "/home/user/my-project", "hook_event_name": "BeforeAgent", "timestamp": "2026-11-05T00:00:00.000Z", "prompt": "Run the tests" }
+}
