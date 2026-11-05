@@ -1,11 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AuditEvent } from "@palizade/audit";
 import YAML from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatLearnDraft, learnFromAudit } from "./learn.js";
+import { addToolClasses, formatLearnDraft, learnFromAudit, proposedToolClasses } from "./learn.js";
 
 const since = new Date("2026-10-01T00:00:00.000Z");
 
@@ -55,6 +55,39 @@ describe("learn", () => {
     const output = execFileSync(process.execPath, [resolve("packages/cli/dist/index.cjs"), "-c", join(dir, "palizade.yaml"), "learn", "--from-audit", "--since", "7d"], { encoding: "utf8" });
     expect(YAML.parse(output)).toMatchObject({ servers: { github: { toolClasses: { create_issue: "sink" } } } });
     expect([...await readdir(dir), ...await readdir(join(dir, ".palizade"))].sort()).toEqual(before);
+    expect(await readFile(join(dir, "palizade.yaml"), "utf8")).toBe(configText);
+  });
+
+  it("proposes classes for unknown tools of one session and writes them only into palizade.yaml, keeping comments", () => {
+    const other = { ...call("other_tool", "block", { toolClass: "unknown" }), session: "another" };
+    const propose = (_server: string, tool: string) => tool === "weird_tool" ? { toolClass: "source", reasons: ["description:reads_untrusted_content"] } : undefined;
+    const draft = learnFromAudit([...events, other], { since, session: "s", propose });
+    expect(draft.servers.github!.toolClasses.other_tool).toBeUndefined();
+    expect(formatLearnDraft(draft, since)).toContain("weird_tool: source  # 1 call(s); was unknown, proposed from description:reads_untrusted_content");
+    // Only unknown tools with a proposal, on servers palizade.yaml configures.
+    expect(proposedToolClasses(draft, ["github"])).toEqual([{ server: "github", tool: "weird_tool", toolClass: "source" }]);
+    expect(proposedToolClasses(draft, [])).toEqual([]);
+    const raw = "# my servers\nservers:\n  github: { command: node } # keep me\n  other:\n    command: x\n";
+    const next = addToolClasses(raw, proposedToolClasses(draft, ["github"]));
+    expect(next).toContain("# my servers");
+    expect(next).toContain("# keep me");
+    expect(YAML.parse(next).servers).toEqual({ github: { command: "node", toolClasses: { weird_tool: "source" } }, other: { command: "x" } });
+    expect(() => addToolClasses(raw, [{ server: "missing", tool: "t", toolClass: "sink" }])).toThrow(/not in palizade.yaml/u);
+  });
+
+  it("refuses to write without a terminal to confirm", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "palizade-learn-write-"));
+    dirs.push(dir);
+    await mkdir(join(dir, ".palizade"), { recursive: true });
+    const configText = "servers:\n  github: { command: node, trust: untrusted }\n";
+    await writeFile(join(dir, "palizade.yaml"), configText);
+    // A description is evidence only when a person vouches for the server, so this is proposed, not used.
+    await writeFile(join(dir, "palizade.lock"), JSON.stringify({ version: 1, servers: { github: { tools: { weird_tool: { hash: "x", approvedAt: "2026-10-01T00:00:00.000Z", snapshot: { name: "weird_tool", description: "Read the latest report.", inputSchema: { type: "object" } } } } } } }));
+    await writeFile(join(dir, ".palizade", "audit.jsonl"), events.map((event) => JSON.stringify({ ...event, ts: new Date().toISOString() })).join("\n") + "\n");
+    const run = spawnSync(process.execPath, [resolve("packages/cli/dist/index.cjs"), "-c", join(dir, "palizade.yaml"), "learn", "--session", "s", "--write"], { encoding: "utf8", input: "y\n" });
+    expect(run.stdout).toContain("weird_tool: source  # 1 call(s); was unknown, proposed from");
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("needs a terminal");
     expect(await readFile(join(dir, "palizade.yaml"), "utf8")).toBe(configText);
   });
 });

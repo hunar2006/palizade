@@ -19,6 +19,18 @@ describe("classifyToolDetailed", () => {
     allowShell: false
   };
 
+  it("classifies action and read words in names of tools from unknown untrusted servers", () => {
+    const untrusted = { ...server, trust: "untrusted" as const };
+    const cls = (name: string, tool?: Record<string, unknown>) => classifyToolDetailed(name, untrusted, tool ? { name, ...tool } as never : undefined).toolClass;
+    for (const name of ["click", "fill_form", "performance_start_trace", "pg_kill", "deploy_to_heroku", "git_merge", "upload_file", "stop_search", "insert-many", "call-actor"]) expect(cls(name), name).toBe("sink");
+    for (const name of ["git_status", "git_diff", "git_log", "git_show", "pg_info", "describe_table", "find_projects", "API-retrieve-a-page", "take_screenshot"]) expect(cls(name), name).toBe("source");
+    expect(cls("tavily_extract", { inputSchema: { type: "object", properties: { urls: { type: "array" } } } })).toBe("sink");
+    expect(cls("stagehand_agent", { inputSchema: { type: "object", properties: { prompt: { type: "string" } } } })).toBe("sink");
+    // Action words count in names only: a description that says "start with" does not make a read a sink.
+    expect(cls("get_record", { description: "Start with the newest record and stop when done." })).toBe("source");
+    expect(cls("frobnicate")).toBe("unknown");
+  });
+
   it("derives network, message, and file-write capabilities from names and annotations", () => {
     expect(classifyToolDetailed("http_post", server).capabilities).toEqual(expect.arrayContaining(["network_egress"]));
     expect(classifyToolDetailed("send_email", server).capabilities).toEqual(expect.arrayContaining(["sends_message", "network_egress"]));
