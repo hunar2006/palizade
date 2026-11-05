@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   classifyToolDetailed,
   DEFAULT_METADATA_GUARD_CONFIG,
@@ -24,6 +26,8 @@ export interface ScanFinding {
   check: string;
   message: string;
   fix?: string | undefined;
+  /** The config file the finding is in, when source is a label such as "cursor user". */
+  path?: string | undefined;
 }
 
 export interface ScannedFile {
@@ -116,7 +120,7 @@ export async function scanClientConfigs(locations: Location[]): Promise<ScanResu
       for (const [name, entry] of Object.entries(group.servers)) {
         count += 1;
         const source = `${location.client} ${group.scope}`;
-        findings.push(...checkClientEntry(source, name, entry, group.flags));
+        findings.push(...checkClientEntry(source, name, entry, group.flags).map((finding) => ({ ...finding, path: location.path })));
       }
     }
     files.push({ ...location, exists: true, servers: count });
@@ -291,6 +295,61 @@ export function formatScan(result: ScanResult): string {
     if (finding.fix) lines.push(`         fix: ${finding.fix}`);
   }
   return lines.join("\n");
+}
+
+const RULES: Record<string, string> = {
+  "insecure-url": "Server url is not https",
+  "instruction-like-description": "Tool description reads like instructions to the model",
+  "invalid-entry": "MCP server entry is invalid",
+  "invalid-url": "Server url does not parse",
+  "missing-palizade-config": "Server is wrapped but its Palizade config is missing",
+  "not-locked": "Server tools are not locked",
+  "plaintext-secret": "Secret stored in plain text",
+  "tool-metadata": "Suspicious tool metadata",
+  "unknown-tools": "Tools Palizade cannot classify",
+  "unpinned-image": "Container image is not pinned",
+  "unpinned-package": "Package version is not pinned",
+  "unprotected": "MCP server is not protected by Palizade",
+  "unreadable-config": "Config file could not be read",
+  "unsupported-transport": "Transport Palizade cannot proxy"
+};
+const LEVEL: Record<Severity, "error" | "warning" | "note"> = { high: "error", medium: "warning", low: "note", info: "note" };
+
+/** SARIF 2.1.0, for code scanning pipelines. Paths under cwd are relative to %SRCROOT%. */
+export function formatSarif(result: ScanResult, options: { version: string; cwd?: string }): string {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const findings = sortFindings(result.findings);
+  const checks = [...new Set(findings.map((finding) => finding.check))].sort();
+  const location = (source: string) => {
+    const absolute = resolve(cwd, source);
+    const inside = relative(cwd, absolute);
+    return inside && !inside.startsWith("..") && !isAbsolute(inside)
+      ? { uri: inside.split(sep).map(encodeURIComponent).join("/"), uriBaseId: "%SRCROOT%" }
+      : { uri: pathToFileURL(absolute).href };
+  };
+  const sarif = {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [{
+      tool: { driver: {
+        name: "Palizade",
+        version: options.version,
+        informationUri: "https://github.com/hunar2006/palizade",
+        rules: checks.map((check) => ({ id: check, shortDescription: { text: RULES[check] ?? check } }))
+      } },
+      originalUriBaseIds: { "%SRCROOT%": { uri: pathToFileURL(`${cwd}${sep}`).href } },
+      results: findings.map((finding) => ({
+        ruleId: finding.check,
+        ruleIndex: checks.indexOf(finding.check),
+        level: LEVEL[finding.severity],
+        message: { text: finding.fix ? `${finding.server}: ${finding.message} Fix: ${finding.fix}` : `${finding.server}: ${finding.message}` },
+        locations: [{ physicalLocation: { artifactLocation: location(finding.path ?? finding.source) } }],
+        partialFingerprints: { "palizadeFinding/v1": createHash("sha256").update(`${finding.check}\0${finding.server}\0${finding.source}\0${finding.message}`).digest("hex") },
+        properties: { severity: finding.severity, server: finding.server }
+      }))
+    }]
+  };
+  return JSON.stringify(sarif, null, 2);
 }
 
 // Client configs written on Windows use backslashes even when scanned elsewhere.

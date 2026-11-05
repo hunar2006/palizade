@@ -403,7 +403,7 @@ palizade lock approve <serverName>
 palizade lock diff <serverName>
 palizade detectors install promptguard2
 palizade detectors verify heuristic
-palizade scan [--json] [--fail-on high|medium|low]
+palizade scan [--format text|json|sarif] [--fail-on high|medium|low]
 palizade why [--last 24h] [--limit 5]
 palizade tools [serverName] [--catalog]
 palizade allow host|email <value...>
@@ -428,6 +428,15 @@ New releases add rules to the shipped presets, but your `policies/<preset>.yaml`
 
 ```yaml
 - run: npx -y palizade@0.4.0 scan --project-only --skip unprotected --fail-on low
+```
+
+`--format sarif` prints SARIF 2.1.0 for the same pipelines as other scanners, such as GitHub code scanning. Each check is a rule, severity maps to `error` (high), `warning` (medium) and `note` (low, info), and files in the current directory get paths relative to it. Scan findings have no line numbers, so results point at the file. `--fail-on` still sets the exit code; run the upload step with `if: always()`.
+
+```yaml
+- run: npx -y palizade@0.4.0 scan --project-only --format sarif > palizade.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  if: always()
+  with: { sarif_file: palizade.sarif }
 ```
 
 ### When something is blocked
