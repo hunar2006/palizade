@@ -46,3 +46,6 @@ cases:
   - name: changing a password after untrusted content needs approval
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [accesses_credentials, reads_sensitive_data, writes_remote], session_untrusted: true }
     expect: { action: require_approval, rule: approve-credential-change-after-untrusted }
+  - name: a call that copies text from an untrusted tool description needs approval
+    context: { direction: request, method: tools/call, tool_class: source, capabilities: [reads_untrusted_content], tool_metadata_taint: true }
+    expect: { action: require_approval, rule: approve-arguments-from-tool-descriptions }

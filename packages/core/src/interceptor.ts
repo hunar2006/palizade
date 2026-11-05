@@ -403,7 +403,8 @@ export class InterceptionEngine {
       labels: argumentDetection.labels,
       argument_text: argumentText,
       argument_roles: argumentRolesSummary(argumentFields),
-      tainted_argument_roles: taintedArgumentRoles
+      tainted_argument_roles: taintedArgumentRoles,
+      tool_metadata_taint: [...matches, ...fieldMatches.map(({ match }) => match)].some((match) => match.reason !== "temporal" && this.options.taintStore.get(match.taintId)?.labels.includes("tool_metadata"))
     });
 
     const egressGate = toolClass === "sink" && newDestination && this.options.config.egress.mode !== "open" && !(this.options.config.egress.mode === "approve_new" && sessionTrusted);
@@ -591,6 +592,7 @@ export class InterceptionEngine {
 
     const perTool = await this.applyPerToolMetadataDecisions(message, tools, review, startedAt, toolDetections);
     const keptTools = perTool.tools;
+    this.registerToolMetadataTaint(keptTools, contents);
     for (const tool of keptTools) {
       this.knownTools.set(tool.name, tool);
     }
@@ -1187,6 +1189,31 @@ export class InterceptionEngine {
         labels: detection.labels,
         classes
       }));
+  }
+
+  /**
+   * A server that is not trusted wrote its own tool descriptions, so values in them (a path, a
+   * key, a recipient, a url) are untrusted data: a poisoned description can tell the model to use
+   * them with another tool. Recorded as taint without marking the session as having seen
+   * untrusted content, since every session lists tools.
+   */
+  private registerToolMetadataTaint(tools: McpTool[], contents: ExtractedContent[]): void {
+    if (!this.options.config.taint.toolMetadata || this.options.server.trust === "trusted") return;
+    const kept = new Set(tools.map((tool) => tool.name));
+    for (const content of contents) {
+      const text = content.text?.trim() ?? "";
+      if (text.length < 8 || !content.sourceToolOrResource || !kept.has(content.sourceToolOrResource)) continue;
+      this.options.taintStore.add({
+        sessionId: this.options.sessionId,
+        sourceServer: this.options.serverName,
+        sourceTool: `tools/list:${content.sourceToolOrResource}`,
+        trust: this.options.server.trust,
+        text,
+        detectorScore: 0,
+        labels: ["tool_metadata"],
+        classes: ["untrusted"]
+      });
+    }
   }
 
   private registerTaintFromContents(sourceName: string, classification: ToolClassification, contents: ExtractedContent[], detection: DetectionResult, sensitivePath = false): TaintRecord[] {

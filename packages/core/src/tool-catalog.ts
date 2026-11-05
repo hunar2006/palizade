@@ -68,8 +68,8 @@ export const TOOL_CATALOG: CatalogEntry[] = [
     title: "MCP git server",
     identifiers: /\bmcp-server-git\b|\bmcp\/git\b/iu,
     rules: [
-      { tools: /^git_(status|diff_unstaged|diff_staged|diff|log|show|branch)$/u, toolClass: "source", capabilities: READS, roles: { repo_path: "file_path" } },
-      { tools: /^git_(add|commit|reset|create_branch|checkout|init)$/u, toolClass: "sink", capabilities: LOCAL_WRITE, roles: { repo_path: "file_path" } }
+      { tools: /^git_(status|diff_unstaged|diff_staged|diff|log|show|branch|remote)$/u, toolClass: "source", capabilities: READS, roles: { repo_path: "file_path" } },
+      { tools: /^git_(add|commit|reset|create_branch|checkout|init|merge)$/u, toolClass: "sink", capabilities: LOCAL_WRITE, roles: { repo_path: "file_path" } }
     ]
   },
   {
@@ -306,7 +306,7 @@ export const TOOL_CATALOG: CatalogEntry[] = [
     id: "time",
     title: "MCP time server",
     identifiers: /\bmcp-server-time\b|\bmcp\/time\b/iu,
-    rules: [{ tools: /^(get_current_time|convert_time)$/u, toolClass: "pure", capabilities: [] }]
+    rules: [{ tools: /^(get_current_time|convert_time|get_time_ago)$/u, toolClass: "pure", capabilities: [] }]
   },
   {
     id: "sequential-thinking",

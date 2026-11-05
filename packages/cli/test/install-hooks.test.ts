@@ -59,6 +59,17 @@ describe("mergeHookEntries", () => {
     expect(codex.UserPromptSubmit).toHaveLength(1);
   });
 
+  it("adds Gemini CLI hooks as shell command lines and updates them in place", () => {
+    const merged = mergeHookEntries("gemini", { general: { vimMode: true } }, cliParts, "x");
+    const hooks = merged.hooks as Record<string, Array<{ matcher?: string; hooks: Array<{ type: string; command: string; timeout: number }> }>>;
+    expect(merged.general).toEqual({ vimMode: true });
+    expect(Object.keys(hooks)).toEqual(["BeforeTool", "AfterTool", "BeforeAgent"]);
+    expect(hooks.BeforeTool[0]!.matcher).toContain("mcp_.*");
+    expect(hooks.BeforeTool[0]!.hooks[0]!.command.endsWith("gemini BeforeTool")).toBe(true);
+    const again = mergeHookEntries("gemini", merged, cliParts, "x").hooks as Record<string, unknown[]>;
+    expect(again.BeforeTool).toHaveLength(1);
+  });
+
   it("preserves existing hooks and refuses malformed settings", () => {
     const settings = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo hi" }] }] } };
     const merged = mergeHookEntries("claude-code", settings, cliParts, "C:/proj/palizade.yaml");

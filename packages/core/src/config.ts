@@ -205,6 +205,8 @@ export const palizadeConfigSchema = z.object({
   }),
   taint: z.object({
     exposure: z.object({ ttlMs: z.number().int().positive().default(7_200_000) }).default({ ttlMs: 7_200_000 }),
+    // Values in tool descriptions from servers that are not trusted count as untrusted data.
+    toolMetadata: z.boolean().default(true),
     userIntent: z.object({
       enabled: z.boolean().default(true),
       ttlMs: z.number().int().min(60_000).default(7_200_000)
@@ -240,6 +242,7 @@ export const palizadeConfigSchema = z.object({
   }).default({
     sqlite: ".palizade/taint.sqlite",
     exposure: { ttlMs: 7_200_000 },
+    toolMetadata: true,
     userIntent: { enabled: true, ttlMs: 7_200_000 },
     quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
     window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
