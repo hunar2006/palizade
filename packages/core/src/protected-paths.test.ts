@@ -46,3 +46,19 @@ it("renders capped escaped diffs and masks tainted proposals", async () => {
     expect(() => protectedWriteDiff(file, { content: "x".repeat(1025) }, 1024, false, () => false)).toThrow("limit");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+it("treats Palizade's own state, wherever it is configured, and Gemini's hook settings as critical", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "palizade-self-"));
+  try {
+    const config = parseConfig("stateDir: .\ntaint: { keyPath: keys/taint.key }\naudit: { jsonl: logs/audit.jsonl, sqlite: logs/audit.sqlite }\n", dir);
+    const check = (path: string) => checkProtectedPaths(extractArgumentFields({ path }), dir, config).critical;
+    expect(check(".palizade/taint.sqlite")).toBe(true);
+    expect(check(".palizade/anything")).toBe(true);
+    expect(check("keys/taint.key")).toBe(true);
+    expect(check("logs/audit.jsonl")).toBe(true);
+    expect(check("logs/audit.sqlite")).toBe(true);
+    expect(check("~/.gemini/settings.json")).toBe(true);
+    expect(check("logs/build.log")).toBe(false);
+    expect(check("src/app.ts")).toBe(false);
+    expect(check("listener.token")).toBe(true);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

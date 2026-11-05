@@ -1,6 +1,6 @@
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { matchesPathGlob } from "@palizade/policy";
 import { maskKnownSensitiveText } from "@palizade/detectors";
@@ -12,7 +12,7 @@ export const CRITICAL_PATHS = [
   ".vscode/settings.json", ".vscode/tasks.json", ".github/workflows/**", ".gitlab-ci.yml", ".git/hooks/**", ".git/config", ".husky/**",
   "package.json", "~/.bashrc", "~/.zshrc", "~/.profile", "~/.bash_profile", "**/PowerShell/**/*profile*.ps1", "**/WindowsPowerShell/**/*profile*.ps1", "**/Microsoft.PowerShell_profile.ps1", "**/profile.ps1",
   "~/Library/LaunchAgents/**", "~/.config/systemd/user/**", "CLAUDE.md", "AGENTS.md", ".env*", "~/.ssh/**", "~/.aws/**",
-  "palizade.yaml", "palizade.allow.yaml", "palizade.lock", "~/.config/Claude/claude_desktop_config.json", "~/Library/Application Support/Claude/claude_desktop_config.json",
+  "palizade.yaml", "palizade.allow.yaml", "palizade.lock", ".palizade/**", "**/node_modules/palizade/**", ".gemini/settings.json", "~/.gemini/settings.json", "~/.config/Claude/claude_desktop_config.json", "~/Library/Application Support/Claude/claude_desktop_config.json",
   "**/Claude/claude_desktop_config.json"
 ];
 
@@ -38,7 +38,9 @@ export function resolveArgumentPath(input: string, cwd: string): ResolvedArgumen
 
 export function checkProtectedPaths(fields: ArgumentField[], cwd: string, config: PalizadeConfig): { critical: boolean; paths: string[]; resolved: ResolvedArgumentPath[]; outputAllowed: boolean } {
   const resolved = fields.filter((field) => field.role === "file_path").map((field) => resolveArgumentPath(field.text, cwd));
-  const patterns = [...CRITICAL_PATHS, ...config.protectedTargets.criticalPaths, config.lockfile, config.egress.learnedFile, config.policy];
+  // Palizade's own state files count too, wherever the config puts them. Not all of stateDir: it may be the project root.
+  const patterns = [...CRITICAL_PATHS, ...config.protectedTargets.criticalPaths, config.lockfile, config.egress.learnedFile, config.policy,
+    config.audit.jsonl, config.audit.sqlite, config.taint.sqlite, config.taint.keyPath, join(config.stateDir, "listener.token")];
   const paths = [...new Set(resolved.flatMap((path) => [path.logical, path.canonical]))];
   const critical = resolved.some((path) => path.uncertain || patterns.some((pattern) => matchesPathGlob(path.logical, pattern) || matchesPathGlob(path.canonical, pattern)));
   const output = config.protectedTargets.outputDirectory ? resolveArgumentPath(config.protectedTargets.outputDirectory, cwd) : undefined;
