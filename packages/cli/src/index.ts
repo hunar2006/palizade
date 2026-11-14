@@ -8,6 +8,7 @@ import { Command } from "commander";
 import YAML from "yaml";
 import {
   catalogEntryFor,
+  classifyToolDetailed,
   LearnedEgress,
   collectToolsFromHttpServer,
   collectToolsFromStdioServer,
@@ -41,7 +42,7 @@ import {
 import { inspectHooks, installHooks, type InstallHooksResult } from "./install-hooks.js";
 import type { HookArgs, HookRun, PreloadedStdin } from "./hook-client.js";
 import { startHookDaemon } from "./hook-daemon.js";
-import { formatLearnDraft, learnFromAudit } from "./learn.js";
+import { addToolClasses, formatLearnDraft, learnFromAudit, proposedToolClasses } from "./learn.js";
 import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { upgradePolicyText } from "./policy-upgrade.js";
 import { buildStatus, printStatus } from "./status.js";
@@ -835,18 +836,44 @@ program.command("doctor")
   });
 
 program.command("learn")
-  .description("Print a draft palizade.yaml snippet of observed tool classes and destinations; never writes config")
-  .option("--from-audit", "Learn from the JSONL audit log", false)
+  .description("Draft tool classes and destinations from the audit log; writes palizade.yaml only with --write and your confirmation")
+  .option("--from-audit", "Learn from the JSONL audit log (the default source)", false)
   .option("--since <duration>", "Only events within a duration such as 7d", "7d")
   .option("--server <server>", "Only this server")
-  .action(async (options: { fromAudit: boolean; since: string; server?: string }) => {
-    if (!options.fromAudit) throw new Error("palizade learn needs a source; use --from-audit.");
-    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+  .option("--session <id>", "Only one session: a native client session_id or a wrapper session")
+  .option("--write", "After showing the draft, ask before adding the proposed classes for unknown tools to palizade.yaml", false)
+  .action(async (options: { fromAudit: boolean; since: string; server?: string; session?: string; write: boolean }) => {
+    const configPath = resolve(program.opts<{ config: string }>().config);
+    const config = await loadConfigForCli(configPath);
     const since = new Date(Date.now() - parseDuration(options.since));
     // shortcut: loads the whole JSONL audit file into memory like `palizade audit`; stream it line by line if audit files reach hundreds of MB.
     const events = await new JsonlAuditSink(config.audit.jsonl).query({ since, ...(options.server ? { server: options.server } : {}), limit: Number.MAX_SAFE_INTEGER });
     const existingToolClasses = Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [name, server.toolClasses]));
-    process.stdout.write(formatLearnDraft(learnFromAudit(events, { since, existingToolClasses }), since));
+    const lock = await new LockfileStore(config.lockfile).read();
+    // Palizade ignores what an untrusted server says about its tools; a person who knows the server may vouch for it.
+    const propose = (serverName: string, tool: string) => {
+      const server = config.servers[serverName];
+      if (!server) return undefined;
+      const snapshot = (lock.servers[serverName]?.tools[tool]?.snapshot ?? { name: tool }) as unknown as McpTool;
+      const result = classifyToolDetailed(tool, { ...server, trust: "trusted" }, { ...snapshot, name: tool });
+      return { toolClass: result.toolClass, reasons: result.reasons.filter((reason) => !reason.startsWith("derived:")) };
+    };
+    const draft = learnFromAudit(events, { since, existingToolClasses, session: options.session, propose });
+    process.stdout.write(formatLearnDraft(draft, since));
+    if (!options.write) return;
+    const proposals = proposedToolClasses(draft, Object.keys(config.servers));
+    if (proposals.length === 0) { console.log("# Nothing to write: no unknown tool has a proposed class."); return; }
+    if (!process.stdin.isTTY) throw new Error("learn --write asks for confirmation and needs a terminal.");
+    console.log(proposals.map((entry) => `  ${entry.server}.toolClasses.${entry.tool}: ${entry.toolClass}`).join("\n"));
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await prompt.question(`Add these ${proposals.length} tool classes to ${configPath}? [y/N] `);
+    prompt.close();
+    if (!/^y(es)?$/iu.test(answer.trim())) { console.log("Nothing written."); return; }
+    const raw = await readFile(configPath, "utf8");
+    const next = addToolClasses(raw, proposals);
+    await copyFile(configPath, `${configPath}.bak`);
+    await writeFile(configPath, next, "utf8");
+    console.log(`Wrote ${proposals.length} tool classes to ${configPath} (backup at ${configPath}.bak).`);
   });
 
 program.command("status")

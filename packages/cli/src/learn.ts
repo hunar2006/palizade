@@ -1,14 +1,21 @@
 import type { AuditEvent } from "@palizade/audit";
+import YAML from "yaml";
 
 export interface LearnOptions {
   since: Date;
   /** Existing palizade.yaml overrides, so the draft only lists what is new. */
   existingToolClasses?: Record<string, Record<string, string>> | undefined;
+  /** Only events from this client or wrapper session. */
+  session?: string | undefined;
+  /** A class to propose for a tool Palizade saw as unknown, for the user to confirm. */
+  propose?: ((server: string, tool: string) => Proposal | undefined) | undefined;
 }
+
+export interface Proposal { toolClass: string; reasons: string[] }
 
 export interface LearnDraft {
   events: number;
-  servers: Record<string, { toolClasses: Record<string, { toolClass: string; calls: number }> }>;
+  servers: Record<string, { toolClasses: Record<string, { toolClass: string; calls: number; proposed?: Proposal }> }>;
   allowlist: { hosts: Array<{ value: string; calls: number }>; emails: Array<{ value: string; calls: number }> };
   notSuggested: Array<{ value: string; reason: string }>;
   truncated: boolean;
@@ -18,7 +25,8 @@ const MAX_ENTRIES = 200;
 const ALLOWED_ACTIONS = new Set(["allow", "log_only", "sanitize", "redact_spans", "redact_secrets"]);
 
 export function learnFromAudit(events: AuditEvent[], options: LearnOptions): LearnDraft {
-  const relevant = events.filter((event) => new Date(event.ts) >= options.since && event.direction === "request" && event.method === "tools/call" && event.server && event.tool);
+  const relevant = events.filter((event) => new Date(event.ts) >= options.since && event.direction === "request" && event.method === "tools/call" && event.server && event.tool
+    && (options.session === undefined || event.session === options.session));
   const classes = new Map<string, Map<string, Map<string, number>>>();
   const destinations = new Map<string, { kind: "hosts" | "emails"; allowed: number; blocked: number; tainted: number; alreadyAllowed: boolean }>();
 
@@ -50,12 +58,13 @@ export function learnFromAudit(events: AuditEvent[], options: LearnOptions): Lea
   let truncated = false;
   const servers: LearnDraft["servers"] = {};
   for (const [server, byTool] of [...classes].sort(([left], [right]) => left.localeCompare(right))) {
-    const toolClasses: Record<string, { toolClass: string; calls: number }> = {};
+    const toolClasses: Record<string, { toolClass: string; calls: number; proposed?: Proposal }> = {};
     for (const [tool, counts] of [...byTool].sort(([left], [right]) => left.localeCompare(right))) {
       if (options.existingToolClasses?.[server]?.[tool] !== undefined) continue;
       if (Object.keys(toolClasses).length >= MAX_ENTRIES) { truncated = true; break; }
       const [toolClass] = [...counts].sort((left, right) => right[1] - left[1])[0]!;
-      toolClasses[tool] = { toolClass, calls: [...counts.values()].reduce((sum, count) => sum + count, 0) };
+      const proposed = toolClass === "unknown" ? options.propose?.(server, tool) : undefined;
+      toolClasses[tool] = { toolClass, calls: [...counts.values()].reduce((sum, count) => sum + count, 0), ...(proposed && proposed.toolClass !== "unknown" ? { proposed } : {}) };
     }
     if (Object.keys(toolClasses).length > 0) servers[server] = { toolClasses };
   }
@@ -85,6 +94,10 @@ export function formatLearnDraft(draft: LearnDraft, since: Date): string {
     for (const server of serverNames) {
       lines.push(`  ${scalar(server)}:`, "    toolClasses:");
       for (const [tool, observed] of Object.entries(draft.servers[server]!.toolClasses)) {
+        if (observed.proposed) {
+          lines.push(`      ${scalar(tool)}: ${observed.proposed.toolClass}  # ${observed.calls} call(s); was unknown, proposed from ${observed.proposed.reasons.join(", ")}`);
+          continue;
+        }
         const note = observed.toolClass === "unknown" ? "; classify as source, sink or pure" : "";
         lines.push(`      ${scalar(tool)}: ${observed.toolClass}  # ${observed.calls} call(s)${note}`);
       }
@@ -109,4 +122,21 @@ export function formatLearnDraft(draft: LearnDraft, since: Date): string {
 
 function scalar(value: string): string {
   return /^[A-Za-z0-9_][A-Za-z0-9_.@*/-]*$/u.test(value) && !/^(true|false|null|yes|no|on|off|~)$/iu.test(value) ? value : JSON.stringify(value);
+}
+
+/** The proposals `learn --write` may write: tools that were unknown, on servers in palizade.yaml. */
+export function proposedToolClasses(draft: LearnDraft, configured: string[]): Array<{ server: string; tool: string; toolClass: string }> {
+  return Object.entries(draft.servers).filter(([server]) => configured.includes(server)).flatMap(([server, { toolClasses }]) =>
+    Object.entries(toolClasses).filter(([, observed]) => observed.proposed).map(([tool, observed]) => ({ server, tool, toolClass: observed.proposed!.toolClass })));
+}
+
+/** Adds toolClasses to the text of palizade.yaml, keeping the user's comments and layout. */
+export function addToolClasses(raw: string, entries: Array<{ server: string; tool: string; toolClass: string }>): string {
+  const document = YAML.parseDocument(raw);
+  if (document.errors.length > 0) throw new Error(`palizade.yaml does not parse: ${document.errors[0]!.message}`);
+  for (const entry of entries) {
+    if (!document.hasIn(["servers", entry.server])) throw new Error(`Server '${entry.server}' is not in palizade.yaml.`);
+    document.setIn(["servers", entry.server, "toolClasses", entry.tool], entry.toolClass);
+  }
+  return document.toString();
 }

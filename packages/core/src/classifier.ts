@@ -22,6 +22,17 @@ const CAPABILITY_RULES: Array<[RegExp, ToolCapability[]]> = [
   [/\b(read|get|list|search|browse|open|download|load|query|inbox|issue|pull|file)\b/iu, ["reads_untrusted_content"]]
 ];
 
+// Matched against the tool name only: these words are common in descriptions ("start with", "stop
+// when"), where they would turn read tools into sinks.
+const NAME_ONLY_RULES: Array<[RegExp, ToolCapability[]]> = [
+  [/\b(upload)\b/iu, ["network_egress", "writes_remote"]],
+  [/\b(navigate|goto|visit|scrape)\b/iu, ["network_egress", "reads_untrusted_content"]],
+  [/\b(execute|eval|evaluate|invoke|call|trigger|launch)\b/iu, ["executes_code"]],
+  // Actions on a page, a service or a repository: they change state somewhere, so they are sinks.
+  [/\b(click|fill|type|drag|drop|hover|press|tap|scroll|emulate|interact|act|handle|submit|feedback|start|stop|restart|kill|scale|promote|deploy|upgrade|install|uninstall|enable|disable|merge|checkout|fork|rebase|revert|apply|approve|reject|close|resize|copy|import|sync|lock|unlock|pause|resume|clear|toggle|insert|connect|disconnect|terminate|on|off)\b/iu, ["writes_remote"]],
+  [/\b(status|diff|log|logs|show|info|details|describe|inspect|view|find|lookup|tree|history|stats|count|retrieve|check|analyze|screenshot|snapshot|heapsnapshot|explain|validate|verify|preview|summarizer)\b/iu, ["reads_untrusted_content"]]
+];
+
 export interface ToolClassification {
   toolClass: ToolClass;
   capabilities: ToolCapability[];
@@ -37,7 +48,8 @@ const SCHEMA_SIGNALS: Array<[RegExp, ToolCapability[], string]> = [
   [/^(to|cc|bcc|recipients?|recipient_email|email_to|phone_number|webhook_url|webhook)$/iu, ["sends_message", "network_egress", "writes_remote"], "recipient"],
   [/^(command|cmd|shell_command|script|code|javascript|python)$/iu, ["executes_code"], "code"],
   [/^(amount|iban|account_number|routing_number|recipient_account)$/iu, ["writes_remote"], "payment"],
-  [/^(url|uri|endpoint)$/iu, ["network_egress"], "url"]
+  [/^(urls?|uris?|endpoints?|links?)$/iu, ["network_egress"], "url"],
+  [/^(prompt)$/iu, ["invokes_model"], "prompt"]
 ];
 const WRITE_BODY = /^(content|contents|new_content|file_content|data|text|body|patch|diff)$/iu;
 const PATH_FIELD = /^(path|file|file_path|filepath|filename|target|destination)$/iu;
@@ -90,6 +102,12 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
       if (trusted && matched.includes("reads_untrusted_content")) sourceEvidence = true;
       if (added.length > 0) reasons.push(`description:${added[0]}`);
     }
+  }
+  for (const [regex, matched] of NAME_ONLY_RULES) {
+    if (!regex.test(name)) continue;
+    matched.forEach((capability) => capabilities.add(capability));
+    if (matched.includes("reads_untrusted_content")) sourceEvidence = true;
+    reasons.push(`name:${matched[0]}`);
   }
   for (const [signal, matched] of schemaSignals(tool?.inputSchema)) {
     matched.forEach((capability) => capabilities.add(capability));

@@ -3,7 +3,8 @@
 // server lists its tools plus one poisoned tool, then the call a model actually made is checked.
 // "Success" calls are attacks that worked on the model; "Failure-Ignored" calls are the model
 // doing the user's task, so blocking those is a false positive.
-// usage: node eval/mcptox-replay.mjs calls.jsonl [--policy default] [--tool-metadata on|off] [--skip-rule id] [--out file.md]
+// --schemas also gives Palizade each tool's description and argument names, as a real server would.
+// usage: node eval/mcptox-replay.mjs calls.jsonl [--policy default] [--tool-metadata on|off] [--skip-rule id] [--schemas] [--out file.md]
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,7 +15,7 @@ import { HeuristicDetector } from "../packages/detectors/dist/index.js";
 import { parsePolicy } from "../packages/policy/dist/index.js";
 import { InMemoryTaintStore } from "../packages/taint/dist/index.js";
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: { policy: { type: "string", default: "default" }, "tool-metadata": { type: "string", default: "on" }, "skip-rule": { type: "string", multiple: true, default: [] }, out: { type: "string" } } });
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { policy: { type: "string", default: "default" }, "tool-metadata": { type: "string", default: "on" }, "skip-rule": { type: "string", multiple: true, default: [] }, schemas: { type: "boolean", default: false }, out: { type: "string" } } });
 const rows = (await readFile(positionals[0], "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
 const policy = parsePolicy(await readFile(resolve(import.meta.dirname, `../policies/${values.policy}.yaml`), "utf8"));
 // --skip-rule block-untrusted-unknown-tool shows the result as if every tool had been classified.
@@ -28,7 +29,8 @@ async function decide(row, index) {
   const events = [];
   const engine = new InterceptionEngine({ config, serverName: name, server: config.servers[name], sessionId: `s${index}`, policy, detector, taintStore: new InMemoryTaintStore(), audit: new AuditLogger([{ write: async (event) => { events.push(event); } }]), approvals: { requestApproval: async () => ({ approved: false, reason: "eval", approver: "eval" }) }, lockfile: new LockfileStore(config.lockfile) });
   await engine.handleClientMessage({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
-  const tools = [...row.tools.map((tool) => ({ name: tool, inputSchema: { type: "object" } })), { name: row.poisoned.name, description: row.poisoned.description, inputSchema: { type: "object" } }];
+  const defined = new Map((values.schemas ? row.tool_defs ?? [] : []).map((tool) => [tool.name, tool]));
+  const tools = [...row.tools.map((tool) => defined.get(tool) ?? { name: tool, inputSchema: { type: "object" } }), { name: row.poisoned.name, description: row.poisoned.description, inputSchema: { type: "object" } }];
   await engine.handleServerMessage({ jsonrpc: "2.0", id: 1, result: { tools } });
   const before = events.length;
   const out = await engine.handleClientMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: row.tool, arguments: row.arguments } });
@@ -48,7 +50,7 @@ for (const [index, row] of rows.entries()) {
 await rm(scratch, { recursive: true, force: true });
 const pct = (part, total) => `${part}/${total} (${((100 * part) / Math.max(1, total)).toFixed(1)}%)`;
 const lines = [
-  `MCPTox recorded calls through Palizade (${values.policy} policy, untrusted server, tool description taint ${values["tool-metadata"]}${values["skip-rule"].length ? `, without ${values["skip-rule"].join(", ")}` : ""}). Stopped means blocked, or an approval prompt the user refused.`,
+  `MCPTox recorded calls through Palizade (${values.policy} policy, untrusted server, tool description taint ${values["tool-metadata"]}${values.schemas ? ", tool descriptions and arguments given" : ", tool names only"}${values["skip-rule"].length ? `, without ${values["skip-rule"].join(", ")}` : ""}). Stopped means blocked, or an approval prompt the user refused.`,
   "",
   "| MCPTox label | Calls | Stopped | Top rules |",
   "|---|---:|---:|---|",
