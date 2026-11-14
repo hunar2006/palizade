@@ -170,6 +170,15 @@ rules:
     action: require_approval
     reason: A password, key or token change after reading untrusted content could be an account takeover.
 
+  - id: approve-arguments-from-tool-descriptions
+    name: Ask when a call uses values written in an untrusted tool description
+    when:
+      direction: request
+      method: tools/call
+      tool_metadata_taint: true
+    action: require_approval
+    reason: An argument copies text from a tool description, which is how a poisoned tool steers calls to other tools.
+
   # --- M2: session quarantine ---
   - id: approve-quarantined-sink
     when: { direction: request, tool_class: sink, session_quarantined: true }

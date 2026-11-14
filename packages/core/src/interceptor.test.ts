@@ -100,7 +100,7 @@ describe("InterceptionEngine", () => {
     const { engine, events, cleanup } = await makeEngine(await loadPolicyFile("policies/default.yaml"), { approvals, taintStore: store });
     try {
       const text = await seedTaintedRead(engine);
-      const original = store.all()[0]!;
+      const original = store.all().find((record) => record.sourceTool === "read_web")!;
       const write = (observation: string) => engine.handleClientMessage({ jsonrpc: "2.0", id: 100, method: "tools/call", params: { name: "create_entities", arguments: { entities: [{ name: "note", entityType: "page", observations: [observation] }] } } });
       expect((await write("A user-authored note.")).toServer).toHaveLength(1);
       expect(approvals.requests).toHaveLength(0);
@@ -958,7 +958,7 @@ async function makeEngine(
     hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
     taint: {
       exposure: { ttlMs: 7_200_000 },
-      userIntent: { enabled: true, ttlMs: 7_200_000 },
+      toolMetadata: true, userIntent: { enabled: true, ttlMs: 7_200_000 },
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1800000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 256 * 1024 },

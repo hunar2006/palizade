@@ -69,8 +69,13 @@ const lines = [
   ...rows.map((row) => row.error ? `| ${row.name} | error: ${row.error} | | | | | | | |` : `| ${row.name} | ${row.catalog} | ${row.tools} | ${row.source} | ${row.sink} | ${row.pure} | ${row.unknown} | ${row.metadataFlags} | ${row.withheld} |`)
 ];
 const unknownList = rows.filter((row) => row.unknownNames?.length).map((row) => `- ${row.name}: ${row.unknownNames.join(", ")}`);
+const ok = rows.filter((row) => !row.error);
 const text = [
+  `Run on ${new Date().toISOString().slice(0, 10)}: \`node eval/real-servers.mjs ${positionals[0]}\``,
+  "",
   ...lines,
+  "",
+  `Total: ${ok.reduce((sum, row) => sum + row.tools, 0)} tools from ${ok.length} servers${rows.length > ok.length ? ` (${rows.length - ok.length} failed to start)` : ""}.`,
   "",
   unknownList.length ? `Unknown tools (blocked on untrusted servers until classified):\n${unknownList.join("\n")}` : "No unknown tools.",
   "",

@@ -52,6 +52,7 @@ function matchesCondition(condition: PolicyCondition, ctx: PolicyContext): boole
   if (condition.tainted_destination !== undefined && Boolean(ctx.tainted_destination) !== condition.tainted_destination) return false;
   if (condition.user_stated_destination !== undefined && Boolean(ctx.user_stated_destination) !== condition.user_stated_destination) return false;
   if (condition.copied_link_only !== undefined && Boolean(ctx.copied_link_only) !== condition.copied_link_only) return false;
+  if (condition.tool_metadata_taint !== undefined && Boolean(ctx.tool_metadata_taint) !== condition.tool_metadata_taint) return false;
   if (condition.lookalike_destination !== undefined && Boolean(ctx.lookalike_destination) !== condition.lookalike_destination) return false;
   if (condition.new_destination !== undefined && Boolean(ctx.new_destination) !== condition.new_destination) return false;
   if (condition.split_match !== undefined && Boolean(ctx.split_match) !== condition.split_match) return false;

@@ -66,6 +66,14 @@ palizade install-hooks codex
 
 Only the `[mcp_servers.<name>]` tables of wrapped servers are rewritten; the rest of the file, comments included, is left alone, and per tool settings such as `approval_mode` are kept. Variables the server needed (`env_vars`, `bearer_token_env_var`, `env_http_headers`) are forwarded to Palizade.
 
+**Gemini CLI**
+
+```bash
+palizade setup gemini        # or: palizade install-hooks gemini
+```
+
+Adds `BeforeTool`, `AfterTool` and `BeforeAgent` hooks to `~/.gemini/settings.json`. Gemini's MCP servers are not rewritten; their calls (`mcp_<server>_<tool>`) are checked by the hook, as are `run_shell_command`, `write_file`, `replace` and `web_fetch`. Gemini hooks cannot ask, so a call that needs approval is denied with a note saying so; Codex is handled the same way, because Codex runs the tool when a hook answers "ask".
+
 **Any other MCP client** that launches stdio servers: use `palizade wrap <server> -c /absolute/path/to/palizade.yaml` as the server command.
 
 Finally, approve each server's current tool list and check coverage:
@@ -89,6 +97,17 @@ Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` 
 | Palizade, with your prompt's destinations and a credential change rule | 74/97 (76.3%) | 0/949 in this replay |
 
 This is a replay, not an LLM run, and the utility cost is real: tasks that send to an address read from untrusted content are blocked like attacks, unless you typed that address yourself. The last row's credential rule was found by looking at banking traces, so only the travel suite is still unseen; zero means none of these scripted attacks got through, not that every injection is stopped. Method, per suite numbers, approval modes and limits: [results/agentdojo](results/agentdojo/README.md). Reproduce with `pnpm eval:agentdojo`.
+
+## Held Out Evaluation (MCPTox)
+
+[MCPTox](https://github.com/zhiqiangwang4/MCPTox-Benchmark) (AAAI-26) hides instructions in the description of an extra tool so the model misuses the server's other tools. Replaying the tool calls real models made in that benchmark, with every tool classified:
+
+| | Attacks stopped | Normal calls stopped |
+|---|---:|---:|
+| Without tool description taint | 10/1347 (0.7%) | 24/4997 (0.5%) |
+| With it (default now) | 331/1347 (24.6%) | 80/4997 (1.6%) |
+
+Spotting poisoned descriptions by their wording catches only 0.8%, since they read like ordinary instructions; what helps is treating values written in an untrusted server's tool descriptions as untrusted data. Most attacks still allowed only change a read or search parameter, which moves no data out. Details and how to reproduce: [results/mcptox](results/mcptox/README.md).
 
 ## How It Works
 

@@ -1,3 +1,5 @@
+Run on 2026-11-05: `node eval/real-servers.mjs eval/real-servers.more.yaml`
+
 | Server | Catalog | Tools | Source | Sink | Pure | Unknown | Metadata flags | Withheld |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | notion | notion | 24 | 14 | 10 | 0 | 0 | 0 | 0 |
@@ -18,6 +20,8 @@
 | google-maps | google-maps | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
 | hubspot | hubspot | 21 | 13 | 7 | 1 | 0 | 0 | 0 |
 | apify | apify | 10 | 6 | 4 | 0 | 0 | 0 | 0 |
+
+Total: 254 tools from 18 servers.
 
 No unknown tools.
 

