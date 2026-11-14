@@ -17,7 +17,7 @@ const events: Record<Client, { pre: string; post: string; prompt: string }> = {
   gemini: { pre: "BeforeTool", post: "AfterTool", prompt: "BeforeAgent" }
 };
 const failed = "Hook evaluation failed; check the local configuration and input.";
-const askReason = "Contract ask.; approval denied (native hooks defer approval decisions to the client)";
+const askReason = "Contract ask.";
 const cannotAsk = (client: string) => `Palizade needs your approval for this call, and ${client} hooks cannot ask; run it yourself if you approve. ${askReason}`;
 const preToolUse = (decision: string, reason: string) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reason } });
 const cursorDecision = (permission: string, reason: string) => ({ permission, user_message: reason, agent_message: reason });

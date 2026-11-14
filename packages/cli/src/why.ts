@@ -88,6 +88,11 @@ const ADVICE: Advice[] = [
     fixes: () => ["Check the tainted argument below. If the data is meant to flow there, approve it or classify the source tool as trusted content."]
   },
   {
+    match: /canary/u,
+    summary: "The call contained a canary: a fake credential planted with palizade canary. Nothing legitimate sends one anywhere.",
+    fixes: () => ["Treat this session as compromised: find what the agent read before this call (palizade audit) and stop using that source."]
+  },
+  {
     match: /critical-path/u,
     summary: "The call writes to a file that controls agents, CI, git hooks or shell startup.",
     fixes: () => ["Approve after reading the diff Palizade shows with the prompt."]

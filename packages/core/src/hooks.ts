@@ -9,7 +9,8 @@ import { serverConfigSchema, type PalizadeConfig, type ServerConfig } from "./co
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { sealDrift } from "./canary.js";
 import type { JsonRpcMessage } from "./mcp.js";
 
 export type NativeClient = "claude-code" | "cursor" | "codex" | "gemini";
@@ -99,6 +100,8 @@ async function loadPolicyCached(path: string): Promise<PolicyDocument> {
   return structuredClone(policyCache.policy);
 }
 
+const HOOKS_DEFER = "native hooks defer approval decisions to the client";
+
 export async function createHookEngine(
   config: PalizadeConfig,
   sessionId: string,
@@ -136,7 +139,7 @@ export async function createHookEngine(
     detector: createDetector(config),
     taintStore,
     audit,
-    approvals: new StaticApprovalProvider(false, "native hooks defer approval decisions to the client"),
+    approvals: new StaticApprovalProvider(false, HOOKS_DEFER),
     lockfile: new LockfileStore(config.lockfile)
   });
   return {
@@ -520,6 +523,11 @@ export async function evaluateHookEvent(input: {
     return { exitCode: 0, output: undefined, reason: "MCP server is wrapped by Palizade; its proxy checks this call." };
   }
   if (mcp) normalized.tool = mcp.tool;
+  // shortcut: this ask is not written to the audit log, so `palizade why` does not show it; log it if users miss it there.
+  const drift = normalized.kind === "pre" ? sealDrift(input.config) : [];
+  if (drift.length > 0) {
+    return buildAskOutput(input.client, input.event, `Palizade's configuration changed since it was sealed (${drift.map((file) => basename(file)).join(", ")}). If you made the change, run palizade seal; until then every call asks.`);
+  }
   const context = await createHookEngine(input.config, sessionId, cwd, [], target);
   try {
     return await withHookTimeout(input.config.hooks.timeoutMs, async () => {
@@ -548,7 +556,8 @@ export async function evaluateHookEvent(input: {
       const action = requestEvent?.action ?? "block";
       const reason = requestEvent?.reason ?? "Palizade blocked this native tool call.";
       if (action === "require_approval") {
-        return buildAskOutput(input.client, input.event, reason);
+        // The client shows this on its own approval prompt, where "approval denied" would read as already refused.
+        return buildAskOutput(input.client, input.event, reason.replace(`; approval denied (${HOOKS_DEFER})`, ""));
       }
       return buildDenyOutput(input.client, input.event, reason);
     });

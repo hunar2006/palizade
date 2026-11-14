@@ -18,6 +18,7 @@ import { trackSinkAttempt } from "./session-gates.js";
 import { DEFAULT_METADATA_GUARD_CONFIG, InMemoryToolRegistry, reviewMetadata, stripHiddenUnicodeDeep, type MetadataItem, type MetadataReview, type ToolRegistry } from "./metadata-guard.js";
 import { checkProtectedPaths, protectedWriteDiff } from "./protected-paths.js";
 import { checkGitPush } from "./git-egress.js";
+import { containsCanary, readCanaries } from "./canary.js";
 import {
   isRequest,
   isSuccess,
@@ -368,6 +369,10 @@ export class InterceptionEngine {
       && fieldMatches.every(({ field, match }) => match.reason === "temporal" || verbatimLinks.includes(field.text.trim()) || (field.path.includes("<") && verbatimLinks.some((link) => link.toLowerCase().includes(field.text.trim().toLowerCase()))))
       && !matchText(verbatimLinks.reduce((text, link) => text.split(link).join(" "), argumentText)).some((match) => match.reason !== "temporal");
 
+    // Rewriting the file a canary lives in (an edit to .env) is not a leak; any other call carrying one is.
+    const localWriteOnly = classification.capabilities.length > 0 && classification.capabilities.every((capability) => ["file_write", "writes_local", "deletes_data", "reads_sensitive_data"].includes(capability));
+    const canaryLeaving = !localWriteOnly && containsCanary(argumentText, readCanaries(this.options.config), this.options.config.taint.decode);
+
     const policyDecision = evaluatePolicy(this.options.policy, {
       direction: "request",
       method: message.method,
@@ -400,7 +405,7 @@ export class InterceptionEngine {
       git_push_unapproved: gitPush.unapproved,
       destination_allowlist_configured: destination.allowlistConfigured,
       detector_score: argumentDetection.score,
-      labels: argumentDetection.labels,
+      labels: canaryLeaving ? [...argumentDetection.labels, "canary"] : argumentDetection.labels,
       argument_text: argumentText,
       argument_roles: argumentRolesSummary(argumentFields),
       tainted_argument_roles: taintedArgumentRoles,

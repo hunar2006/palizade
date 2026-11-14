@@ -6,6 +6,15 @@ defaults:
   on_error: block
 
 rules:
+
+  # A canary is a fake credential planted with `palizade canary`. Nothing legitimate sends one out.
+  - id: block-canary-egress
+    name: Block calls that carry a canary secret
+    when:
+      direction: request
+      labels_any: [ canary ]
+    action: block
+    reason: This call contains a canary secret, so something is collecting credentials.
   # --- M3: tainted protected targets ---
   - id: block-tainted-critical-path
     when:
