@@ -410,7 +410,7 @@ palizade allow host|email <value...>
 palizade allow list
 palizade allow remove host:<host> | email:<address>
 palizade audit --last 1h
-palizade audit verify
+palizade audit verify [--jsonl] [--sqlite]
 palizade audit prune --older-than 30d
 palizade taint prune [--include-persistent]
 palizade session quarantine --clear [--session <id>]
