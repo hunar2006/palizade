@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   classifyToolDetailed,
@@ -13,7 +13,7 @@ import {
   type PalizadeConfig,
   type PalizadeLock
 } from "@palizade/core";
-import { HeuristicDetector, hasSecretLabel, SensitiveDataDetector } from "@palizade/detectors";
+import { findHiddenUnicode, HeuristicDetector, hasSecretLabel, SensitiveDataDetector } from "@palizade/detectors";
 import { parseCodexConfig } from "./codex-config.js";
 import { isPalizadeWrapper, resolveClientConfigPath } from "./install-config.js";
 
@@ -278,10 +278,53 @@ export function sortFindings(findings: ScanFinding[]): ScanFinding[] {
   return [...findings].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
 }
 
+// Files an agent reads as standing instructions. A poisoned one (a pull request, a copied
+// template) steers every session, and hidden Unicode makes the added text invisible in review.
+const RULES_FILES = ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "GEMINI.md", ".cursorrules", ".windsurfrules", ".github/copilot-instructions.md"];
+const RULES_DIRS = [".cursor/rules", ".claude/commands", ".claude/agents", ".claude/skills", ".windsurf/rules", ".github/instructions"];
+const USER_RULES = [".claude/CLAUDE.md", ".codex/AGENTS.md", ".gemini/GEMINI.md", ".claude/commands", ".claude/agents", ".claude/skills"];
+// Rules files are instructions by nature, so only labels that say more than "this instructs the agent" count.
+const RULES_LABELS = new Set(["secret-exfiltration", "url-secret-query", "query-secret-param", "approval-bypass", "dangerous-shell", "chat-token-spoofing", "recipient-exfiltration", "markdown-url-exfil", "long-base64", "long-hex"]);
+const MAX_RULES_BYTES = 1024 * 1024;
+
+function rulesFilesUnder(path: string, depth = 0): string[] {
+  let stat;
+  try { stat = statSync(path); } catch { return []; }
+  if (stat.isFile()) return stat.size <= MAX_RULES_BYTES && (depth === 0 || /\.(?:md|mdc|txt)$/iu.test(path)) ? [path] : [];
+  if (!stat.isDirectory() || depth > 3) return [];
+  let names: string[];
+  try { names = readdirSync(path); } catch { return []; }
+  return names.filter((name) => name !== "node_modules").flatMap((name) => rulesFilesUnder(join(path, name), depth + 1));
+}
+
+/** Checks agent instruction files (CLAUDE.md, AGENTS.md, Cursor rules, skills, ...) for hidden characters and exfiltration style instructions. */
+export async function scanAgentRules(options: { cwd?: string; homeDir?: string; projectOnly?: boolean } = {}): Promise<ScanResult> {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const home = options.homeDir ?? homedir();
+  const roots = [...RULES_FILES, ...RULES_DIRS].map((name) => join(cwd, name));
+  if (!options.projectOnly) roots.push(...USER_RULES.map((name) => join(home, name)));
+  const paths = [...new Set(roots.flatMap((root) => rulesFilesUnder(root)))];
+  const detector = new HeuristicDetector();
+  const findings: ScanFinding[] = [];
+  for (const path of paths) {
+    let text: string;
+    try { text = await readFile(path, "utf8"); } catch { continue; }
+    const hidden = findHiddenUnicode(text.replace(/^\uFEFF/u, ""));
+    if (hidden.count > 0) {
+      findings.push({ severity: "high", source: path, server: "-", check: "rules-hidden-unicode", message: `${hidden.count} invisible character(s) (${hidden.codePoints.join(", ")}). Text hidden this way is read by the agent but not shown to you.`, fix: "Open the file in an editor that shows invisible characters and remove them, or restore the file from a version you trust." });
+    }
+    const labels = detector.detect(text).labels.filter((label) => RULES_LABELS.has(label));
+    if (labels.length > 0) {
+      findings.push({ severity: "medium", source: path, server: "-", check: "rules-suspicious-instruction", message: `Contains instructions that look like data theft or hiding actions from you (${labels.join(", ")}).`, fix: "Read the file and remove anything you did not write or do not understand." });
+    }
+  }
+  return { files: paths.length > 0 ? [{ client: "agent-rules", path: `${paths.length} instruction file(s)`, scope: options.projectOnly ? "project" : "project and user", exists: true, servers: 0 }] : [], findings };
+}
+
 export function formatScan(result: ScanResult): string {
   const lines: string[] = ["Scanned:"];
   for (const file of result.files) {
-    lines.push(`  ${file.exists ? "found  " : "missing"} ${file.client} ${file.scope}: ${file.path}${file.exists ? ` (${file.servers} server${file.servers === 1 ? "" : "s"})` : ""}`);
+    lines.push(`  ${file.exists ? "found  " : "missing"} ${file.client} ${file.scope}: ${file.path}${file.exists && file.client !== "agent-rules" ? ` (${file.servers} server${file.servers === 1 ? "" : "s"})` : ""}`);
   }
   const findings = sortFindings(result.findings);
   if (findings.length === 0) {
@@ -305,6 +348,8 @@ const RULES: Record<string, string> = {
   "missing-palizade-config": "Server is wrapped but its Palizade config is missing",
   "not-locked": "Server tools are not locked",
   "plaintext-secret": "Secret stored in plain text",
+  "rules-hidden-unicode": "Agent instruction file contains invisible characters",
+  "rules-suspicious-instruction": "Agent instruction file contains exfiltration style instructions",
   "tool-metadata": "Suspicious tool metadata",
   "unknown-tools": "Tools Palizade cannot classify",
   "unpinned-image": "Container image is not pinned",

@@ -100,3 +100,9 @@ cases:
   - name: "self protection: asks before `PALIZADE_X=1 env palizade allow host evil.example`"
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "PALIZADE_X=1 env palizade allow host evil.example" }
     expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: a call that carries a canary secret is blocked, whatever else is true
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress], labels: [canary], copied_link_only: true, tainted_destination: true }
+    expect: { action: block, rule: block-canary-egress }
+  - name: the canary rule ignores calls without the label
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress], labels: [secret] }
+    expect: { not_rule: block-canary-egress }

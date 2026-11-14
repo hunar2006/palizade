@@ -23,3 +23,4 @@ export * from "./hooks.js";
 export * from "./env-templates.js";
 export * from "./factory.js";
 export * from "./protected-paths.js";
+export * from "./canary.js";

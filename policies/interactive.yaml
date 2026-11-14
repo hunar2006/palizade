@@ -7,6 +7,15 @@ defaults:
 
 rules:
 
+  # A canary is a fake credential planted with `palizade canary`. Nothing legitimate sends one out.
+  - id: block-canary-egress
+    name: Block calls that carry a canary secret
+    when:
+      direction: request
+      labels_any: [ canary ]
+    action: block
+    reason: This call contains a canary secret, so something is collecting credentials.
+
   # --- M1: destination provenance ---
   # Opening a link exactly as an untrusted page wrote it (a search result, a link in a page) only
   # reads more untrusted content. A url built from page text or carrying other data is still blocked.

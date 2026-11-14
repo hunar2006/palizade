@@ -16,6 +16,11 @@ import {
   diffToolsAgainstLock,
   ensureListenerToken,
   evaluateHookEvent,
+  plantCanary,
+  readCanaries,
+  sealDrift,
+  sealPath,
+  writeSeal,
   isPromptEvent,
   buildDenyOutput,
   formatToolDiff,
@@ -48,7 +53,7 @@ import { upgradePolicyText } from "./policy-upgrade.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
 import { explainEvent, formatExplanation, isInteresting } from "./why.js";
-import { clientLocations, formatSarif, formatScan, scanClientConfigs, scanPalizadeConfig, sortFindings } from "./scan.js";
+import { clientLocations, formatSarif, formatScan, scanAgentRules, scanClientConfigs, scanPalizadeConfig, sortFindings } from "./scan.js";
 import { describeServerTools, formatCatalog, formatServerTools } from "./tools-command.js";
 
 declare const __PKG_VERSION__: string;
@@ -582,7 +587,7 @@ program.command("tools")
   });
 
 program.command("scan")
-  .description("Check every MCP client config on this machine and palizade.yaml for unprotected servers, plaintext secrets, unpinned packages, insecure urls and suspicious tool descriptions; starts no servers")
+  .description("Check every MCP client config on this machine and palizade.yaml for unprotected servers, plaintext secrets, unpinned packages, insecure urls and suspicious tool descriptions, and agent instruction files (CLAUDE.md, AGENTS.md, Cursor rules, skills) for hidden text; starts no servers")
   .option("--json", "Print JSON (same as --format json)", false)
   .option("--format <format>", "Output format: text, json or sarif (SARIF 2.1.0)", "text")
   .option("--fail-on <severity>", "Exit with code 1 when a finding is at least this severe: high, medium, low", "high")
@@ -598,6 +603,9 @@ program.command("scan")
       result.findings.push(...await scanPalizadeConfig(config, await new LockfileStore(config.lockfile).read(), configPath));
       result.files.push({ client: "palizade", path: configPath, scope: "project", exists: true, servers: Object.keys(config.servers).length });
     }
+    const rules = await scanAgentRules({ projectOnly: options.projectOnly });
+    result.files.push(...rules.files);
+    result.findings.push(...rules.findings);
     const skipped = new Set((options.skip ?? "").split(",").map((check) => check.trim()).filter(Boolean));
     result.findings = sortFindings(result.findings.filter((finding) => !skipped.has(finding.check)));
     console.log(format === "json" ? JSON.stringify(result, null, 2) : format === "sarif" ? formatSarif(result, { version: __PKG_VERSION__ }) : formatScan(result));
@@ -845,6 +853,10 @@ program.command("doctor")
       for (const entry of hooks.events) console.log(`  ${entry.status === "installed" ? "installed" : entry.status.toUpperCase()} ${entry.event}`);
       if (missing.length > 0) console.log(`  Run palizade install-hooks ${options.client} to ${hooks.exists ? "add or update" : "install"} them.`);
     }
+    if (existsSync(sealPath(config))) {
+      const drift = sealDrift(config);
+      console.log(drift.length === 0 ? "Seal: config and policy match." : `Seal: CHANGED since sealed: ${drift.join(", ")}. Hooks ask on every call until you run palizade seal.`);
+    }
     const presetName = basename(config.policy).replace(/\.ya?ml$/u, "");
     const preset = __POLICY_PRESETS__[presetName];
     if (preset && existsSync(config.policy)) {
@@ -856,6 +868,43 @@ program.command("doctor")
         console.log(`Policy has every rule of the ${presetName} preset.`);
       }
     }
+  });
+
+program.command("canary")
+  .description("Plant a fake credential in an .env file; any call that later carries it is blocked (rule block-canary-egress)")
+  .option("--file <path>", "File to add the canary to", ".env")
+  .option("--name <name>", "Variable name; make it look like a real credential", "BACKUP_SERVICE_TOKEN")
+  .option("--list", "Show planted canaries and exit", false)
+  .action(async (options: { file: string; name: string; list: boolean }) => {
+    const config = await loadConfigForCli(program.opts<{ config: string }>().config);
+    if (options.list) {
+      const canaries = readCanaries(config);
+      console.log(canaries.length === 0 ? "No canaries planted." : canaries.map((canary) => `${canary.name} in ${canary.file} (planted ${canary.createdAt})`).join("\n"));
+      return;
+    }
+    const canary = plantCanary(config, resolve(options.file), options.name);
+    console.log(`Planted ${canary.name} in ${canary.file}.`);
+    console.log("It is not a real credential. Do not use it anywhere; a call that contains it is blocked.");
+  });
+
+program.command("seal")
+  .description("Record the current palizade.yaml and policy as approved; hooks ask on every call if either changes until you seal again")
+  .option("--check", "Only report whether the files still match the seal (exit code 1 if not)", false)
+  .action(async (options: { check: boolean }) => {
+    const configPath = resolve(program.opts<{ config: string }>().config);
+    const config = await loadConfigForCli(configPath);
+    if (options.check) {
+      if (!existsSync(sealPath(config))) {
+        console.log("Not sealed. Run palizade seal to start checking.");
+        return;
+      }
+      const drift = sealDrift(config);
+      console.log(drift.length === 0 ? "Seal OK." : `Changed since the seal: ${drift.join(", ")}`);
+      if (drift.length > 0) process.exitCode = 1;
+      return;
+    }
+    const seal = writeSeal(config, [configPath, config.policy]);
+    console.log(`Sealed ${Object.keys(seal).length} file(s): ${Object.keys(seal).join(", ")}`);
   });
 
 program.command("learn")

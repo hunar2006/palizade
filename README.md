@@ -405,6 +405,8 @@ palizade detectors install promptguard2
 palizade detectors verify heuristic
 palizade scan [--format text|json|sarif] [--fail-on high|medium|low]
 palizade why [--last 24h] [--limit 5]
+palizade canary [--file .env] [--name BACKUP_SERVICE_TOKEN] [--list]
+palizade seal [--check]
 palizade tools [serverName] [--catalog]
 palizade allow host|email <value...>
 palizade allow list
@@ -422,9 +424,17 @@ palizade doctor [--client <name>]
 
 New releases add rules to the shipped presets, but your `policies/<preset>.yaml` is your copy and is never overwritten. `palizade doctor` says when it is missing rules, and `palizade policy upgrade` adds them in the right place, keeping your own rules, edits and comments (a `.bak` is written first). `doctor --client <name>` also reports hook entries that are missing or out of date; `palizade install-hooks <client>` updates them in place.
 
+### Canary secrets
+
+`palizade canary` adds a fake credential to `.env` (or `--file`) and remembers its value. Nothing legitimate ever sends that value anywhere, so any call that carries it, plain or encoded as base64, hex or url encoding, is blocked by `block-canary-egress`. This catches credential harvesting that fingerprints miss, because it needs no earlier tool result to match against. Rewriting the file the canary lives in is not treated as a leak. Limits: a shell command that reads the file itself (`curl -d @.env`) never has the value in its arguments, and the proxy cannot see inside it.
+
+### Sealing the policy
+
+`palizade seal` records hashes of `palizade.yaml` and the policy file. If either changes afterwards, for example through a branch checkout or a script the agent ran, every hooked call asks (denies on Codex and Gemini CLI) until you run `palizade seal` again. `palizade seal --check` and `palizade doctor` report the state. It is off until you seal once, and it only covers hooks, not wrapped MCP servers.
+
 ### Checking a machine
 
-`palizade scan` reads every MCP client config it knows (Claude Desktop, Claude Code user, local and project scope, Cursor user and project) plus `palizade.yaml`, and reports servers that are not routed through Palizade, credentials written in plain text, packages and images run without a fixed version, plain http urls, legacy transports, and locked tool descriptions with hidden text, cross server references or instruction like wording. It starts no servers. `--json` and `--fail-on medium` make it usable in CI. To check a repository's committed MCP configs (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`) for leaked credentials and unpinned packages on every push:
+`palizade scan` reads every MCP client config it knows (Claude Desktop, Claude Code user, local and project scope, Cursor user and project) plus `palizade.yaml`, and reports servers that are not routed through Palizade, credentials written in plain text, packages and images run without a fixed version, plain http urls, legacy transports, and locked tool descriptions with hidden text, cross server references or instruction like wording. It also reads agent instruction files in the project and your home folder (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.cursor/rules`, `.claude/commands`, `.claude/agents`, `.claude/skills`, Copilot instructions) and reports invisible characters (`rules-hidden-unicode`) and instructions that look like data theft or hiding actions from the user (`rules-suspicious-instruction`). It starts no servers. `--json` and `--fail-on medium` make it usable in CI. To check a repository's committed MCP configs (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`) for leaked credentials and unpinned packages on every push:
 
 ```yaml
 - run: npx -y palizade@0.4.0 scan --project-only --skip unprotected --fail-on low
