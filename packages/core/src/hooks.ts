@@ -159,7 +159,21 @@ export interface ShellAnalysis {
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+/giu;
 const COMMAND_FLAGS_WITH_HOST = /\b(?:curl|wget|nc|ncat|scp|ssh|rsync|git\s+clone|ftp|sftp|ping|nslookup|dig|telnet|open)\b/iu;
-const SUSPICIOUS_RE = /\$\([^)]*\)|`[^`]+`|\beval\b|\bbase64\b|\bpython3?\s+-c\b|\bnode\s+-e\b|\bperl\s+-e\b|\/dev\/tcp\b|\bchmod\s+[0-7]*[45][0-7]*\b|\bcurl\b[^|;]*\|\s*(?:bash|sh|zsh)\b|\bwget\b[^|;]*\|\s*(?:bash|sh|zsh)\b/iu;
+// `$(...)` and `curl ... | sh` are checked in code below: as regexes they rescanned the rest of the
+// command from every "$(" or "curl", which is quadratic on a long command.
+const SUSPICIOUS_RE = /`[^`]+`|\beval\b|\bbase64\b|\bpython3?\s+-c\b|\bnode\s+-e\b|\bperl\s+-e\b|\/dev\/tcp\b|\bchmod\s+[0-7]*[45][0-7]*\b/iu;
+
+function suspiciousShell(command: string): boolean {
+  const substitution = command.indexOf("$(");
+  if (substitution >= 0 && command.indexOf(")", substitution + 2) >= 0) return true;
+  if (SUSPICIOUS_RE.test(command)) return true;
+  // A download piped straight into a shell: the stage after the one that runs curl or wget.
+  const stages = command.split(/([|;])/u);
+  for (let index = 0; index + 2 < stages.length; index += 2) {
+    if (stages[index + 1] === "|" && /\b(?:curl|wget)\b/iu.test(stages[index]!) && /^\s*(?:bash|sh|zsh)\b/iu.test(stages[index + 2]!)) return true;
+  }
+  return false;
+}
 const BASE64ISH_RE = /\b[A-Za-z0-9+/]{40,}={0,2}\b/u;
 
 export function analyzeShellCommand(command: string): ShellAnalysis {
@@ -188,7 +202,7 @@ export function analyzeShellCommand(command: string): ShellAnalysis {
     }
   }
   const suspicious = [...new Set([
-    ...(SUSPICIOUS_RE.test(command) ? ["shell-suspicious-construct"] : []),
+    ...(suspiciousShell(command) ? ["shell-suspicious-construct"] : []),
     ...(BASE64ISH_RE.test(command) ? ["encoded-payload"] : [])
   ])];
   return {

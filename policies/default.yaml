@@ -209,14 +209,14 @@ rules:
 
   # Self protection: an agent must not turn Palizade off. Writes to its config, lockfile, state
   # directory (taint key, audit log) and the clients' hook files are critical paths (rule above).
-  # This rule covers shell commands: Palizade commands that change its state, uninstalling it, and
+  # Each segment's first package manager and first verb are pinned with (?=(?<x>...))\k<x>, which\n  # cannot backtrack, so a long command is scanned once instead of once per word.\n  # This rule covers shell commands: Palizade commands that change its state, uninstalling it, and
   # commands that modify those files. See docs/policy.md#self-protection for what it cannot stop.
   - id: approve-palizade-self-change
     name: Ask before a shell command changes or removes Palizade
     when:
       direction: request
       argument_role_any: [ shell_command ]
-      argument_regex: '(?:(?:^|[\n;&|(`]|\$\()\s*(?:(?:sudo|env|command|exec|nohup|time)\s+|\w+=\S*\s+)*(?:(?:npx|bunx|pnpx)(?:\s+-y|\s+--yes)?\s+|(?:pnpm|yarn)\s+(?:exec\s+|dlx\s+)?)?(?:\S*[\\/])?palizade(?:@\S+)?(?:\.c?js|\.cmd|\.exe)?["'']?\s+(?!(?:status|why|doctor|tools|scan|hook|wrap|serve|audit\b(?!\s+prune)|lock\s+diff|policy\s+(?:check|test)|allow\s+list|-V|--version|-h|--help|help)(?:\s|$)))|\b(?:npm|pnpm|yarn|bun)\b[^;&|\n]*\b(?:uninstall|remove|rm|r|un|unlink)\s[^;&|\n]*\bpalizade\b|\b(?:rm|rmdir|mv|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|shred|unlink|ln|chmod|chown|chattr|touch|install|del|erase|remove-item|move-item|set-content|out-file|clear-content)\b[^;&|\n]*(?:\.palizade\b|palizade\.(?:ya?ml|allow\.ya?ml|lock)\b|\.claude[\\/]settings(?:\.local)?\.json|\.claude\.json|\.mcp\.json|\.cursor[\\/](?:hooks|mcp)\.json|\.codex[\\/](?:config\.toml|hooks\.json)|\.gemini[\\/]settings\.json|claude_desktop_config\.json)'
+      argument_regex: '(?:(?:^|[\n;&|(`]|\$\()\s*(?:(?:sudo|env|command|exec|nohup|time)\s+|\w+=\S*\s+)*(?:(?:npx|bunx|pnpx)(?:\s+-y|\s+--yes)?\s+|(?:pnpm|yarn)\s+(?:exec\s+|dlx\s+)?)?(?:\S*[\\/])?palizade(?:@\S+)?(?:\.c?js|\.cmd|\.exe)?["'']?\s+(?!(?:status|why|doctor|tools|scan|hook|wrap|serve|audit\b(?!\s+prune)|lock\s+diff|policy\s+(?:check|test)|allow\s+list|-V|--version|-h|--help|help)(?:\s|$)))|(?:^|[;&|\n])(?=(?<pm>[^;&|\n]*?\b(?:npm|pnpm|yarn|bun)\b))\k<pm>(?=(?<sub>[^;&|\n]*?\b(?:uninstall|remove|rm|r|un|unlink)\s))\k<sub>[^;&|\n]*\bpalizade\b|(?:^|[;&|\n])(?=(?<verb>[^;&|\n]*?\b(?:rm|rmdir|mv|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|shred|unlink|ln|chmod|chown|chattr|touch|install|del|erase|remove-item|move-item|set-content|out-file|clear-content)\b))\k<verb>[^;&|\n]*(?:\.palizade\b|palizade\.(?:ya?ml|allow\.ya?ml|lock)\b|\.claude[\\/]settings(?:\.local)?\.json|\.claude\.json|\.mcp\.json|\.cursor[\\/](?:hooks|mcp)\.json|\.codex[\\/](?:config\.toml|hooks\.json)|\.gemini[\\/]settings\.json|claude_desktop_config\.json)'
     action: require_approval
     reason: This shell command changes, prunes or removes Palizade's own configuration, state or hooks.
 
