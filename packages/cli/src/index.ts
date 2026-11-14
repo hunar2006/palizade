@@ -48,7 +48,7 @@ import { upgradePolicyText } from "./policy-upgrade.js";
 import { buildStatus, printStatus } from "./status.js";
 import { DEFAULT_CONFIG } from "./templates.js";
 import { explainEvent, formatExplanation, isInteresting } from "./why.js";
-import { clientLocations, formatScan, scanClientConfigs, scanPalizadeConfig, sortFindings } from "./scan.js";
+import { clientLocations, formatSarif, formatScan, scanClientConfigs, scanPalizadeConfig, sortFindings } from "./scan.js";
 import { describeServerTools, formatCatalog, formatServerTools } from "./tools-command.js";
 
 declare const __PKG_VERSION__: string;
@@ -583,11 +583,14 @@ program.command("tools")
 
 program.command("scan")
   .description("Check every MCP client config on this machine and palizade.yaml for unprotected servers, plaintext secrets, unpinned packages, insecure urls and suspicious tool descriptions; starts no servers")
-  .option("--json", "Print JSON", false)
+  .option("--json", "Print JSON (same as --format json)", false)
+  .option("--format <format>", "Output format: text, json or sarif (SARIF 2.1.0)", "text")
   .option("--fail-on <severity>", "Exit with code 1 when a finding is at least this severe: high, medium, low", "high")
   .option("--project-only", "Only scan config files in the current directory (for CI on a repository)", false)
   .option("--skip <checks>", "Comma separated checks to ignore, such as unprotected,unpinned-package")
-  .action(async (options: { json: boolean; failOn: string; projectOnly: boolean; skip?: string }) => {
+  .action(async (options: { json: boolean; format: string; failOn: string; projectOnly: boolean; skip?: string }) => {
+    const format = options.json ? "json" : options.format;
+    if (!["text", "json", "sarif"].includes(format)) throw new Error("--format must be text, json or sarif.");
     const result = await scanClientConfigs(clientLocations().filter((location) => !options.projectOnly || location.scope === "project"));
     const configPath = resolve(program.opts<{ config: string }>().config);
     if (existsSync(configPath)) {
@@ -597,7 +600,7 @@ program.command("scan")
     }
     const skipped = new Set((options.skip ?? "").split(",").map((check) => check.trim()).filter(Boolean));
     result.findings = sortFindings(result.findings.filter((finding) => !skipped.has(finding.check)));
-    console.log(options.json ? JSON.stringify(result, null, 2) : formatScan(result));
+    console.log(format === "json" ? JSON.stringify(result, null, 2) : format === "sarif" ? formatSarif(result, { version: __PKG_VERSION__ }) : formatScan(result));
     const order = ["high", "medium", "low", "info"];
     const threshold = order.indexOf(options.failOn);
     if (threshold < 0) throw new Error("--fail-on must be high, medium or low.");
