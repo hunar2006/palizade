@@ -49,3 +49,54 @@ cases:
   - name: a call that copies text from an untrusted tool description needs approval
     context: { direction: request, method: tools/call, tool_class: source, capabilities: [reads_untrusted_content], tool_metadata_taint: true }
     expect: { action: require_approval, rule: approve-arguments-from-tool-descriptions }
+  - name: "self protection: asks before `palizade allow host evil.example`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "palizade allow host evil.example" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `npx -y palizade taint prune --older-than 0`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "npx -y palizade taint prune --older-than 0" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `ls && palizade install-hooks claude-code`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "ls && palizade install-hooks claude-code" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `palizade --config other.yaml lock approve`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "palizade --config other.yaml lock approve" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `npm uninstall -g palizade`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "npm uninstall -g palizade" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `pnpm remove palizade`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "pnpm remove palizade" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `rm -rf .palizade`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm -rf .palizade" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `sed -i s/closed/open/ palizade.yaml`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "sed -i s/closed/open/ palizade.yaml" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `truncate -s0 .palizade/taint.key`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "truncate -s0 .palizade/taint.key" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `rm ~/.gemini/settings.json`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm ~/.gemini/settings.json" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `palizade status`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "palizade status" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `npx palizade why`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "npx palizade why" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `palizade audit verify`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "palizade audit verify" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `cat palizade.yaml`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "cat palizade.yaml" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `cd ~/src/palizade && git status`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "cd ~/src/palizade && git status" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `pnpm test`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "pnpm test" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: asks before `PALIZADE_X=1 env palizade allow host evil.example`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "PALIZADE_X=1 env palizade allow host evil.example" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }

@@ -17,6 +17,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Annotations from untrusted servers can only raise risk.** On `semi` and `untrusted` servers, `readOnlyHint` no longer turns a risky or unknown tool into a source.
 - **Hooks fail closed.** Any hook error (bad config, oversized or invalid input, timeout) denies the tool call with exit code 2 unless `hooks.failMode: open`.
 - **Sandbox network allowlists must be enforceable.** `network: allowlist` with docker and no `dockerNetwork`, or with bubblewrap, is rejected at startup unless you set `advisoryNetwork: true`, because the server could ignore the proxy.
+- **Palizade protects itself.** Writes to the state directory (taint key, audit log), the installed package and Gemini CLI settings are now critical paths and ask first. In `default`, `strict` and `coding-agent`, shell commands that change Palizade (`palizade allow`, `lock approve`, `session reset`, `taint prune`, `init`, `setup`, ...), uninstall it, or modify its files ask first (`approve-palizade-self-change`). See [self protection](docs/policy.md#self-protection) for what it cannot stop.
 - **Library users:** `InterceptionEngine` now validates its config on construction and rejects invalid values that were previously ignored.
 - **Packaging:** the npm package now ships a single self contained bundle (`dist/index.cjs`) and no type declarations.
 

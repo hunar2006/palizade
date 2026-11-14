@@ -119,6 +119,22 @@ The client's retry `inputResponses` are checked for observable tainted or sensit
 - Trusted server plus unknown tool: allow with audit logging.
 - Policy evaluation errors: block in enforcing presets.
 
+## Self Protection
+
+An agent that can turn Palizade off does not need to get past it. Two things stop the obvious ways:
+
+- **Writes to Palizade's own files are critical paths** (`approve-critical-path`, in `default`, `interactive`, `strict`, `egress` and `coding-agent`): `palizade.yaml`, the policy file, `palizade.allow.yaml`, the lockfile, the default state directory (`.palizade/`), the taint key, taint store, audit log and listener token wherever the config puts them, the installed package (`node_modules/palizade`), and each client's hook and MCP settings (`.claude/`, `~/.claude.json`, `.mcp.json`, `.cursor/`, `.codex/`, `.gemini/settings.json`, `claude_desktop_config.json`). This covers native Write and Edit tools, MCP file tools, and shell redirects (`> palizade.yaml`).
+- **Shell commands that change or remove Palizade ask first** (`approve-palizade-self-change`, in `default`, `strict` and `coding-agent`): `palizade` commands that change state (`allow`, `lock approve`, `session reset`, `taint prune`, `audit prune`, `init`, `setup`, `install-hooks`, `install-config`, `policy upgrade`, ...), including through `npx`, `pnpm exec` or after `&&`; `npm`/`pnpm`/`yarn`/`bun` uninstalls of `palizade`; and commands such as `rm`, `mv`, `sed`, `truncate`, `chmod` or `python` that name one of the files above. Read only commands (`status`, `why`, `doctor`, `tools`, `scan`, `audit`, `audit verify`, `lock diff`, `policy check`, `policy test`, `allow list`) and reading the files (`cat palizade.yaml`) are not asked about.
+
+What this cannot stop:
+
+- **Shell text is matched, not parsed.** A command that hides what it touches gets through: `p=.palizade; rm -rf $p`, `eval`, base64, aliases, globs (`rm -rf .pal*`), `find . -delete`, `git checkout -- palizade.yaml`, `git clean -fdx` (which removes `.palizade/` when it is untracked), `rm -rf node_modules`, or a verb not in the list.
+- **Programs the agent writes and then runs.** A script or test that deletes `.palizade/` runs as the user; the hook only sees `node script.js`.
+- **Clients that run tools when the hook is missing.** If the `palizade` binary disappears, Claude Code hooks installed by Palizade block (`onFailure: block`); whether Cursor, Codex and Gemini CLI block or run the tool when a hook command cannot start depends on the client.
+- **Approvals.** These rules ask; they do not block. A user who approves the prompt approves the change. On Codex and Gemini CLI, which have no ask, they become denies.
+- **Other presets.** `interactive` and `egress` ask before writes to the files but have no shell rule; `research-readonly` blocks the writes and has no shell rule; `audit-only` only logs.
+- **Anything outside the hooks.** Edits made by the user, by an editor extension, or by an MCP server that is not wrapped are not seen.
+
 ## Testing A Policy
 
 Write test cases in YAML: each case gives the decision context Palizade would build and the action or rule you expect. Unknown context fields are errors, so a typo cannot pass by accident.
