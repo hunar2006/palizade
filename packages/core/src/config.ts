@@ -277,7 +277,11 @@ export type PalizadeConfig = z.infer<typeof palizadeConfigSchema>;
 
 export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): Promise<PalizadeConfig> {
   const absolute = resolve(cwd, path);
-  const raw = await readFile(absolute, "utf8");
+  return parseConfigFile(await readFile(absolute, "utf8"), absolute);
+}
+
+/** Parses the text of the config file at an absolute path, as loadConfig does. */
+export function parseConfigFile(raw: string, absolute: string): PalizadeConfig {
   const parsed = parseYamlWithSchema(palizadeConfigSchema, raw, absolute);
   parsed.protectedTargets.criticalPaths.push(absolute);
   return resolveConfigPaths(parsed, dirname(absolute));

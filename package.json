@@ -17,6 +17,7 @@
     "eval:combined": "node eval/protocol-regression.mjs --detector combined",
     "eval:detectors": "node eval/detector-report.mjs",
     "bench:latency": "node eval/latency.mjs",
+    "bench:hooks": "node eval/hook-latency.mjs",
     "example:server": "node examples/toy-mcp-server/server.mjs",
     "example:flow": "node examples/run-toy-flow.mjs",
     "demo:cross-server": "node examples/cross-server-taint-demo.mjs",

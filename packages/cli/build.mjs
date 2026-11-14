@@ -23,6 +23,16 @@ await build({
   }
 });
 
+// The hook client is bundled on its own, with only node built ins, so a hook call can reach a
+// running daemon without loading the main bundle.
+await build({
+  entryPoints: [join(packageDir, "src/hook-client.ts")],
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  outfile: join(packageDir, "dist/hook-client.cjs")
+});
+
 // A small launcher turns on Node's compile cache before loading the bundle, so repeated runs
 // (one per hook call) skip most of the parse and compile work, and hides the SQLite
 // ExperimentalWarning that node:sqlite prints on every start.
@@ -35,7 +45,17 @@ process.emitWarning = function (warning, ...rest) {
   if (type === "ExperimentalWarning" && /SQLite/u.test(String(warning?.message ?? warning))) return;
   return emitWarning.call(process, warning, ...rest);
 };
-require("./cli.cjs");
+const argv = process.argv.slice(2);
+if (argv.includes("hook") && !process.env.PALIZADE_NO_DAEMON) {
+  // Try a running \`palizade daemon\`; on any failure run in process with the stdin already read.
+  const preloaded = { chunks: [], ended: false };
+  globalThis.__palizadeHookStdin = preloaded;
+  let attempt;
+  try { attempt = require("./hook-client.cjs").tryDaemon(argv, preloaded); } catch { attempt = Promise.resolve(false); }
+  attempt.then((done) => { if (!done) require("./cli.cjs"); }, () => require("./cli.cjs"));
+} else {
+  require("./cli.cjs");
+}
 `;
 await writeFile(join(packageDir, "dist/index.cjs"), launcher, "utf8");
 await chmod(join(packageDir, "dist/index.cjs"), 0o755);

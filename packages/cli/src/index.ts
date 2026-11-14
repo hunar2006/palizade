@@ -22,6 +22,7 @@ import {
   HttpServeListener,
   loadConfig,
   LockfileStore,
+  parseConfigFile,
   sandboxStatus,
   StdioMcpProxy,
   type McpTool,
@@ -38,6 +39,8 @@ import {
   selectInstallConfigPath
 } from "./install-config.js";
 import { inspectHooks, installHooks, type InstallHooksResult } from "./install-hooks.js";
+import type { HookArgs, HookRun, PreloadedStdin } from "./hook-client.js";
+import { startHookDaemon } from "./hook-daemon.js";
 import { formatLearnDraft, learnFromAudit } from "./learn.js";
 import { formatPolicyCheck, runPolicyCheck } from "./policy-check.js";
 import { upgradePolicyText } from "./policy-upgrade.js";
@@ -862,50 +865,77 @@ program.command("hook")
   .option("--session <id>", "Override the native client session identifier")
   .option("--cwd <dir>", "Override the working directory used for path checks")
   .action(async (client: string, event: string | undefined, options: { session?: string; cwd?: string }) => {
-    let failMode: "closed" | "open" = "closed";
-    let hookEvent = event ?? "PreToolUse";
-    try {
-      const config = await loadConfigForCli(program.opts<{ config: string }>().config);
-      failMode = config.hooks.failMode;
-      const raw = await readStdinBounded(config.hooks.maxInputBytes);
-      const payload: unknown = JSON.parse(raw);
-      const payloadEvent = event
-        ?? (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).hook_event_name === "string"
-          ? (payload as Record<string, unknown>).hook_event_name as string
-          : undefined);
-      if (!payloadEvent) throw new Error("Missing hook event name.");
-      hookEvent = payloadEvent;
-      const result = await evaluateHookEvent({
-        config,
-        client: client as "claude-code" | "cursor" | "codex" | "gemini",
-        event: hookEvent,
-        payload,
-        ...(options.session ? { sessionId: options.session } : {}),
-        ...(options.cwd ? { cwd: resolve(options.cwd) } : {})
-      });
-      if (result.output !== undefined) {
-        console.log(JSON.stringify(result.output));
-      }
-      if (result.exitCode !== 0) {
-        process.exitCode = result.exitCode;
-      }
-    } catch {
-      const reason = "Hook evaluation failed; check the local configuration and input.";
-      // A prompt hook only records intent; failing closed would block the user's own message.
-      if (isPromptEvent(client as "claude-code" | "cursor" | "codex" | "gemini", hookEvent)) {
-        if (client === "cursor") console.log(JSON.stringify({ continue: true }));
-        console.error(`Palizade prompt hook skipped: ${reason}`);
-        return;
-      }
-      if (failMode === "closed") {
-        console.log(JSON.stringify(buildDenyOutput(client as "claude-code" | "cursor" | "codex" | "gemini", hookEvent, reason).output));
-        console.error(`Palizade hook failed closed: ${reason}`);
-        process.exitCode = 2;
-        return;
-      }
-      console.error(`Palizade hook failed open: ${reason}`);
-    }
+    const run = await runHook({ config: program.opts<{ config: string }>().config, client, ...(event ? { event } : {}), ...options }, process.cwd(), readStdinBounded, loadConfigForCli);
+    if (run.stdout) process.stdout.write(run.stdout);
+    if (run.stderr) process.stderr.write(run.stderr);
+    if (run.exitCode !== 0) process.exitCode = run.exitCode;
   });
+
+program.command("daemon")
+  .description("Answer hook calls from one long running process; hooks run in process whenever it is not running")
+  .action(async () => {
+    const configPath = resolve(program.opts<{ config: string }>().config);
+    await loadConfigForCli(configPath); // fail at start, not on the first hook call
+    let cache: { raw: string; config: PalizadeConfig } | undefined;
+    const cachedConfig = async (path: string): Promise<PalizadeConfig> => {
+      const raw = await readFile(path, "utf8");
+      if (cache?.raw !== raw) cache = { raw, config: parseConfigFile(raw, path) };
+      return structuredClone(cache.config);
+    };
+    const daemon = await startHookDaemon(configPath, (args, cwd, stdin) => runHook({ ...args, config: configPath }, cwd, async (maxBytes) => {
+      if (stdin.length > maxBytes) throw new Error(`Hook input exceeded ${maxBytes} bytes.`);
+      return stdin.toString("utf8");
+    }, cachedConfig));
+    const stop = () => { daemon.close().finally(() => process.exit(0)); };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    console.log(`Palizade daemon for ${configPath} listening on ${daemon.socket}`);
+  });
+
+/**
+ * One hook call. Shared by `palizade hook` and the daemon so both answer, and fail closed, the
+ * same way: any error denies the call unless hooks.failMode is open, and prompt hooks never block.
+ */
+async function runHook(args: HookArgs, cwd: string, readInput: (maxBytes: number) => Promise<string>, load: (path: string) => Promise<PalizadeConfig>): Promise<HookRun> {
+  const client = args.client as "claude-code" | "cursor" | "codex" | "gemini";
+  let stdout = "", stderr = "", exitCode = 0;
+  let failMode: "closed" | "open" = "closed";
+  let hookEvent = args.event ?? "PreToolUse";
+  try {
+    const config = await load(resolve(cwd, args.config));
+    failMode = config.hooks.failMode;
+    const payload: unknown = JSON.parse(await readInput(config.hooks.maxInputBytes));
+    const payloadEvent = args.event
+      ?? (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).hook_event_name === "string"
+        ? (payload as Record<string, unknown>).hook_event_name as string
+        : undefined);
+    if (!payloadEvent) throw new Error("Missing hook event name.");
+    hookEvent = payloadEvent;
+    const result = await evaluateHookEvent({
+      config,
+      client,
+      event: hookEvent,
+      payload,
+      ...(args.session ? { sessionId: args.session } : {}),
+      ...(args.cwd ? { cwd: resolve(cwd, args.cwd) } : {}),
+      fallbackCwd: cwd
+    });
+    if (result.output !== undefined) stdout += `${JSON.stringify(result.output)}\n`;
+    exitCode = result.exitCode;
+  } catch {
+    const reason = "Hook evaluation failed; check the local configuration and input.";
+    // A prompt hook only records intent; failing closed would block the user's own message.
+    if (isPromptEvent(client, hookEvent)) {
+      if (client === "cursor") stdout += `${JSON.stringify({ continue: true })}\n`;
+      return { stdout, stderr: `Palizade prompt hook skipped: ${reason}\n`, exitCode: 0 };
+    }
+    if (failMode === "closed") {
+      return { stdout: `${JSON.stringify(buildDenyOutput(client, hookEvent, reason).output)}\n`, stderr: `Palizade hook failed closed: ${reason}\n`, exitCode: 2 };
+    }
+    stderr += `Palizade hook failed open: ${reason}\n`;
+  }
+  return { stdout, stderr, exitCode };
+}
 
 program.command("install-hooks")
   .description("Install Palizade hook entries into a native client's settings file")
@@ -977,8 +1007,12 @@ async function writeIfMissing(path: string, content: string, force: boolean): Pr
 }
 
 async function readStdinBounded(maxBytes: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
+  // The launcher may already have read some or all of stdin while trying the daemon.
+  const preloaded = (globalThis as { __palizadeHookStdin?: PreloadedStdin }).__palizadeHookStdin;
+  const chunks: Buffer[] = [...(preloaded?.chunks ?? [])];
+  let total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (total > maxBytes) throw new Error(`Hook input exceeded ${maxBytes} bytes.`);
+  if (preloaded?.ended) return Buffer.concat(chunks).toString("utf8");
   for await (const chunk of process.stdin) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
