@@ -1,0 +1,6 @@
+{
+  "source": "Not checked against Codex's documentation in this session (developers.openai.com was not reachable). Fields follow the Claude Code style payload Palizade's Codex adapter reads (session_id, cwd, hook_event_name, tool_name, tool_input, tool_response, prompt).",
+  "pre": { "session_id": "codex-session", "cwd": "/home/user/my-project", "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "npm test" } },
+  "post": { "session_id": "codex-session", "cwd": "/home/user/my-project", "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "command": "cat README.md" }, "tool_response": "Project readme text" },
+  "prompt": { "session_id": "codex-session", "cwd": "/home/user/my-project", "hook_event_name": "UserPromptSubmit", "prompt": "Run the tests" }
+}
