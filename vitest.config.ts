@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     globals: true,
-    include: ["packages/**/*.test.ts"],
+    include: ["packages/**/*.test.ts", "eval/*.test.mjs", "eval/agentdojo/live/bridge.test.mjs"],
     pool: "threads",
     fileParallelism: true,
     // Tests that open SQLite stores and hook engines many times run several times slower on

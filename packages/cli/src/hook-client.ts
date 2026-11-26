@@ -7,15 +7,19 @@ import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export const DAEMON_PROTOCOL = 1;
+export const DAEMON_PROTOCOL = 3;
 /** Larger inputs skip the daemon; the in process path then applies hooks.maxInputBytes as before. */
 export const DAEMON_MAX_INPUT_BYTES = 8 * 1024 * 1024;
 const CLIENT_TIMEOUT_MS = 10_000;
 
-export interface HookArgs { config: string; client?: string; event?: string; session?: string; cwd?: string }
+export interface HookArgs { config: string; client?: string; event?: string; session?: string; cwd?: string; hookSource?: string }
 export interface HookRun { stdout: string; stderr: string; exitCode: number }
 /** Stdin the client already read, for the in process fallback. */
 export interface PreloadedStdin { chunks: Buffer[]; ended: boolean }
+
+export function hookEnvironment(): Array<string | null> {
+  return ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "HOME", "USERPROFILE"].map((name) => process.env[name] ?? null);
+}
 
 export function daemonRunDir(): string {
   return join(homedir(), ".palizade", "run");
@@ -55,12 +59,13 @@ export function parseHookArgs(argv: string[]): HookArgs | undefined {
   const positionals: string[] = [];
   for (index += 1; index < argv.length; index += 1) {
     const arg = argv[index]!;
-    if (arg === "--session" || arg === "--cwd") {
+    if (arg === "--session" || arg === "--cwd" || arg === "--hook-source") {
       const value = argv[++index];
       if (value === undefined) return undefined;
-      result[arg === "--session" ? "session" : "cwd"] = value;
+      result[arg === "--session" ? "session" : arg === "--cwd" ? "cwd" : "hookSource"] = value;
     } else if (arg.startsWith("--session=")) result.session = arg.slice("--session=".length);
     else if (arg.startsWith("--cwd=")) result.cwd = arg.slice("--cwd=".length);
+    else if (arg.startsWith("--hook-source=")) result.hookSource = arg.slice("--hook-source=".length);
     else if (arg.startsWith("-")) return undefined; // an option this parser does not know: let commander handle it
     else positionals.push(arg);
   }
@@ -72,7 +77,8 @@ export function parseHookArgs(argv: string[]): HookArgs | undefined {
 
 async function readInput(preloaded: PreloadedStdin): Promise<boolean> {
   let total = 0;
-  for await (const chunk of process.stdin) {
+  // Leave stdin open when handing the remaining bytes to the in-process hook.
+  for await (const chunk of process.stdin.iterator({ destroyOnReturn: false })) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     preloaded.chunks.push(buffer);
     total += buffer.length;
@@ -113,7 +119,13 @@ export async function tryDaemon(argv: string[], preloaded: PreloadedStdin): Prom
   try {
     if (!await readInput(preloaded)) return false;
     const nonce = randomBytes(16).toString("hex");
-    const body = JSON.stringify({ v: DAEMON_PROTOCOL, nonce, config, args, cwd: process.cwd(), runId: process.env.PALIZADE_RUN_ID ?? null, stdin: Buffer.concat(preloaded.chunks).toString("base64") });
+    const body = JSON.stringify({
+      v: DAEMON_PROTOCOL, nonce, config, args, cwd: process.cwd(),
+      runId: process.env.PALIZADE_RUN_ID ?? null,
+      sealPath: process.env.PALIZADE_SEAL_PATH ?? null,
+      env: hookEnvironment(),
+      stdin: Buffer.concat(preloaded.chunks).toString("base64")
+    });
     const reply = JSON.parse(await exchange(socket, `${JSON.stringify({ body, mac: sign(key, body) })}\n`)) as { body?: unknown; mac?: unknown };
     if (typeof reply.body !== "string" || !signatureMatches(key, `${nonce}\n${reply.body}`, reply.mac)) return false;
     const run = JSON.parse(reply.body) as Partial<HookRun> & { fallback?: boolean };

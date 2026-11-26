@@ -7,7 +7,13 @@ export interface TextBlock {
   key?: true;
 }
 
-const KEY_MARK = "\u0000key:";
+export function textPathKey(path: ReadonlyArray<string | number>, objectKey = false): string {
+  return "$" + path.map((part, index) => {
+    if (objectKey && index === path.length - 1) return `{${JSON.stringify(part)}}`;
+    if (typeof part === "string" && /^[\w-]+$/u.test(part)) return `.${part}`;
+    return `[${JSON.stringify(part)}]`;
+  }).join("");
+}
 
 /**
  * Object keys can carry data too ({"<secret>": 1}). Short identifier keys such as `id` or
@@ -30,6 +36,9 @@ export function extractTextBlocks(value: unknown): TextBlock[] {
 }
 
 export function applyTextTransforms(value: unknown, transform: (text: string, block: TextBlock) => string): unknown {
+  if (typeof value === "string") {
+    return transform(value, { path: [], text: value });
+  }
   if (value === null || typeof value !== "object") {
     return value;
   }
@@ -98,7 +107,7 @@ function visit(value: unknown, path: Array<string | number>, blocks: TextBlock[]
   }
   if (value && typeof value === "object") {
     for (const [key, child] of Object.entries(value)) {
-      if (isDataBearingKey(key)) blocks.push({ path: [...path, `${KEY_MARK}${key}`], text: key, key: true });
+      if (isDataBearingKey(key)) blocks.push({ path: [...path, key], text: key, key: true });
       visit(child, [...path, key], blocks);
     }
   }
@@ -107,9 +116,17 @@ function visit(value: unknown, path: Array<string | number>, blocks: TextBlock[]
 function renameKeyAtPath(root: unknown, parentPath: Array<string | number>, from: string, to: string): void {
   let current = root as Record<string, unknown>;
   for (const step of parentPath) current = (current as Record<string, unknown>)[step as string] as Record<string, unknown>;
-  if (!current || typeof current !== "object" || !(from in current)) return;
+  if (!current || typeof current !== "object" || !Object.hasOwn(current, from)) return;
   // Keep property order, and never let a rename overwrite an existing key.
-  const target = to in current && to !== from ? `${to}~${from.length}` : to;
+  let target = to;
+  if (target !== from && Object.hasOwn(current, target)) {
+    target = `${to}~${from.length}`;
+    let suffix = 1;
+    while (target !== from && Object.hasOwn(current, target)) {
+      suffix += 1;
+      target = `${to}~${from.length}~${suffix}`;
+    }
+  }
   const entries = Object.entries(current).map(([name, child]): [string, unknown] => [name === from ? target : name, child]);
   for (const name of Object.keys(current)) delete current[name];
   for (const [name, child] of entries) current[name] = child;

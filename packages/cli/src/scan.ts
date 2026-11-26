@@ -368,7 +368,7 @@ export function formatSarif(result: ScanResult, options: { version: string; cwd?
   const location = (source: string) => {
     const absolute = resolve(cwd, source);
     const inside = relative(cwd, absolute);
-    return inside && !inside.startsWith("..") && !isAbsolute(inside)
+    return inside && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)
       ? { uri: inside.split(sep).map(encodeURIComponent).join("/"), uriBaseId: "%SRCROOT%" }
       : { uri: pathToFileURL(absolute).href };
   };

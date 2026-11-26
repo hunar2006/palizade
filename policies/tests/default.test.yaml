@@ -16,6 +16,12 @@ cases:
   - name: untrusted text copied into any sink is blocked
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [file_write], taint: true }
     expect: block
+  - name: tainted prose can be written to non-critical workspace files
+    context: { direction: request, method: tools/call, tool_class: sink, local_workspace_write: true, taint: true }
+    expect: { action: allow, rule: allow-tainted-local-workspace-edit }
+  - name: sensitive text does not qualify for the workspace edit allowance
+    context: { direction: request, method: tools/call, tool_class: sink, local_workspace_write: true, taint: true, sensitive_taint: true }
+    expect: { action: block, rule: block-tainted-sink }
   - name: an unknown tool on an untrusted server is blocked
     context: { direction: request, method: tools/call, tool_class: unknown, trust: untrusted }
     expect: { action: block, rule: block-untrusted-unknown-tool }
@@ -100,6 +106,87 @@ cases:
   - name: "self protection: asks before `PALIZADE_X=1 env palizade allow host evil.example`"
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "PALIZADE_X=1 env palizade allow host evil.example" }
     expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `node C:\\x\\node_modules\\palizade\\dist\\index.cjs hook claude-code UserPromptSubmit`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "node C:\\x\\node_modules\\palizade\\dist\\index.cjs hook claude-code UserPromptSubmit" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `\"palizade\" hook claude-code UserPromptSubmit`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "\"palizade\" hook claude-code UserPromptSubmit" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `npm exec palizade -- hook claude-code UserPromptSubmit`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "npm exec palizade -- hook claude-code UserPromptSubmit" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `cmd /c palizade hook claude-code UserPromptSubmit`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "cmd /c palizade hook claude-code UserPromptSubmit" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `Start-Process palizade -ArgumentList hook`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "Start-Process palizade -ArgumentList hook" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git checkout .mcp.json`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git checkout .mcp.json" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git diff .mcp.json`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git diff .mcp.json" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git log -- palizade.yaml`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git log -- palizade.yaml" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: asks before `rm -rf .claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm -rf .claude" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `mv .claude /tmp/backup`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "mv .claude /tmp/backup" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `Remove-Item -Recurse .claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "Remove-Item -Recurse .claude" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `Rename-Item .claude .claude.bak`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "Rename-Item .claude .claude.bak" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `node -e` removing `.claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "node -e \"require('fs').rmSync('.claude', { recursive: true })\"" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `python -c` removing `.claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "python -c \"import shutil; shutil.rmtree('.claude')\"" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git clean -fdx`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git clean -fdx" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git checkout -- .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git checkout -- ." }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git restore .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git restore ." }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `robocopy empty . /MIR`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "robocopy empty . /MIR" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `tar -C .claude -xf x.tar`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "tar -C .claude -xf x.tar" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `tar -xf x.tar -C .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "tar -xf x.tar -C ." }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `rm .claude/settings*`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm .claude/settings*" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `rm -rf .cursor .codex .gemini`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm -rf .cursor" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git status`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git status" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git diff`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git diff" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git diff .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git diff ." }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git checkout src/app.ts`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git checkout src/app.ts" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: running code after an externally tainted workspace code write requires approval
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code], tainted_code_write_pending: true }
+    expect: { action: require_approval, rule: approve-exec-after-tainted-code-write }
   - name: a call that carries a canary secret is blocked, whatever else is true
     context: { direction: request, method: tools/call, tool_class: sink, capabilities: [network_egress], labels: [canary], copied_link_only: true, tainted_destination: true }
     expect: { action: block, rule: block-canary-egress }

@@ -141,11 +141,25 @@ describe("evaluatePolicy", () => {
       tool_class: "sink",
       capabilities: ["network_egress"],
       taint: true,
+      argument_roles: ["url"],
       destination_allowed: true,
       destination_allowlist_configured: true
     })).toMatchObject({
       action: "allow",
       matchedRuleId: "allow-tainted-allowed-egress-destination"
+    });
+
+    expect(evaluatePolicy(egress, {
+      direction: "request",
+      method: "tools/call",
+      tool_class: "sink",
+      capabilities: ["network_egress"],
+      taint: true,
+      destination_allowed: true,
+      destination_allowlist_configured: true
+    })).toMatchObject({
+      action: "block",
+      matchedRuleId: "block-tainted-sink"
     });
   });
 });

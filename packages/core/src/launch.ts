@@ -1,5 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
+import { existsSync } from "node:fs";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import type { AuditLogger } from "@palizade/audit";
 import { EgressProxy } from "./egress-proxy.js";
 import { assertSandboxSupported, buildLaunchPlan, describeLaunchForAudit, type LaunchPlan, type LaunchServerConfig } from "./sandbox.js";
@@ -49,6 +52,19 @@ export async function launchUpstream(serverName: string, server: LaunchServerCon
 
   try {
     const plan = buildLaunchPlan(serverName, server, { platform, proxy: proxyAddress, resolveCommand: context.resolveCommand });
+    if (platform === "win32" && plan.sandbox === "none" && isAbsolute(plan.command)) {
+      const shimPath = plan.command;
+      const shim = basename(shimPath).toLowerCase();
+      if (shim === "npm.cmd" || shim === "npx.cmd") {
+        const node = join(dirname(shimPath), "node.exe");
+        const cli = join(dirname(shimPath), "node_modules", "npm", "bin", `${shim.slice(0, -4)}-cli.js`);
+        // Stock Node bundles these entry points; invoke them directly to preserve argument boundaries.
+        if (existsSync(node) && existsSync(cli)) {
+          plan.command = node;
+          plan.args = [cli, ...plan.args];
+        }
+      }
+    }
     if (plan.missingEnv?.length) {
       process.stderr.write(`[palizade:${serverName}] environment variables not set, left as written: ${plan.missingEnv.join(", ")}\n`);
     }
@@ -63,6 +79,7 @@ export async function launchUpstream(serverName: string, server: LaunchServerCon
         metadata: { spawn: describeLaunchForAudit(plan, server) }
       });
     }
+    const startedAt = performance.now();
     const child = spawn(plan.command, plan.args, {
       cwd: plan.cwd,
       env: plan.env,
@@ -70,6 +87,14 @@ export async function launchUpstream(serverName: string, server: LaunchServerCon
       shell: false,
       windowsHide: true
     });
+    if (plan.envMode === "minimal") {
+      child.once("exit", (code) => {
+        if (code !== null && code !== 0 && performance.now() - startedAt < 5_000) {
+          process.stderr.write(`[palizade:${serverName}] Server exited shortly after launch. If it needs a host environment variable, add its name to passEnv or use inheritEnv: full.\n`);
+        }
+      });
+    }
+    await once(child, "spawn");
     if (proxy) {
       const activeProxy = proxy;
       child.once("exit", () => { void activeProxy.close(); });

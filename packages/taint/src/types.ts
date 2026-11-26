@@ -5,10 +5,13 @@ export type TaintClass = "untrusted" | "sensitive";
 
 export interface TaintFingerprint {
   normalized: string;
+  fragmentLength?: number;
   substrings: string[];
   tokens: string[];
+  destinationTokens?: string[];
   simhash: string;
   sensitiveFragments?: string[];
+  truncated?: boolean;
 }
 
 export interface TaintRecord {
@@ -40,6 +43,8 @@ export interface TaintMatch {
 }
 
 export interface AddTaintInput {
+  destinationOnly?: boolean;
+  destinations?: string[];
   persistent?: boolean;
   provenanceIds?: string[];
   profileId?: string | undefined;
@@ -56,6 +61,7 @@ export interface AddTaintInput {
 }
 
 export interface TaintMatchOptions {
+  destinationRole?: boolean;
   persistentOnly?: boolean;
   sensitiveFragments?: boolean;
   fuzzyHammingMax?: number;

@@ -5,6 +5,13 @@ import { describe, expect, it } from "vitest";
 import { loadConfig, parseConfig } from "./config.js";
 
 describe("loadConfig", () => {
+  it("limits the non-interactive write gate to 24 hours", () => {
+    const day = 24 * 60 * 60 * 1000;
+    expect(parseConfig("{}", resolve("project")).hooks.nonInteractiveWriteGateTtlMs).toBe(900_000);
+    expect(parseConfig("hooks: { nonInteractiveWriteGateTtlMs: " + day + " }", resolve("project")).hooks.nonInteractiveWriteGateTtlMs).toBe(day);
+    expect(() => parseConfig("hooks: { nonInteractiveWriteGateTtlMs: " + (day + 1) + " }", resolve("project"))).toThrow(/nonInteractiveWriteGateTtlMs/u);
+  });
+
   it("resolves config paths relative to the config file, not the caller cwd", async () => {
     const root = await mkdtemp(join(tmpdir(), "palizade-config-"));
     const configDir = join(root, "project");

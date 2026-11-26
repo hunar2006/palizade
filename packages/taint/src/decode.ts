@@ -3,6 +3,7 @@ import { domainToUnicode } from "node:url";
 export interface DecodeLimits { maxDepth: number; maxBytes: number }
 export interface MatchCandidate { text: string; kind: string }
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", colon: ":", sol: "/", commat: "@", period: ".", equals: "=" };
+const BASE64_RE = /(?<![\w+/-])[A-Za-z0-9+/_-]{16,}={0,2}(?![\w+/-])/gu;
 
 function printable(bytes: Buffer): string | undefined {
   try {
@@ -10,6 +11,18 @@ function printable(bytes: Buffer): string | undefined {
     const chars = [...text];
     return chars.length && chars.filter((char) => !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(char)).length / chars.length >= 0.9 ? text : undefined;
   } catch { return undefined; }
+}
+
+function printableUtf16Le(bytes: Buffer): string | undefined {
+  if (bytes.length % 2 !== 0) return undefined;
+  let ascii = 0;
+  for (let offset = 0; offset < bytes.length; offset += 2) {
+    const char = bytes[offset]!;
+    if (bytes[offset + 1] === 0 && (char === 9 || char === 10 || char === 13 || (char >= 32 && char < 127))) ascii++;
+  }
+  if (ascii < (bytes.length / 2) * 0.75) return undefined;
+  try { return new TextDecoder("utf-16le", { fatal: true }).decode(bytes); }
+  catch { return undefined; }
 }
 
 export function expandCandidates(text: string, limits: DecodeLimits = { maxDepth: 2, maxBytes: 256 * 1024 }): MatchCandidate[] {
@@ -40,7 +53,8 @@ export function expandCandidates(text: string, limits: DecodeLimits = { maxDepth
         const parts = /^=\?utf-8\?([bq])\?([^?]*)\?=$/iu.exec(value)!;
         return parts[1]!.toLowerCase() === "b" ? printable(Buffer.from(parts[2]!, "base64")) : printable(Buffer.from(parts[2]!.replace(/_/gu, " ").replace(/=([\da-f]{2})/giu, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16))), "latin1"));
       });
-      replace(/(?<![\w+/-])[A-Za-z0-9+/_-]{16,}={0,2}(?![\w+/-])/gu, "base64", (value) => printable(Buffer.from(value, "base64url")));
+      replace(BASE64_RE, "base64", (value) => printable(Buffer.from(value, "base64url")));
+      replace(BASE64_RE, "base64-utf16le", (value) => printableUtf16Le(Buffer.from(value, "base64url")));
       replace(/(?<![\da-f])[\da-f]{32,}(?![\da-f])/giu, "hex", (value) => value.length % 2 === 0 ? printable(Buffer.from(value, "hex")) : undefined);
       replace(/(?:%[\da-f]{2})+/giu, "percent", (value) => printable(Buffer.from(value.replace(/%/gu, ""), "hex")));
       // shortcut: common named HTML entities only, extend the table when uncommon named entities appear in attacks.

@@ -1,4 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parse, stringify } from "smol-toml";
+import type { ClientServerEntry } from "@palizade/core";
 
 // Codex keeps MCP servers in TOML ([mcp_servers.<name>] tables). Palizade reads them into the
 // same shape as the JSON clients, and on write replaces only the tables of servers it changed,
@@ -41,12 +46,44 @@ export function codexToClientEntry(table: JsonRecord): JsonRecord {
     if (typeof table.bearer_token_env_var === "string") headers.Authorization = `Bearer \${${table.bearer_token_env_var}}`;
     return { type: "http", url: table.url, ...(Object.keys(headers).length > 0 ? { headers } : {}) };
   }
+  const passEnv = Array.isArray(table.env_vars)
+    ? table.env_vars.filter((name): name is string => typeof name === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name))
+    : [];
   return {
     ...(typeof table.command === "string" ? { command: table.command } : {}),
     ...(Array.isArray(table.args) ? { args: table.args } : {}),
     ...(typeof table.cwd === "string" ? { cwd: table.cwd } : {}),
-    ...(isRecord(table.env) ? { env: table.env } : {})
+    ...(isRecord(table.env) ? { env: table.env } : {}),
+    ...(passEnv.length > 0 ? { passEnv } : {})
   };
+}
+
+/** Returns the registered launch only when the relevant sources agree on it. */
+export function findCodexServerRegistration(name: string, cwd: string, home = process.env.CODEX_HOME || join(homedir(), ".codex")): ClientServerEntry | undefined {
+  const paths = new Set([join(home, "config.toml")]);
+  const projectLayers: string[] = [];
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    projectLayers.push(join(dir, ".codex", "config.toml"));
+    if (existsSync(join(dir, ".git"))) {
+      projectLayers.forEach((path) => paths.add(path));
+      break;
+    }
+    if (dirname(dir) === dir) break;
+  }
+  paths.add(projectLayers[0]!);
+  let entry: ClientServerEntry | undefined;
+  for (const path of paths) {
+    try {
+      const { mcpServers, state } = parseCodexConfig(readFileSync(path, "utf8"), path);
+      if (!Object.hasOwn(mcpServers, name)) continue;
+      const candidate = mcpServers[name] as ClientServerEntry;
+      if (state.tables[name]?.enabled === false || (entry && !isDeepStrictEqual(entry, candidate))) return undefined;
+      entry = candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+    }
+  }
+  return entry;
 }
 
 /** Rewrites the tables of servers whose entry changed and appends new ones. */

@@ -38,7 +38,7 @@ export class HotReloader {
   private allowPath: string;
   private queue: Promise<unknown> = Promise.resolve();
   private stopped = false;
-  private readonly watched = new Set<string>();
+  private readonly watched = new Map<string, (current: Stats, previous: Stats) => void>();
 
   constructor(private readonly options: HotReloaderOptions) {
     this.configPath = resolve(options.configPath);
@@ -57,8 +57,12 @@ export class HotReloader {
 
   stop(): void {
     this.stopped = true;
-    for (const path of this.watched) unwatchFile(path);
-    this.watched.clear();
+    for (const path of this.watched.keys()) this.unwatch(path);
+  }
+
+  async close(): Promise<void> {
+    this.stop();
+    await this.queue;
   }
 
   /** Re-reads the files now. Serialized, so overlapping changes apply in order. */
@@ -78,12 +82,19 @@ export class HotReloader {
   }
 
   private watch(path: string, onChange: () => void): void {
-    if (this.watched.has(path)) return;
-    this.watched.add(path);
-    // Polling is reliable on Windows and with editors that replace files on save; persistent: false never keeps the process alive.
-    watchFile(path, { interval: this.options.intervalMs ?? 1000, persistent: false }, (current: Stats, previous: Stats) => {
+    if (this.stopped || this.watched.has(path)) return;
+    const listener = (current: Stats, previous: Stats) => {
       if (current.mtimeMs !== previous.mtimeMs || current.size !== previous.size) onChange();
-    });
+    };
+    // Polling is reliable on Windows and with editors that replace files on save; persistent: false never keeps the process alive.
+    watchFile(path, { interval: this.options.intervalMs ?? 1000, persistent: false }, listener);
+    this.watched.set(path, listener);
+  }
+
+  private unwatch(path: string): void {
+    const listener = this.watched.get(path);
+    if (listener) unwatchFile(path, listener);
+    this.watched.delete(path);
   }
 
   private async reload(): Promise<ReloadOutcome> {
@@ -124,14 +135,12 @@ export class HotReloader {
     this.configHash = configHash;
     this.policyHash = policyHash;
     if (policyPath !== this.policyPath) {
-      unwatchFile(this.policyPath);
-      this.watched.delete(this.policyPath);
+      this.unwatch(this.policyPath);
       this.policyPath = policyPath;
       this.watch(policyPath, () => this.trigger());
     }
     if (config && config.egress.learnedFile !== this.allowPath) {
-      unwatchFile(this.allowPath);
-      this.watched.delete(this.allowPath);
+      this.unwatch(this.allowPath);
       this.allowPath = config.egress.learnedFile;
       this.watch(this.allowPath, () => this.checkAllowlist());
     }

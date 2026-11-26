@@ -1,11 +1,76 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { expect, it, vi } from "vitest";
 import { parseConfig } from "./config.js";
 import { extractArgumentFields } from "./arguments.js";
-import { checkProtectedPaths, protectedWriteDiff } from "./protected-paths.js";
+import { checkProtectedPaths, isWorkspacePath, protectedWriteDiff, resolveArgumentPath } from "./protected-paths.js";
 import { matchesPathGlob } from "@palizade/policy";
+
+it.skipIf(process.platform !== "win32")("treats Windows path aliases as critical or uncertain", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "palizade-paths-"));
+  try {
+    const config = parseConfig("{}", dir);
+    for (const path of ["package.json", ".git/hooks/pre-commit", "CLAUDE.md", ".mcp.json"]) {
+      await mkdir(dirname(join(dir, path)), { recursive: true });
+      await writeFile(join(dir, path), "test fixture");
+    }
+    const check = (path: string) => checkProtectedPaths(extractArgumentFields({ path }), dir, config);
+    expect.soft(check("GIT~1\\hooks\\pre-commit").critical).toBe(true);
+    for (const path of [
+      "PACKAG~1.JSO", "CLAUDE~1.MD", "MCP~1.JSO", "package.json::$DATA",
+      ".git\\hooks\\pre-commit::$DATA", "CLAUDE.md::$DATA", ".mcp.json::$DATA",
+      "package.json.", "folder.\\file", "package.json ", "C:package.json", "file.txt:stream",
+      "\\\\server\\share\\file", "\\\\?\\C:\\file", "//./C:/file", "\\??\\Volume\\file", "file://server/share/file", "unknown~1/file.txt"
+    ]) {
+      const { critical, resolved: [resolved] } = check(path);
+      expect.soft(critical, path).toBe(true);
+      expect.soft(resolved?.uncertain, path).toBe(true);
+      expect.soft(isWorkspacePath(resolved!, dir), path).toBe(false);
+    }
+    const normal = resolveArgumentPath("src/app.ts", dir);
+    expect(isWorkspacePath(normal, dir)).toBe(true);
+    expect(protectedWriteDiff(join(dir, "package.json::$DATA"), {}, 1024, false, () => false))
+      .toBe("Target path could not be safely canonicalized; review the raw path before approving.");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it.each([" ", "a\u007fb", "file://[", "file:///a%00b"])("rejects unsafe input %j without throwing", (input) => {
+  expect(resolveArgumentPath(input, tmpdir()).uncertain).toBe(true);
+});
+
+it.skipIf(process.platform === "win32")("follows symlinks before resolving a parent segment", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "palizade-paths-"));
+  try {
+    const workspace = join(dir, "workspace");
+    const target = join(dir, "outside", "nested");
+    await mkdir(workspace);
+    await mkdir(target, { recursive: true });
+    await symlink(target, join(workspace, "alias"), "dir");
+    const resolved = resolveArgumentPath("alias/../.zshenv", workspace);
+    expect(resolved.canonical).toBe(join(dir, "outside", ".zshenv"));
+    expect(isWorkspacePath(resolved, workspace)).toBe(false);
+    expect(resolveArgumentPath("missing/../file.txt", workspace).uncertain).toBe(true);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("protects auto-run files, agent instructions and the managed seal directory", () => {
+  const dir = tmpdir();
+  const sealDir = join(dir, "managed[seal]");
+  vi.stubEnv("PALIZADE_SEAL_PATH", join(sealDir, "checkpoint.json"));
+  try {
+    const config = parseConfig("{}", dir);
+    for (const path of [
+      ".npmrc", "~/.npmrc", ".pnpmfile.cjs", ".yarnrc.yml", ".yarnrc", "conftest.py", ".pre-commit-config.yaml",
+      "lefthook.yml", ".lefthook.yml", ".git/modules/lib/hooks/pre-commit", ".github/actions/check/action.yml",
+      ".devcontainer/devcontainer.json", ".vscode/launch.json", "app.code-workspace",
+      "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/task.cmd", "~/.gitconfig", "~/.netrc", "~/.git-credentials",
+      "CLAUDE.local.md", ".cursorrules", ".windsurfrules", ".clinerules", "GEMINI.md", ".github/copilot-instructions.md",
+      sealDir, join(sealDir, "checkpoint.json"), join(sealDir, "nested", "other.txt")
+    ]) expect.soft(checkProtectedPaths(extractArgumentFields({ path }), dir, config).critical, path).toBe(true);
+    expect(checkProtectedPaths(extractArgumentFields({ path: join(dir, "manageds", "other.txt") }), dir, config).critical).toBe(false);
+  } finally { vi.unstubAllEnvs(); }
+});
 
 it("protects traversal, home targets and symlink ancestors without blocking normal source files", async () => {
   const dir = await mkdtemp(join(tmpdir(), "palizade-paths-"));

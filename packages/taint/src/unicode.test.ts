@@ -32,6 +32,11 @@ describe("canonical destinations", () => {
     expect(canonicalHost("EXAMPLE.com.")).toBe("example.com");
     expect(canonicalHost("127.1")).toBe("127.0.0.1");
     expect(canonicalHost("bücher.example")).toBe("xn--bcher-kva.example");
+    expect(canonicalHost("[::ffff:203.0.113.77]")).toBe("203.0.113.77");
+    expect(canonicalHost("::ffff:203.0.113.77")).toBe("203.0.113.77");
+    expect(canonicalHost("[::ffff:cb00:714d]")).toBe("203.0.113.77");
+    expect(canonicalHost("0:0:0:0:0:ffff:203.0.113.77")).toBe("203.0.113.77");
+    expect(canonicalHost("[::ffff:7f00:1]")).toBe("127.0.0.1");
     expect(canonicalEmail("Ops@Example.COM.")).toBe("ops@example.com");
   });
 });

@@ -40,6 +40,26 @@ describe("LineJsonRpcPeer", () => {
     await expect(received).resolves.toMatchObject({ id: 1, method: "ping" });
   });
 
+  it("applies the message limit separately from the buffer limit in compatibility mode", () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const peer = new LineJsonRpcPeer(input, output, {
+      allowContentLength: true, maxMessageBytes: 50, maxBufferedBytes: 500
+    });
+    const messages: JsonRpcEnvelope[] = [];
+    const errors: Error[] = [];
+    peer.on("message", (message) => messages.push(message));
+    peer.on("error", (error) => errors.push(error));
+    const large = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { label: "example" } });
+    const small = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" });
+    const frame = (body: string) => `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+
+    input.write(frame(large) + frame(small));
+
+    expect(errors.map((error) => error.message)).toEqual(["JSON-RPC message exceeded 50 bytes"]);
+    expect(messages).toEqual([{ jsonrpc: "2.0", id: 2, method: "ping" }]);
+  });
+
   it("rejects JSON-RPC batches by default", async () => {
     const input = new PassThrough();
     const output = new PassThrough();

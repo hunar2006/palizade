@@ -21,6 +21,14 @@ export interface HttpMcpTransportOptions {
   env?: NodeJS.ProcessEnv;
   onSecurityEvent?: (event: TransportSecurityEvent) => void;
   requestHeaders?: Record<string, string>;
+  openLegacyStream?: boolean;
+  stripAuthorization?: (value: string) => boolean;
+}
+
+interface HttpMcpExchange {
+  onMessage: (message: JsonRpcMessage) => void | Promise<void>;
+  onStatus: (status: number, headers: Headers) => void;
+  signal?: AbortSignal;
 }
 
 const PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion";
@@ -48,7 +56,11 @@ export function encodeHeaderValue(value: string): string {
 export function decodeHeaderValue(value: string): string | undefined {
   if (value.startsWith(BASE64_SENTINEL_PREFIX) && value.endsWith(BASE64_SENTINEL_SUFFIX)) {
     try {
-      return Buffer.from(value.slice(BASE64_SENTINEL_PREFIX.length, -BASE64_SENTINEL_SUFFIX.length), "base64").toString("utf8");
+      const inner = value.slice(BASE64_SENTINEL_PREFIX.length, -BASE64_SENTINEL_SUFFIX.length);
+      if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(inner) || inner.length % 4 !== 0) {
+        return undefined;
+      }
+      return Buffer.from(inner, "base64").toString("utf8");
     } catch {
       return undefined;
     }
@@ -104,12 +116,14 @@ export interface SseEvent {
   event?: string;
   data: string;
   id?: string;
+  retry?: number;
 }
 
 export class SseParser {
   private lineBuffer = "";
   private eventName: string | undefined;
   private id: string | undefined;
+  private retry: number | undefined;
   private dataLines: string[] = [];
   private eventBytes = 0;
   private pendingDataBytes = 0;
@@ -135,15 +149,17 @@ export class SseParser {
         if (this.eventBytes > this.limits.maxEventBytes) {
           throw new SseParseError(`SSE event exceeded ${this.limits.maxEventBytes} bytes`);
         }
-        if (data.length > 0) {
+        if (data.length > 0 || this.id !== undefined || this.retry !== undefined) {
           onEvent({
             ...(this.eventName !== undefined ? { event: this.eventName } : {}),
             data,
-            ...(this.id !== undefined ? { id: this.id } : {})
+            ...(this.id !== undefined ? { id: this.id } : {}),
+            ...(this.retry !== undefined ? { retry: this.retry } : {})
           });
         }
         this.eventName = undefined;
         this.id = undefined;
+        this.retry = undefined;
         this.dataLines = [];
         this.eventBytes = 0;
         this.pendingDataBytes = 0;
@@ -169,6 +185,8 @@ export class SseParser {
         this.eventName = value;
       } else if (field === "id") {
         this.id = value;
+      } else if (field === "retry" && /^\d+$/u.test(value)) {
+        this.retry = Number(value);
       }
     }
     // A line with no newline yet is still bounded: an upstream cannot stream one endless line.
@@ -235,12 +253,14 @@ export class HttpMcpTransport extends EventEmitter {
   private era: HttpEra = "legacy";
   private readonly url: string;
   private legacySessionId: string | undefined;
+  private legacyProtocolVersion: string | undefined;
   private lastEventId: string | undefined;
   private legacyStreamAbort: AbortController | undefined;
   private readonly toolSchemas = new Map<string, McpTool>();
   private activeStreams = 0;
   private closed = false;
-  private readonly pendingWaiters = new Set<string>();
+  private readonly shutdown = new AbortController();
+  private readonly pendingWaiters = new Set<JsonRpcId>();
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(private readonly options: HttpMcpTransportOptions) {
@@ -266,16 +286,24 @@ export class HttpMcpTransport extends EventEmitter {
     return this.legacySessionId;
   }
 
-  async send(message: JsonRpcMessage, requestHeaders?: Record<string, string>): Promise<void> {
+  get legacyProtocol(): string | undefined {
+    return this.legacyProtocolVersion;
+  }
+
+  getToolSchema(name: string): McpTool | undefined {
+    return this.toolSchemas.get(name);
+  }
+
+  async send(message: JsonRpcMessage, requestHeaders?: Record<string, string>, exchange?: HttpMcpExchange): Promise<void> {
     if (this.closed) {
       throw new Error(`Upstream HTTP transport for '${this.options.serverName}' is closed.`);
     }
     await this.acquire();
     try {
       if (this.era === "2026-07-28") {
-        await this.sendModern(message, requestHeaders);
+        await this.sendModern(message, requestHeaders, exchange);
       } else {
-        await this.sendLegacy(message, requestHeaders);
+        await this.sendLegacy(message, requestHeaders, exchange);
       }
     } finally {
       this.release();
@@ -290,113 +318,124 @@ export class HttpMcpTransport extends EventEmitter {
     }
   }
 
-  async close(): Promise<void> {
+  async close(requestHeaders?: Record<string, string>): Promise<void> {
     if (this.closed) {
       return;
     }
     this.closed = true;
+    this.shutdown.abort();
     this.legacyStreamAbort?.abort();
-    if (this.era === "legacy" && this.legacySessionId) {
-      try {
-        await fetch(this.url, {
-          method: "DELETE",
-          headers: {
-            ...this.resolvedHeaders({ "Mcp-Session-Id": this.legacySessionId }),
-            "Mcp-Session-Id": this.legacySessionId
-          },
-          redirect: "manual"
-        });
-      } catch {
-        // best effort session termination
-      }
-    }
-    for (const key of this.pendingWaiters) {
+    for (const id of this.pendingWaiters) {
       this.emit("message", {
         jsonrpc: "2.0",
-        id: key === "null" ? null : key,
+        id,
         error: { code: -32030, message: `Upstream transport for '${this.options.serverName}' closed.` }
       });
     }
     this.pendingWaiters.clear();
+    if (this.era === "legacy" && this.legacySessionId) {
+      try {
+        const response = await fetch(this.url, {
+          method: "DELETE",
+          headers: this.resolvedHeaders({
+            "Mcp-Session-Id": this.legacySessionId,
+            ...(this.legacyProtocolVersion ? { "MCP-Protocol-Version": this.legacyProtocolVersion } : {})
+          }, requestHeaders),
+          redirect: "manual",
+          signal: AbortSignal.timeout(this.options.http.requestTimeoutMs)
+        });
+        await discardBody(response);
+      } catch {
+        // best effort session termination
+      }
+    }
   }
 
   waitForResponse(id: JsonRpcId, timeoutMs: number): Promise<JsonRpcMessage> {
     return new Promise((resolve, reject) => {
-      const key = String(id);
       const onMessage = (message: JsonRpcMessage): void => {
-        if (isRequest(message) || String((message as { id: JsonRpcId }).id) !== key) {
+        if (isRequest(message) || message.id !== id) {
           return;
         }
         clearTimeout(timer);
         this.removeListener("message", onMessage);
-        this.pendingWaiters.delete(key);
+        this.pendingWaiters.delete(id);
         resolve(message);
       };
       const timer = setTimeout(() => {
         this.removeListener("message", onMessage);
-        this.pendingWaiters.delete(key);
-        reject(new Error(`Timed out waiting for upstream response id=${key}`));
+        this.pendingWaiters.delete(id);
+        reject(new Error(`Timed out waiting for upstream response id=${id}`));
       }, timeoutMs);
       this.on("message", onMessage);
-      this.pendingWaiters.add(key);
+      this.pendingWaiters.add(id);
     });
   }
 
-  private async sendModern(message: JsonRpcMessage, requestHeaders?: Record<string, string>): Promise<void> {
+  private async sendModern(message: JsonRpcMessage, requestHeaders?: Record<string, string>, exchange?: HttpMcpExchange): Promise<void> {
     const headers = this.resolvedHeaders(this.modernHeadersFor(message), requestHeaders);
-    const response = await this.requestWithRedirectGuard("POST", headers, JSON.stringify(message));
+    const { response, timeoutController, signal } = await this.requestWithRedirectGuard("POST", headers, JSON.stringify(message), exchange?.signal);
     if (response.status === 202) {
       await discardBody(response);
       return;
     }
-    await this.handleModernResponse(response, message);
+    await this.handleModernResponse(response, message, exchange, timeoutController, signal);
   }
 
-  private async sendLegacy(message: JsonRpcMessage, requestHeaders?: Record<string, string>): Promise<void> {
+  private async sendLegacy(message: JsonRpcMessage, requestHeaders?: Record<string, string>, exchange?: HttpMcpExchange): Promise<void> {
+    const isInit = isRequest(message) && message.method === "initialize";
     const headers = this.resolvedHeaders({
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
-      ...(this.legacySessionId ? { "Mcp-Session-Id": this.legacySessionId } : {})
+      ...(this.legacySessionId ? { "Mcp-Session-Id": this.legacySessionId } : {}),
+      ...(this.legacyProtocolVersion && !isInit ? { "MCP-Protocol-Version": this.legacyProtocolVersion } : {})
     }, requestHeaders);
-    const response = await this.requestWithRedirectGuard("POST", headers, JSON.stringify(message));
+    const { response, timeoutController, signal } = await this.requestWithRedirectGuard("POST", headers, JSON.stringify(message), exchange?.signal);
     const sessionId = response.headers.get("Mcp-Session-Id");
-    if (sessionId) {
+    if (sessionId && response.ok && isInit) {
       this.legacySessionId = sessionId;
       this.era = "legacy";
+      const requestedVersion = (message.params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
+      if (typeof requestedVersion === "string") {
+        this.legacyProtocolVersion ??= requestedVersion;
+      }
     }
     if (response.status === 404 || response.status === 400 || response.status === 405) {
-      this.emit("upstreamStatus", response.status, Object.fromEntries(response.headers.entries()));
-      const body = parseJsonBody(await readBodyBounded(response, this.options.http.maxBodyBytes));
+      const body = parseJsonBody(await readBodyBounded(response, this.options.http.maxBodyBytes, this.options.http.requestTimeoutMs, timeoutController, signal));
       if (isModernRejectionBody(body)) {
-        if (isRequest(message) && message.method === "initialize" && message.id !== undefined) {
+        if (isInit && message.id !== undefined) {
           this.era = "2026-07-28";
-          this.emit("message", makeSyntheticInitializeResponse(message.id, this.options.serverName));
+          await this.emitInbound(makeSyntheticInitializeResponse(message.id, this.options.serverName), "json", exchange);
           return;
         }
-        this.emitUpstreamError(message, response.status, body);
-        return;
       }
-      this.emitUpstreamError(message, response.status, body);
+      this.emitStatus(response, exchange);
+      await this.emitUpstreamError(message, response.status, body, exchange);
       return;
     }
     if (!response.ok) {
-      this.emit("upstreamStatus", response.status, Object.fromEntries(response.headers.entries()));
-      const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
-      this.emitUpstreamError(message, response.status, body);
+      this.emitStatus(response, exchange);
+      const body = await readBodyBounded(response, this.options.http.maxBodyBytes, this.options.http.requestTimeoutMs, timeoutController, signal);
+      await this.emitUpstreamError(message, response.status, body, exchange);
       return;
     }
-    if (isRequest(message) && message.method === "initialize" && !this.legacyStreamAbort) {
+    if (isInit && this.options.openLegacyStream !== false) {
       this.openLegacyStream();
     }
     // 2025-era servers may answer a POST with an SSE stream (the TypeScript and Python SDKs do by default).
     if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
-      await this.consumeSse(response, "legacy");
+      await this.consumeSse(response, "legacy", message, exchange, timeoutController, signal);
       return;
     }
-    const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
+    const body = await readBodyBounded(response, this.options.http.maxBodyBytes, this.options.http.requestTimeoutMs, timeoutController, signal);
     if (typeof body === "string" && body.trim().length > 0) {
       try {
-        this.emitInbound(JSON.parse(body) as JsonRpcMessage, "json");
+        const parsed = JSON.parse(body) as JsonRpcMessage;
+        if (isInit && isSuccess(parsed)) {
+          const negotiated = (parsed.result as { protocolVersion?: unknown } | undefined)?.protocolVersion;
+          if (typeof negotiated === "string") this.legacyProtocolVersion = negotiated;
+        }
+        await this.emitInbound(parsed, "json", exchange);
       } catch {
         this.securityEvent({
           kind: "upstream_http_error",
@@ -406,23 +445,30 @@ export class HttpMcpTransport extends EventEmitter {
     }
   }
 
-  private async handleModernResponse(response: Response, sent: JsonRpcMessage): Promise<void> {
+  private async handleModernResponse(
+    response: Response,
+    sent: JsonRpcMessage,
+    exchange: HttpMcpExchange | undefined,
+    timeoutController: AbortController,
+    signal: AbortSignal
+  ): Promise<void> {
     if (!response.ok) {
-      this.emit("upstreamStatus", response.status, Object.fromEntries(response.headers.entries()));
-      const body = parseJsonBody(await readBodyBounded(response, this.options.http.maxBodyBytes));
+      this.emitStatus(response, exchange);
+      const body = parseJsonBody(await readBodyBounded(response, this.options.http.maxBodyBytes, this.options.http.requestTimeoutMs, timeoutController, signal));
       if (body !== undefined && isModernJsonRpcErrorBody(body)) {
-        this.emitInbound(body as unknown as JsonRpcMessage, "json");
+        const message = body as unknown as JsonRpcMessage;
+        if (this.validateModernResponseHeaders(response, message)) await this.emitInbound(message, "json", exchange);
         return;
       }
-      this.emitUpstreamError(sent, response.status, body);
+      await this.emitUpstreamError(sent, response.status, body, exchange);
       return;
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("text/event-stream")) {
-      await this.consumeSse(response, "modern");
+      await this.consumeSse(response, "modern", sent, exchange, timeoutController, signal);
       return;
     }
-    const body = await readBodyBounded(response, this.options.http.maxBodyBytes);
+    const body = await readBodyBounded(response, this.options.http.maxBodyBytes, this.options.http.requestTimeoutMs, timeoutController, signal);
     if (body === undefined || (typeof body === "string" && body.trim() === "")) {
       return;
     }
@@ -444,11 +490,17 @@ export class HttpMcpTransport extends EventEmitter {
       });
       return;
     }
-    this.validateModernResponseHeaders(response, parsed);
-    this.emitInbound(parsed, "json");
+    if (this.validateModernResponseHeaders(response, parsed)) await this.emitInbound(parsed, "json", exchange);
   }
 
-  private async consumeSse(response: Response, era: "modern" | "legacy"): Promise<void> {
+  private async consumeSse(
+    response: Response,
+    era: "modern" | "legacy",
+    sent: JsonRpcMessage,
+    exchange: HttpMcpExchange | undefined,
+    timeoutController: AbortController,
+    signal: AbortSignal
+  ): Promise<void> {
     if (!response.body) {
       return;
     }
@@ -458,15 +510,21 @@ export class HttpMcpTransport extends EventEmitter {
     });
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    const expectedId = isRequest(sent) ? sent.id : undefined;
+    const isInit = isRequest(sent) && sent.method === "initialize";
+    let stopReading = false;
     try {
-      while (true) {
-        const { done, value } = await reader.read();
+      while (!stopReading) {
+        const { done, value } = await readChunkWithIdleTimeout(reader, this.options.http.requestTimeoutMs, timeoutController, signal);
         if (done) {
           break;
         }
         const messages: JsonRpcMessage[] = [];
         try {
           parser.feed(decoder.decode(value, { stream: true }), (event) => {
+            if (event.data === "") {
+              return;
+            }
             try {
               messages.push(JSON.parse(event.data) as JsonRpcMessage);
             } catch {
@@ -481,30 +539,44 @@ export class HttpMcpTransport extends EventEmitter {
             kind: "sse_limit_exceeded",
             message: error instanceof Error ? error.message : String(error)
           });
+          stopReading = true;
           break;
         }
         for (const message of messages) {
+          let delivered = false;
           if (era === "legacy") {
+            if (isInit && isSuccess(message)) {
+              const negotiated = (message.result as { protocolVersion?: unknown } | undefined)?.protocolVersion;
+              if (typeof negotiated === "string") this.legacyProtocolVersion = negotiated;
+            }
             // The 2025 spec allows requests and notifications related to the POST on its stream.
-            this.emitInbound(message, "sse");
+            await this.emitInbound(message, "sse", exchange);
+            delivered = true;
           } else if ("method" in message && "id" in message) {
             this.securityEvent({
               kind: "protocol_violation",
               message: `Upstream pushed a JSON-RPC request on an SSE stream in the 2026-07-28 era; the spec forbids it. Message dropped.`,
               detail: { method: message.method }
             });
-          } else {
-            this.validateModernResponseHeaders(response, message);
-            this.emitInbound(message, "sse");
+          } else if (this.validateModernResponseHeaders(response, message)) {
+            await this.emitInbound(message, "sse", exchange);
+            delivered = true;
+          }
+          if (delivered && expectedId !== undefined && !isRequest(message) && message.id === expectedId) {
+            stopReading = true;
+            break;
           }
         }
       }
     } finally {
+      if (stopReading || signal.aborted) {
+        await reader.cancel().catch(() => undefined);
+      }
       reader.releaseLock();
     }
   }
 
-  private validateModernResponseHeaders(response: Response, message: JsonRpcMessage): void {
+  private validateModernResponseHeaders(response: Response, message: JsonRpcMessage): boolean {
     const headerVersion = response.headers.get("MCP-Protocol-Version");
     const bodyVersion = protocolVersionOf(message);
     if (headerVersion && bodyVersion && headerVersion !== bodyVersion) {
@@ -512,7 +584,7 @@ export class HttpMcpTransport extends EventEmitter {
         kind: "header_mismatch",
         message: `Upstream MCP-Protocol-Version header '${headerVersion}' does not match body protocol version '${bodyVersion}'; response rejected.`
       });
-      return;
+      return false;
     }
     const headerMethod = response.headers.get("Mcp-Method");
     if (headerMethod && "method" in message && headerMethod !== (message as { method: string }).method) {
@@ -520,7 +592,9 @@ export class HttpMcpTransport extends EventEmitter {
         kind: "header_mismatch",
         message: `Upstream Mcp-Method header '${headerMethod}' does not match body method '${(message as { method: string }).method}'; response rejected.`
       });
+      return false;
     }
+    return true;
   }
 
   private openLegacyStream(): void {
@@ -531,6 +605,7 @@ export class HttpMcpTransport extends EventEmitter {
     const headers = this.resolvedHeaders({
       Accept: "text/event-stream",
       "Mcp-Session-Id": this.legacySessionId ?? "",
+      ...(this.legacyProtocolVersion ? { "MCP-Protocol-Version": this.legacyProtocolVersion } : {}),
       ...(this.lastEventId ? { "Last-Event-ID": this.lastEventId } : {})
     });
     void this.consumeLegacyStream(headers);
@@ -538,13 +613,20 @@ export class HttpMcpTransport extends EventEmitter {
 
   private async consumeLegacyStream(headers: Record<string, string>): Promise<void> {
     const signal = this.legacyStreamAbort?.signal;
+    const connectAbort = new AbortController();
+    const connectTimer = setTimeout(() => connectAbort.abort(), this.options.http.requestTimeoutMs);
+    let response: Response;
     try {
-      const response = await fetch(this.url, {
-        method: "GET",
-        headers,
-        redirect: "manual",
-        ...(signal ? { signal } : {})
-      });
+      try {
+        response = await fetch(this.url, {
+          method: "GET",
+          headers,
+          redirect: "manual",
+          signal: AbortSignal.any([connectAbort.signal, ...(signal ? [signal] : [])])
+        });
+      } finally {
+        clearTimeout(connectTimer);
+      }
       if (!response.ok) {
         this.securityEvent({
           kind: "upstream_http_error",
@@ -566,27 +648,32 @@ export class HttpMcpTransport extends EventEmitter {
         if (done) {
           break;
         }
+        const events: SseEvent[] = [];
         try {
-          parser.feed(decoder.decode(value, { stream: true }), (event) => {
-            if (event.id) {
-              this.lastEventId = event.id;
-            }
-            try {
-              const message = JSON.parse(event.data) as JsonRpcMessage;
-              this.emitInbound(message, "sse");
-            } catch {
-              this.securityEvent({
-                kind: "upstream_http_error",
-                message: `Legacy SSE event carried invalid JSON for '${this.options.serverName}'.`
-              });
-            }
-          });
+          parser.feed(decoder.decode(value, { stream: true }), (event) => events.push(event));
         } catch (error) {
           this.securityEvent({
             kind: "sse_limit_exceeded",
             message: error instanceof Error ? error.message : String(error)
           });
           break;
+        }
+        for (const event of events) {
+          if (event.id) {
+            this.lastEventId = event.id;
+          }
+          if (event.data === "") {
+            continue;
+          }
+          try {
+            const message = JSON.parse(event.data) as JsonRpcMessage;
+            await this.emitInbound(message, "sse");
+          } catch {
+            this.securityEvent({
+              kind: "upstream_http_error",
+              message: `Legacy SSE event carried invalid JSON for '${this.options.serverName}'.`
+            });
+          }
         }
       }
     } catch (error) {
@@ -612,8 +699,10 @@ export class HttpMcpTransport extends EventEmitter {
       if (message.method === "tools/call" && typeof params.name === "string") {
         headers["Mcp-Name"] = encodeHeaderValue(params.name);
         this.appendMcpParamHeaders(headers, params.name, params.arguments);
-      } else if ((message.method === "resources/read" || message.method === "prompts/get") && typeof params.uri === "string") {
+      } else if (message.method === "resources/read" && typeof params.uri === "string") {
         headers["Mcp-Name"] = encodeHeaderValue(params.uri);
+      } else if (message.method === "prompts/get" && typeof params.name === "string") {
+        headers["Mcp-Name"] = encodeHeaderValue(params.name);
       }
     }
     return headers;
@@ -657,6 +746,9 @@ export class HttpMcpTransport extends EventEmitter {
     }
     for (const [name, value] of Object.entries(perCall ?? {})) {
       if (name.toLowerCase() === "authorization") {
+        for (const key of Object.keys(headers)) {
+          if (key.toLowerCase() === "authorization") delete headers[key];
+        }
         headers.Authorization = value;
       } else {
         headers[name] = value;
@@ -665,60 +757,95 @@ export class HttpMcpTransport extends EventEmitter {
     for (const [name, value] of Object.entries(extra)) {
       headers[name] = value;
     }
+    if (this.options.stripAuthorization) {
+      for (const [name, value] of Object.entries(headers)) {
+        if (name.toLowerCase() === "authorization" && this.options.stripAuthorization(value)) delete headers[name];
+      }
+    }
     return headers;
   }
 
-  private async requestWithRedirectGuard(method: "POST" | "GET" | "DELETE", headers: Record<string, string>, body?: string): Promise<Response> {
+  private async requestWithRedirectGuard(
+    method: "POST" | "GET" | "DELETE",
+    headers: Record<string, string>,
+    body?: string,
+    signal?: AbortSignal
+  ): Promise<{ response: Response; timeoutController: AbortController; signal: AbortSignal }> {
     const hasAuthorization = Object.keys(headers).some((name) => name.toLowerCase() === "authorization");
     const origin = new URL(this.url).origin;
     let currentUrl = this.url;
     let redirects = 0;
-    while (true) {
-      const response = await fetch(currentUrl, {
-        method,
-        headers,
-        ...(body !== undefined ? { body } : {}),
-        redirect: "manual",
-        signal: AbortSignal.timeout(this.options.http.requestTimeoutMs)
-      });
-      const location = response.headers.get("location");
-      const isRedirect = response.status >= 300 && response.status < 400 && location;
-      if (!isRedirect) {
-        return response;
-      }
-      if (hasAuthorization) {
-        this.securityEvent({
-          kind: "token_never_forwarded",
-          message: `Refused to follow redirect for '${this.options.serverName}': Authorization is never forwarded to a redirect target.`
+    const timeoutController = new AbortController();
+    const combinedSignal = AbortSignal.any([
+      this.shutdown.signal,
+      timeoutController.signal,
+      ...(signal ? [signal] : [])
+    ]);
+    const headerTimer = setTimeout(() => {
+      timeoutController.abort(new DOMException(`Upstream request timed out after ${this.options.http.requestTimeoutMs}ms`, "TimeoutError"));
+    }, this.options.http.requestTimeoutMs);
+    try {
+      while (true) {
+        const response = await fetch(currentUrl, {
+          method,
+          headers,
+          ...(body !== undefined ? { body } : {}),
+          redirect: "manual",
+          signal: combinedSignal
         });
-        throw new RedirectRefusedError(`Refused redirect for '${this.options.serverName}' while Authorization is set; failing closed.`);
+        const location = response.headers.get("location");
+        const isRedirect = response.status >= 300 && response.status < 400 && location;
+        if (!isRedirect) {
+          return { response, timeoutController, signal: combinedSignal };
+        }
+        if (hasAuthorization) {
+          this.securityEvent({
+            kind: "token_never_forwarded",
+            message: `Refused to follow redirect for '${this.options.serverName}': Authorization is never forwarded to a redirect target.`
+          });
+          throw new RedirectRefusedError(`Refused redirect for '${this.options.serverName}' while Authorization is set; failing closed.`);
+        }
+        redirects += 1;
+        if (redirects > this.options.http.maxRedirects) {
+          throw new RedirectRefusedError(`Too many redirects for '${this.options.serverName}'.`);
+        }
+        const next = new URL(location, currentUrl);
+        if (next.origin !== origin) {
+          this.securityEvent({
+            kind: "cross_origin_redirect_refused",
+            message: `Refused cross-origin redirect from '${origin}' to '${next.origin}' for '${this.options.serverName}'.`
+          });
+          throw new RedirectRefusedError(`Cross-origin redirect refused for '${this.options.serverName}'.`);
+        }
+        await discardBody(response);
+        currentUrl = next.toString();
+        if (method === "POST" && (response.status === 303)) {
+          method = "GET";
+          body = undefined;
+        }
       }
-      redirects += 1;
-      if (redirects > this.options.http.maxRedirects) {
-        throw new RedirectRefusedError(`Too many redirects for '${this.options.serverName}'.`);
-      }
-      const next = new URL(location, currentUrl);
-      if (next.origin !== origin) {
-        this.securityEvent({
-          kind: "cross_origin_redirect_refused",
-          message: `Refused cross-origin redirect from '${origin}' to '${next.origin}' for '${this.options.serverName}'.`
-        });
-        throw new RedirectRefusedError(`Cross-origin redirect refused for '${this.options.serverName}'.`);
-      }
-      await discardBody(response);
-      currentUrl = next.toString();
-      if (method === "POST" && (response.status === 303)) {
-        method = "GET";
-        body = undefined;
-      }
+    } finally {
+      clearTimeout(headerTimer);
     }
   }
 
-  private emitInbound(message: JsonRpcMessage, via: "json" | "sse"): void {
-    this.emit("message", message, via);
+  private async emitInbound(message: JsonRpcMessage, via: "json" | "sse", exchange?: HttpMcpExchange): Promise<void> {
+    if (exchange) {
+      await exchange.onMessage(message);
+    } else {
+      this.emit("message", message, via);
+    }
   }
 
-  private emitUpstreamError(sent: JsonRpcMessage, status: number, body: unknown): void {
+  private emitStatus(response: Response, exchange?: HttpMcpExchange): void {
+    if (exchange) {
+      exchange.onStatus(response.status, response.headers);
+    } else {
+      this.emit("upstreamStatus", response.status, Object.fromEntries(response.headers.entries()));
+    }
+  }
+
+  private async emitUpstreamError(sent: JsonRpcMessage, status: number, body: unknown, exchange?: HttpMcpExchange): Promise<void> {
     const id = isRequest(sent) ? sent.id : undefined;
     const detail = body === undefined
       ? undefined
@@ -726,14 +853,14 @@ export class HttpMcpTransport extends EventEmitter {
         ? body.slice(0, 500)
         : JSON.stringify(body).slice(0, 500);
     if (id !== undefined) {
-      this.emitInbound({
+      await this.emitInbound({
         jsonrpc: "2.0",
         id,
         error: {
           code: -32030,
           message: `Upstream MCP endpoint returned HTTP ${status}${detail ? `: ${detail}` : ""}.`
         }
-      }, "json");
+      }, "json", exchange);
     } else {
       this.securityEvent({
         kind: "upstream_http_error",
@@ -745,8 +872,10 @@ export class HttpMcpTransport extends EventEmitter {
 
   private async acquire(): Promise<void> {
     while (this.activeStreams >= this.options.http.maxConcurrentStreams) {
+      this.shutdown.signal.throwIfAborted();
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    this.shutdown.signal.throwIfAborted();
     this.activeStreams += 1;
   }
 
@@ -764,12 +893,76 @@ export class HttpMcpTransport extends EventEmitter {
   }
 }
 
-async function readBodyBounded(response: Response, maxBytes: number): Promise<string | undefined> {
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > maxBytes) {
+async function readChunkWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleMs: number,
+  timeoutController: AbortController,
+  signal: AbortSignal
+): Promise<Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>>> {
+  if (signal.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
+  }
+  return await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      const error = new DOMException(`Upstream response stream stalled for ${idleMs}ms`, "TimeoutError");
+      timeoutController.abort(error);
+      cleanup();
+      reject(error);
+    }, idleMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => {
+        cleanup();
+        resolve(result);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
+async function readBodyBounded(
+  response: Response,
+  maxBytes: number,
+  idleMs?: number,
+  timeoutController?: AbortController,
+  signal?: AbortSignal
+): Promise<string> {
+  if (Number(response.headers.get("Content-Length")) > maxBytes) {
+    await discardBody(response);
     throw new Error(`Upstream response body exceeded ${maxBytes} bytes`);
   }
-  return text;
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = idleMs !== undefined && timeoutController && signal
+        ? await readChunkWithIdleTimeout(reader, idleMs, timeoutController, signal)
+        : await reader.read();
+      if (done) return text + decoder.decode();
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`Upstream response body exceeded ${maxBytes} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function parseJsonBody(text: string | undefined): unknown {
@@ -804,12 +997,12 @@ function makeSyntheticInitializeResponse(id: JsonRpcId, serverName: string): Jso
   };
 }
 
-interface McpHeaderAnnotation {
+export interface McpHeaderAnnotation {
   name: string;
   path: string[];
 }
 
-function collectXMcpHeaderAnnotations(tool: McpTool | undefined): McpHeaderAnnotation[] {
+export function collectXMcpHeaderAnnotations(tool: McpTool | undefined): McpHeaderAnnotation[] {
   if (!tool?.inputSchema) {
     return [];
   }
@@ -845,7 +1038,7 @@ function hasHeader(headers: Record<string, string>, lowerName: string): boolean 
   return Object.keys(headers).some((name) => name.toLowerCase() === lowerName);
 }
 
-function lookupPath(record: Record<string, unknown>, path: string[]): unknown {
+export function lookupPath(record: Record<string, unknown>, path: string[]): unknown {
   let current: unknown = record;
   for (const key of path) {
     if (!current || typeof current !== "object" || !(key in current)) {
@@ -886,7 +1079,7 @@ export class HttpBridgeProxy {
       allowBatches: this.options.config.transport.allowBatches,
       allowContentLength: this.options.config.transport.allowContentLength
     });
-    const pendingMethods = new Map<string, string>();
+    const pendingMethods = new Map<JsonRpcId, string>();
     let queue = Promise.resolve();
 
     client.on("message", (envelope: JsonRpcMessage | JsonRpcMessage[]) => {
@@ -894,14 +1087,14 @@ export class HttpBridgeProxy {
         const messages = Array.isArray(envelope) ? envelope : [envelope];
         const toClient: JsonRpcMessage[] = [];
         for (const message of messages) {
-          if (isRequest(message) && message.id !== undefined) {
-            pendingMethods.set(String(message.id), message.method);
-          }
           const output = await engine.handleClientMessage(message);
           for (const item of output.toClient) {
             toClient.push(item);
           }
           for (const item of output.toServer) {
+            if (isRequest(item) && item.id !== undefined) {
+              pendingMethods.set(item.id, item.method);
+            }
             await this.upstream.send(item);
           }
         }
@@ -917,10 +1110,14 @@ export class HttpBridgeProxy {
       queue = queue.then(async () => {
         const output = await engine.handleServerMessage(message);
         for (const item of output.toClient) {
-          if (isSuccess(item) && pendingMethods.get(String(item.id)) === "tools/list") {
-            const tools = (item.result as { tools?: McpTool[] }).tools;
-            if (Array.isArray(tools)) {
-              this.upstream.updateToolSchemas(tools);
+          if (!isRequest(item)) {
+            const method = pendingMethods.get(item.id);
+            pendingMethods.delete(item.id);
+            if (isSuccess(item) && method === "tools/list") {
+              const tools = (item.result as { tools?: McpTool[] }).tools;
+              if (Array.isArray(tools)) {
+                this.upstream.updateToolSchemas(tools);
+              }
             }
           }
           client.send(item);
@@ -950,7 +1147,21 @@ function formatError(error: unknown): string {
 export function isLocalhostOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
-    return LOCALHOST_HOSTS.has(url.hostname);
+    return (url.protocol === "http:" || url.protocol === "https:") &&
+      LOCALHOST_HOSTS.has(url.hostname.replace(/^\[|\]$/gu, "").toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+export function isLocalhostHostHeader(host: string | undefined): boolean {
+  if (!host || /[\s/@]/u.test(host)) {
+    return false;
+  }
+  try {
+    const url = new URL(`http://${host}`);
+    return !url.username && !url.password && url.pathname === "/" && url.search === "" && url.hash === "" &&
+      LOCALHOST_HOSTS.has(url.hostname.replace(/^\[|\]$/gu, "").toLowerCase());
   } catch {
     return false;
   }
@@ -966,7 +1177,7 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Accept: "application/json",
+        Accept: "application/json, text/event-stream",
         "MCP-Protocol-Version": "2026-07-28",
         "Mcp-Method": "tools/list",
         ...resolveHeaderTemplates(server.headers ?? {})
@@ -977,7 +1188,21 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
     });
     if (!response.ok) return undefined;
     let parsed: JsonRpcMessage | undefined;
-    try { parsed = JSON.parse(await readBodyBounded(response, limits.maxBodyBytes) ?? "null") as JsonRpcMessage; } catch { return undefined; }
+    try {
+      const bodyText = await readBodyBounded(response, limits.maxBodyBytes);
+      if ((response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+        const parser = new SseParser({ maxLineBytes: limits.maxSseLineBytes, maxEventBytes: limits.maxSseEventBytes });
+        parser.feed(bodyText, (event) => {
+          if (!event.data) return;
+          const candidate = JSON.parse(event.data) as JsonRpcMessage;
+          if (!isRequest(candidate) && candidate.id === "palizade-lock-probe") {
+            parsed = candidate;
+          }
+        });
+      } else {
+        parsed = JSON.parse(bodyText ?? "null") as JsonRpcMessage;
+      }
+    } catch { return undefined; }
     // An error body usually means a legacy server that wants initialize first.
     if (!parsed || !("result" in parsed)) return undefined;
     const result = parsed.result as { tools?: unknown; nextCursor?: unknown };
@@ -996,31 +1221,32 @@ export async function collectToolsFromHttpServer(server: ServerConfig, limits: P
     return tools;
   }
   const transport = new HttpMcpTransport({ serverName: "lock-probe", server, http: limits });
-  const responsePromise = transport.waitForResponse("palizade-lock-probe-2", timeoutMs);
-  await transport.send({
-    jsonrpc: "2.0",
-    id: "palizade-lock-probe-2",
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-11-25",
-      capabilities: {},
-      clientInfo: { name: "palizade", version: "lock-probe" }
-    }
-  });
-  const initializeResponse = await responsePromise;
-  if ("error" in initializeResponse) {
-    await transport.close();
-    throw new Error(`tools/list over HTTP failed: ${initializeResponse.error.message}`);
-  }
   try {
+    const [initializeResponse] = await Promise.all([
+      transport.waitForResponse("palizade-lock-probe-2", timeoutMs),
+      transport.send({
+        jsonrpc: "2.0",
+        id: "palizade-lock-probe-2",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "palizade", version: "lock-probe" }
+        }
+      })
+    ]);
+    if ("error" in initializeResponse) {
+      throw new Error(`tools/list over HTTP failed: ${initializeResponse.error.message}`);
+    }
     await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" } as JsonRpcMessage);
     const tools: McpTool[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 100; page += 1) {
       const id = `palizade-lock-probe-${page + 3}`;
-      const toolsPromise = transport.waitForResponse(id, timeoutMs);
-      await transport.send({ jsonrpc: "2.0", id, method: "tools/list", params: cursor ? { cursor } : {} });
-      const toolsResponse = await toolsPromise;
+      const [toolsResponse] = await Promise.all([
+        transport.waitForResponse(id, timeoutMs),
+        transport.send({ jsonrpc: "2.0", id, method: "tools/list", params: cursor ? { cursor } : {} })
+      ]);
       if ("error" in toolsResponse) {
         throw new Error(`tools/list over HTTP failed: ${toolsResponse.error.message}`);
       }

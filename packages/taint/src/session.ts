@@ -1,6 +1,16 @@
+export interface PendingCodeWriteExecution {
+  id?: string;
+  command?: string;
+  tool?: string;
+  generation: number;
+  expiresAt: number;
+}
+
 export interface SessionState {
   seenUntrusted: boolean;
   seenSensitive: boolean;
+  untrustedAgents?: string[];
+  sensitiveAgents?: string[];
   exposureExpiresAt?: number | undefined;
   trustedDestinations: string[];
   quarantine?: { expiresAt: number; remainingTurns: number } | undefined;
@@ -13,6 +23,15 @@ export interface SessionState {
   /** Call signature to the times it was seen, within limits.windowMs. */
   recentRepeats?: Record<string, number[]>;
   trackingOverflow?: boolean;
+  downloadedPaths?: Array<{ key: string; expiresAt: number }>;
+  pendingTaintedNativeWrites?: Array<{ key: string; expiresAt: number }>;
+  taintedCodeWrite?: {
+    files: string[];
+    expiresAt: number;
+    generation?: number;
+    entries?: Array<{ file: string; generation: number; expiresAt: number; writtenAt?: number }>;
+    pendingExecs?: PendingCodeWriteExecution[];
+  };
 }
 
 export function emptySession(): SessionState {

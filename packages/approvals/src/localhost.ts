@@ -1,17 +1,20 @@
 import { spawn } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import type { ApprovalDecision, ApprovalDefault, ApprovalProvider, ApprovalRequest } from "./types.js";
 
 const DEFAULT_APPROVAL_PORT = 32145;
+const loopbackHosts = ["127.0.0.1", "localhost", "[::1]"];
 
 export interface LocalhostApprovalOptions {
   defaultDecision: ApprovalDefault;
   host?: string;
   port?: number;
+  configPath?: string;
   stateDir?: string;
   openBrowser?: boolean;
 }
@@ -19,20 +22,28 @@ export interface LocalhostApprovalOptions {
 interface PendingApproval {
   request: ApprovalRequest;
   token: string;
-  approvalUrl: string;
   timeout: NodeJS.Timeout;
   resolve: (decision: ApprovalDecision) => void;
 }
 
 export class LocalhostApprovalProvider implements ApprovalProvider {
   private readonly pending = new Map<string, PendingApproval>();
+  private readonly listenerId = randomBytes(8).toString("hex");
+  private cookieName = `palizade_inbox_0_${this.listenerId}`;
   private serverPromise: Promise<void> | undefined;
   private server: Server | undefined;
   private inboxUrl: string | undefined;
+  private redeemCode: string | undefined;
+  private sessionSecret: string | undefined;
+  private fileWrite = Promise.resolve();
   private readonly pendingUrlFile: string | undefined;
 
   constructor(private readonly options: LocalhostApprovalOptions = { defaultDecision: "deny", host: "127.0.0.1", port: DEFAULT_APPROVAL_PORT }) {
-    this.pendingUrlFile = options.stateDir ? join(options.stateDir, "pending-approval.url") : undefined;
+    const location = options.configPath ?? options.stateDir;
+    if (location) {
+      const key = createHash("sha256").update(resolve(location)).digest("hex");
+      this.pendingUrlFile = join(homedir(), ".palizade", "run", key, "pending-approval.url");
+    }
   }
 
   async requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
@@ -48,8 +59,8 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
 
     return await new Promise((resolve) => {
       const token = randomBytes(32).toString("base64url");
-      const inboxUrl = this.inboxUrl ?? `http://${this.options.host ?? "127.0.0.1"}:${this.options.port ?? DEFAULT_APPROVAL_PORT}/`;
-      const approvalUrl = `${inboxUrl}approval/${encodeURIComponent(request.id)}?token=${encodeURIComponent(token)}`;
+      const inboxUrl = this.inboxUrl!;
+      const newBatch = this.pending.size === 0;
       const timeout = setTimeout(() => {
         void this.settlePending(request.id, {
           approved: this.options.defaultDecision === "allow",
@@ -64,19 +75,20 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
       this.pending.set(request.id, {
         request,
         token,
-        approvalUrl,
         timeout,
         resolve
       });
 
       void this.writePendingUrlFile();
-      process.stderr.write(`[palizade] Approval required: ${approvalUrl}\n`);
-      process.stderr.write(`[palizade] Approval inbox: ${inboxUrl}\n`);
+      if (newBatch) {
+        this.sessionSecret = undefined;
+        this.redeemCode = randomBytes(32).toString("base64url");
+        const inboxLink = `${inboxUrl}?code=${this.redeemCode}`;
+        process.stderr.write(`[palizade] Approval inbox: ${inboxLink}\n`);
+        if (this.options.openBrowser !== false) openBrowser(inboxLink);
+      }
       if (this.pendingUrlFile) {
         process.stderr.write(`[palizade] Approval URL file: ${this.pendingUrlFile}\n`);
-      }
-      if (this.options.openBrowser !== false) {
-        openBrowser(approvalUrl);
       }
     });
   }
@@ -89,7 +101,9 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
   }
 
   private async startServer(): Promise<void> {
-    const host = this.options.host ?? "127.0.0.1";
+    const requestedHost = (this.options.host ?? "127.0.0.1").toLowerCase();
+    const host = requestedHost === "[::1]" ? "::1" : requestedHost;
+    if (!loopbackHosts.includes(hostForUrl(host))) throw new Error("The approval server must bind to loopback.");
     const preferredPort = this.options.port ?? DEFAULT_APPROVAL_PORT;
     try {
       await this.listen(host, preferredPort);
@@ -100,7 +114,6 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
       process.stderr.write(`[palizade] Approval port ${preferredPort} is in use; falling back to an ephemeral port.\n`);
       await this.listen(host, 0);
     }
-    await this.writePendingUrlFile();
   }
 
   private async listen(host: string, port: number): Promise<void> {
@@ -112,6 +125,7 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
         server.unref();
         const address = server.address() as AddressInfo;
         this.server = server;
+        this.cookieName = `palizade_inbox_${address.port}_${this.listenerId}`;
         this.inboxUrl = `http://${hostForUrl(address.address)}:${address.port}/`;
         process.stderr.write(`[palizade] Approval inbox listening at ${this.inboxUrl}\n`);
         resolve();
@@ -120,26 +134,56 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
     const headers = secureHeaders();
-
-    if (url.pathname === "/") {
-      res.writeHead(200, headers);
-      res.end(renderInboxPage([...this.pending.values()]));
+    const inbox = new URL(this.inboxUrl!);
+    const host = req.headers.host?.toLowerCase();
+    if (!loopbackHosts.some((name) => host === `${name}:${inbox.port || "80"}` || (!inbox.port && host === name))) {
+      res.writeHead(403, headers);
+      res.end("Invalid approval host");
+      return;
+    }
+    const origin = new URL(`http://${host}`).origin;
+    const url = URL.parse(req.url ?? "/", origin);
+    if (!url || url.origin !== origin) {
+      res.writeHead(403, headers);
+      res.end("Invalid approval URL");
       return;
     }
 
-    const approvalMatch = /^\/approval\/([^/]+)$/u.exec(url.pathname);
-    if (approvalMatch) {
-      const id = decodeURIComponent(approvalMatch[1] ?? "");
-      const pending = this.findPending(id, url.searchParams.get("token") ?? "");
-      if (!pending) {
+    if (req.headers.origin !== undefined && origin !== req.headers.origin) {
+      res.writeHead(403, headers);
+      res.end("Invalid approval origin");
+      return;
+    }
+    const code = url.searchParams.get("code");
+    if (url.pathname === "/" && req.method === "GET" && code !== null) {
+      if (!this.redeemCode || !safeEqual(code, this.redeemCode)) {
         res.writeHead(403, headers);
-        res.end("Invalid or expired approval token");
+        res.end("Open the approval inbox link from the Palizade terminal.");
         return;
       }
+      this.redeemCode = undefined;
+      this.sessionSecret = randomBytes(32).toString("base64url");
+      res.writeHead(303, { ...headers, location: "/", "set-cookie": `${this.cookieName}=${this.sessionSecret}; HttpOnly; SameSite=Strict; Path=/` });
+      res.end();
+      return;
+    }
+
+    const cookie = req.headers.cookie
+      ?.split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${this.cookieName}=`))
+      ?.slice(this.cookieName.length + 1);
+    if ((url.pathname === "/" || url.pathname === "/decision") &&
+        (!this.sessionSecret || !safeEqual(cookie ?? "", this.sessionSecret))) {
+      res.writeHead(403, headers);
+      res.end("Open the approval inbox link from the Palizade terminal.");
+      return;
+    }
+
+    if (url.pathname === "/" && req.method === "GET") {
       res.writeHead(200, headers);
-      res.end(renderApprovalPage(pending.request, pending.token));
+      res.end(renderInboxPage([...this.pending.values()]));
       return;
     }
 
@@ -193,58 +237,34 @@ export class LocalhostApprovalProvider implements ApprovalProvider {
     }
     clearTimeout(pending.timeout);
     this.pending.delete(id);
+    if (this.pending.size === 0) this.redeemCode = undefined;
     await this.writePendingUrlFile();
     pending.resolve(decision);
   }
 
-  private async writePendingUrlFile(): Promise<void> {
-    if (!this.pendingUrlFile || !this.inboxUrl) {
-      return;
-    }
-    try {
-      await mkdir(dirname(this.pendingUrlFile), { recursive: true });
+  private writePendingUrlFile(): Promise<void> {
+    const file = this.pendingUrlFile;
+    if (!file || !this.inboxUrl) return Promise.resolve();
+    this.fileWrite = this.fileWrite.then(async () => {
+      await mkdir(dirname(file), { recursive: true, mode: 0o700 });
       const lines = [
         "Palizade approval inbox",
         `Inbox: ${this.inboxUrl}`,
         `Pending approvals: ${this.pending.size}`,
         "",
         ...[...this.pending.values()].flatMap((pending) => [
-          `Request: ${pending.approvalUrl}`,
           `Server: ${pending.request.server ?? "-"}`,
           `Tool: ${pending.request.tool ?? "-"}`,
           `Reason: ${pending.request.reason}`,
-          `Approve with browser: ${pending.approvalUrl}`,
           ""
         ])
       ];
-      await writeFile(this.pendingUrlFile, `${lines.join("\n")}\n`, "utf8");
-    } catch (error) {
+      await writeFile(file, `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+    }).catch((error) => {
       process.stderr.write(`[palizade] Failed to write approval URL file: ${error instanceof Error ? error.message : String(error)}\n`);
-    }
+    });
+    return this.fileWrite;
   }
-}
-
-function renderApprovalPage(request: ApprovalRequest, token: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Palizade Approval</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.45; }
-    table { border-collapse: collapse; width: 100%; margin: 24px 0; }
-    td { border-top: 1px solid #ddd; padding: 10px; vertical-align: top; }
-    td:first-child { font-weight: 700; width: 140px; }
-    button { display: inline-block; margin-right: 12px; padding: 10px 16px; border: 0; border-radius: 6px; color: white; cursor: pointer; }
-    .approve { background: #176f3d; }
-    .deny { background: #8a1f1f; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-  </style>
-</head>
-<body>
-  ${renderApprovalPanel(request, token)}
-</body>
-</html>`;
 }
 
 function renderApprovalPanel(request: ApprovalRequest, token: string): string {
@@ -323,9 +343,11 @@ function renderInboxPage(pending: PendingApproval[]): string {
 function secureHeaders(): Record<string, string> {
   return {
     "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
     "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     "x-content-type-options": "nosniff",
-    "referrer-policy": "no-referrer"
+    // Keep the form POST's Origin while omitting the redemption code from its referrer.
+    "referrer-policy": "origin"
   };
 }
 
@@ -336,9 +358,6 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 function hostForUrl(address: string): string {
-  if (address === "::" || address === "0.0.0.0") {
-    return "127.0.0.1";
-  }
   return address.includes(":") ? `[${address}]` : address;
 }
 
@@ -346,15 +365,19 @@ function openBrowser(url: string): void {
   const platform = process.platform;
   const command = platform === "win32" ? "cmd" : platform === "darwin" ? "open" : "xdg-open";
   const args = platform === "win32" ? ["/c", "start", "", url] : [url];
+  const reportError = () => {
+    process.stderr.write("[palizade] Failed to open the browser. Open the approval inbox link printed above.\n");
+  };
   try {
     const child = spawn(command, args, {
       detached: true,
       stdio: "ignore",
       windowsHide: true
     });
+    child.once("error", reportError);
     child.unref();
-  } catch (error) {
-    process.stderr.write(`[palizade] Failed to open approval URL: ${error instanceof Error ? error.message : String(error)}\n`);
+  } catch {
+    reportError();
   }
 }
 

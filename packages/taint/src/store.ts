@@ -1,4 +1,4 @@
-import { makeFingerprint, hammingDistanceHex, normalizeText } from "./fingerprint.js";
+import { canonicalDestinationUrl, canonicalFieldDestinations, extractDestinationObservables, makeFingerprint, hammingDistanceHex, normalizeText } from "./fingerprint.js";
 import { newTaintId, sha256 } from "./hash.js";
 import { emptySession, type SessionState } from "./session.js";
 import type { AddTaintInput, TaintClass, TaintMatch, TaintMatchOptions, TaintRecord, TaintStore, TemporalTaintConfig, TemporalTaintState } from "./types.js";
@@ -16,10 +16,12 @@ export class InMemoryTaintStore implements TaintStore {
 
   verbatimToken(sessionId: string, value: string): TaintMatch | undefined {
     const wanted = new Set(["", ".", ",", ";", ":", "!", "?"].map((suffix) => normalizeText(value + suffix)));
+    const destination = canonicalDestinationUrl(value)?.toString() ?? normalizeText(value);
     for (const record of this.records.values()) {
       if (record.sessionId !== sessionId && !record.persistent) continue;
       if (!record.classes.includes("untrusted")) continue;
-      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate));
+      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate)) ??
+        record.fingerprint.destinationTokens?.find((candidate) => destination === candidate);
       if (token) return { taintId: record.id, reason: "token", token, classes: record.classes };
     }
     return undefined;
@@ -55,6 +57,8 @@ export class InMemoryTaintStore implements TaintStore {
   }
 
   add(input: AddTaintInput): TaintRecord {
+    const fingerprint = makeFingerprint(input.text, input.classes?.includes("sensitive"), input.destinationOnly);
+    fingerprint.destinationTokens = input.destinations ? [...input.destinations] : fingerprint.destinationTokens ?? extractDestinationObservables(input.text);
     const record: TaintRecord = {
       id: newTaintId(),
       sessionId: input.sessionId,
@@ -68,7 +72,7 @@ export class InMemoryTaintStore implements TaintStore {
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
-      fingerprint: makeFingerprint(input.text, input.classes?.includes("sensitive"))
+      fingerprint
     };
     this.records.set(record.id, record);
     return record;
@@ -85,6 +89,7 @@ export class InMemoryTaintStore implements TaintStore {
   match(sessionId: string, text: string, options: TaintMatchOptions = {}): TaintMatch[] {
     const normalized = normalizeText(text);
     const incoming = makeFingerprint(text);
+    const destinationTokens = options.destinationRole ? new Set(canonicalFieldDestinations(text)) : undefined;
     const minNormalizedLength = options.minNormalizedLength ?? 16;
     const fuzzyHammingMax = options.fuzzyHammingMax ?? 7;
     const matches: TaintMatch[] = [];
@@ -103,12 +108,14 @@ export class InMemoryTaintStore implements TaintStore {
       }
 
       const substring = record.fingerprint.substrings.find((candidate) => candidate.length >= minNormalizedLength && normalized.includes(candidate));
-      if (substring) {
-        matches.push({ taintId: record.id, reason: "substring", token: substring, classes: record.classes });
+      const exactShort = normalized.length >= minNormalizedLength && normalized.length < 16 && normalized === record.fingerprint.normalized;
+      if (substring || exactShort) {
+        matches.push({ taintId: record.id, reason: "substring", ...(substring ? { token: substring } : {}), classes: record.classes });
         continue;
       }
 
-      const token = record.fingerprint.tokens.find((candidate) => candidate.length >= 8 && incoming.tokens.includes(candidate));
+      const token = record.fingerprint.tokens.find((candidate) => incoming.tokens.includes(candidate)) ??
+        (destinationTokens && record.fingerprint.destinationTokens?.find((candidate) => destinationTokens.has(candidate)));
       if (token) {
         matches.push({ taintId: record.id, reason: "token", token, classes: record.classes });
         continue;

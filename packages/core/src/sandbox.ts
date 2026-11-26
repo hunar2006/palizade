@@ -48,11 +48,24 @@ export type SandboxConfigInput = z.input<typeof sandboxConfigSchema>;
 export const DEFAULT_DOCKER_IMAGE = "node:22-slim";
 export const DOCKER_WORKDIR = "/workspace";
 
+const TLS_ENV = ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NO_PROXY", "no_proxy"];
+const WINDOWS_ENV = [
+  "SystemRoot", "WINDIR", "ComSpec", "PATH", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "SystemDrive",
+  "OS", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", ...TLS_ENV
+];
+const POSIX_ENV = [
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ",
+  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", ...TLS_ENV
+];
+
 export interface LaunchServerConfig {
   command?: string | undefined;
   args: string[];
   cwd?: string | undefined;
   env: Record<string, string>;
+  inheritEnv?: "minimal" | "full" | undefined;
+  passEnv?: string[] | undefined;
   sandbox?: z.output<typeof sandboxConfigSchema> | undefined;
 }
 
@@ -62,6 +75,7 @@ export interface LaunchPlan {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
   sandbox: SandboxType;
+  envMode?: LaunchServerConfig["inheritEnv"];
   /** Proxy URL the sandboxed server must use when network is allowlist. */
   proxyUrl?: string | undefined;
   /** `${NAME}` placeholders in command, args or env that had no value and no default. */
@@ -105,9 +119,35 @@ export function assertSandboxSupported(serverName: string, server: LaunchServerC
 
 export function buildLaunchPlan(serverName: string, server: LaunchServerConfig, options: LaunchOptions = {}): LaunchPlan {
   const hostEnv = options.hostEnv ?? process.env;
-  const expanded = expandServerTemplates(server, hostEnv);
+  const platform = options.platform ?? process.platform;
+  const expanded = expandServerTemplates(server, platform === "win32" ? windowsEnvLookup(hostEnv) : hostEnv);
   const plan = buildExpandedLaunchPlan(serverName, expanded.server, hostEnv, options);
   return expanded.missing.length > 0 ? { ...plan, missingEnv: expanded.missing } : plan;
+}
+
+function windowsEnvLookup(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const values = new Map(Object.entries(env).map(([key, value]) => [key.toUpperCase(), value]));
+  return new Proxy({}, { get: (_target, key) => typeof key === "string" ? values.get(key.toUpperCase()) : undefined });
+}
+
+function unsandboxedEnv(server: LaunchServerConfig, hostEnv: NodeJS.ProcessEnv, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+  const win = platform === "win32";
+  const normalize = (key: string) => win ? key.toUpperCase() : key;
+  const allow = new Set((win ? WINDOWS_ENV : POSIX_ENV).map(normalize));
+  const env = new Map<string, [string, string]>();
+  const add = (key: string, value: string | undefined) => {
+    if (value !== undefined && !key.toUpperCase().startsWith("PALIZADE_")) env.set(normalize(key), [key, value]);
+  };
+  for (const [key, value] of Object.entries(hostEnv)) {
+    if (server.inheritEnv === "full" || allow.has(normalize(key))) add(key, value);
+  }
+  const lookup = win ? windowsEnvLookup(hostEnv) : hostEnv;
+  for (const key of server.passEnv ?? []) {
+    const value = win || Object.hasOwn(hostEnv, key) ? lookup[key] : undefined;
+    add(key, value);
+  }
+  for (const [key, value] of Object.entries(server.env)) add(key, value);
+  return Object.fromEntries(env.values());
 }
 
 function buildExpandedLaunchPlan(serverName: string, server: LaunchServerConfig, hostEnv: NodeJS.ProcessEnv, options: LaunchOptions): LaunchPlan {
@@ -123,7 +163,7 @@ function buildExpandedLaunchPlan(serverName: string, server: LaunchServerConfig,
 
   if (sandbox.type === "none") {
     const resolveCommand = options.resolveCommand ?? ((command: string) => command);
-    return { command: resolveCommand(server.command), args: server.args, cwd: server.cwd, env: { ...hostEnv, ...server.env }, sandbox: "none" };
+    return { command: resolveCommand(server.command), args: server.args, cwd: server.cwd, env: unsandboxedEnv(server, hostEnv, platform), sandbox: "none", envMode: server.inheritEnv ?? "minimal" };
   }
 
   const envKeys = [...new Set([...Object.keys(server.env), ...sandbox.passEnv])].sort();
@@ -237,7 +277,7 @@ export interface SandboxStatusRow {
   detail: string;
 }
 
-export function sandboxStatus(servers: Record<string, LaunchServerConfig & { url?: string | undefined }>, platform: NodeJS.Platform = process.platform): SandboxStatusRow[] {
+export function sandboxStatus(servers: Record<string, LaunchServerConfig & { url?: string | undefined }>, platform: NodeJS.Platform = process.platform, hostEnv = process.env): SandboxStatusRow[] {
   return Object.entries(servers).map(([server, config]) => {
     if (config.url) {
       return { server, sandbox: "none", status: "remote", detail: "remote url server; nothing is spawned locally" };
@@ -248,7 +288,9 @@ export function sandboxStatus(servers: Record<string, LaunchServerConfig & { url
       return { server, sandbox: sandbox.type, status: "unsupported", detail: error };
     }
     if (sandbox.type === "none") {
-      return { server, sandbox: "none", status: "unsandboxed", detail: "runs with your user's full file, network and environment access; consider sandbox: docker" };
+      const env = config.inheritEnv === "full" ? "WARNING: env=full" : "env=minimal";
+      const names = Object.keys(unsandboxedEnv(config, hostEnv, platform)).sort().join(", ") || "none";
+      return { server, sandbox: "none", status: "unsandboxed", detail: `${env}; environment names: ${names}; runs with your user's file and network access` };
     }
     const network = sandbox.network === "none" ? "no network" : `network allowlist: ${sandbox.allowHosts.join(", ")}${isAdvisoryNetwork(sandbox) ? " (ADVISORY: not enforced, the server can bypass the proxy)" : ""}`;
     return { server, sandbox: sandbox.type, status: "sandboxed", detail: `${network}; writable: ${sandbox.writable.length > 0 ? sandbox.writable.join(", ") : "none"}` };
@@ -260,6 +302,7 @@ export interface SpawnAuditRecord {
   args: string[];
   cwd?: string | undefined;
   sandbox: SandboxType;
+  envMode?: LaunchPlan["envMode"];
   envKeys: string[];
   proxy?: string | undefined;
 }
@@ -280,13 +323,19 @@ export function describeLaunchForAudit(plan: LaunchPlan, server: LaunchServerCon
     return plan.sandbox === "seatbelt" && arg.startsWith("(version 1)") ? "[seatbelt profile]" : masked;
   };
   const envKeys = plan.sandbox === "none"
-    ? Object.keys(server.env).sort()
+    ? Object.keys(plan.env).sort()
     : [...new Set([...Object.keys(server.env), ...normalizeSandbox(server.sandbox).passEnv])].sort();
+  const serverArgsStart = plan.args.length - server.args.length;
+  const redacted = "[REDACTED:env]";
   return {
-    command: maskArg(plan.command),
-    args: plan.args.map(maskArg),
+    command: plan.sandbox === "none" && server.command?.includes("${") ? redacted : maskArg(plan.command),
+    args: plan.args.map((arg, index) => (
+      server.args[index - serverArgsStart]?.includes("${") ||
+      (plan.sandbox !== "none" && index === serverArgsStart - 1 && server.command?.includes("${"))
+    ) ? redacted : maskArg(arg)),
     cwd: plan.cwd,
     sandbox: plan.sandbox,
+    ...(plan.envMode ? { envMode: plan.envMode } : {}),
     envKeys,
     proxy: plan.proxyUrl ? maskArg(plan.proxyUrl) : undefined
   };

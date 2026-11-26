@@ -3,7 +3,7 @@ import { homedir, platform as osPlatform } from "node:os";
 import { basename, dirname, posix, resolve, win32 } from "node:path";
 import YAML from "yaml";
 import { parseCodexConfig, renderCodexConfig, type CodexState } from "./codex-config.js";
-import { normalizeEnvPlaceholders } from "@palizade/core";
+import { isRegisteredPalizadeWrapper, normalizeEnvPlaceholders, type ClientServerEntry, type PalizadeConfig } from "@palizade/core";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -60,6 +60,7 @@ export interface ClientMcpServerEntry {
   headers?: Record<string, string>;
   cwd?: string;
   env?: Record<string, string>;
+  passEnv?: string[];
 }
 
 export interface WrappedServerResult {
@@ -212,7 +213,7 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
       skipped.push({ name, reason: `uses the '${unsupported}' transport, which Palizade cannot proxy; only stdio and Streamable HTTP servers are wrapped` });
       continue;
     }
-    const original = normalizeClientEntry(name, rawEntry, clientConfigPath);
+    const original = normalizeClientEntry(name, rawEntry, clientConfigPath, client === "codex");
     // The stdio wrapper sends only static headers, so an OAuth sign in would stop working.
     if (original.url && Object.keys(original.headers ?? {}).length === 0 && !options.includeRemote) {
       skipped.push({ name, reason: "remote server with no static credentials; it probably signs in with OAuth, which the wrapper cannot do. The Claude Code and Codex hooks (palizade install-hooks) check its tool calls instead; add --include-remote if it needs no sign in" });
@@ -270,13 +271,12 @@ export async function installAllClientConfigs(options: InstallAllConfigOptions):
     backupPath = `${clientConfigPath}.bak`;
     await copyFile(clientConfigPath, backupPath);
   }
-  await writeFile(clientConfigPath, configJson, "utf8");
-
   const palizadeConfigWritten = wrapped.some((server) => server.addedToPalizadeConfig);
   if (palizadeConfigWritten) {
     await mkdir(dirname(palizadeConfigPath), { recursive: true });
     await writeFile(palizadeConfigPath, palizadeConfigJson, "utf8");
   }
+  await writeFile(clientConfigPath, configJson, "utf8");
 
   return {
     client,
@@ -302,6 +302,7 @@ export async function inspectClientCoverage(options: {
   project?: boolean | undefined;
   local?: boolean | undefined;
   cwd?: string | undefined;
+  expectedWrapper?: { config: PalizadeConfig; configPath: string; cliPath: string };
 }): Promise<ClientCoverageResult> {
   const client = options.client ?? "claude-desktop";
   const cwd = options.cwd ?? process.cwd();
@@ -324,7 +325,10 @@ export async function inspectClientCoverage(options: {
   const config = await readClientConfig(clientConfigPath);
   const mcpServers = ensureMcpServers(config, clientConfigPath, localKey);
   const rows = Object.entries(mcpServers).map(([name, rawEntry]): ClientCoverageRow => {
-    const wrapped = isPalizadeWrapper(rawEntry);
+    const looksWrapped = isPalizadeWrapper(rawEntry);
+    const expected = options.expectedWrapper;
+    const wrapped = looksWrapped && (!expected ||
+      isRegisteredPalizadeWrapper(rawEntry as ClientServerEntry, expected.config, expected.configPath, expected.cliPath));
     const command = isRecord(rawEntry) && typeof rawEntry.command === "string"
       ? rawEntry.command
       : isRecord(rawEntry) && typeof rawEntry.url === "string"
@@ -335,7 +339,9 @@ export async function inspectClientCoverage(options: {
       wrapped,
       command,
       ...(wrapped ? {} : {
-        advice: unsupportedTransport(rawEntry)
+        advice: looksWrapped
+          ? "Wrapper found, but its launch does not match this Palizade config and CLI."
+          : unsupportedTransport(rawEntry)
           ? `WARNING: ${name} uses the '${unsupportedTransport(rawEntry)}' transport, which Palizade cannot proxy; it is NOT protected`
           : `WARNING: ${name} is configured but NOT protected by Palizade - run palizade install-config --all`
       })
@@ -462,8 +468,8 @@ function localScopeKey(client: string, local: boolean | undefined, cwd: string):
 }
 
 function findProjectKey(projects: JsonRecord, dir: string): string | undefined {
-  // Keys may use either slash style on Windows, and drive letter case can differ.
-  const normalize = (value: string) => value.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+  // Claude Code may store Windows keys with either slash style and different casing.
+  const normalize = (value: string) => (process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value).replace(/\/+$/u, "");
   return Object.keys(projects).find((key) => normalize(key) === normalize(dir));
 }
 
@@ -529,7 +535,7 @@ function ensurePalizadeServers(config: JsonRecord, path: string): JsonRecord {
   return existing;
 }
 
-function normalizeClientEntry(name: string, value: unknown, path: string): ClientMcpServerEntry {
+function normalizeClientEntry(name: string, value: unknown, path: string, fromCodex: boolean): ClientMcpServerEntry {
   if (!isRecord(value)) {
     throw new Error(`Expected mcpServers.${name} in ${path} to be an object.`);
   }
@@ -555,6 +561,9 @@ function normalizeClientEntry(name: string, value: unknown, path: string): Clien
   }
   if (value.env !== undefined) {
     entry.env = stringRecord(value.env, `mcpServers.${name}.env`, path);
+  }
+  if (fromCodex && Array.isArray(value.passEnv) && value.passEnv.every((name): name is string => typeof name === "string")) {
+    entry.passEnv = value.passEnv;
   }
   return entry;
 }
@@ -586,6 +595,7 @@ function makeAutoServerConfig(entry: ClientMcpServerEntry): JsonRecord {
     args: entry.args ?? [],
     ...(entry.cwd ? { cwd: entry.cwd } : {}),
     ...(entry.env ? { env: entry.env } : {}),
+    ...(entry.passEnv ? { passEnv: entry.passEnv } : {}),
     trust: "untrusted",
     toolClasses: {}
   };

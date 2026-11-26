@@ -1,5 +1,7 @@
 # Evaluation after v0.4
 
+The [release verification](release-verification.md) procedure covers real-client smoke tests and the first clean-task counts to collect before publication.
+
 This is a plan, not a new benchmark result. The published 0% ASR is in-sample: the current replay harness uses inferred sink arguments, and a matcher fix was informed by that corpus. Keep existing fixtures, results and ASR figures unchanged until a separately reviewed evaluation task creates versioned held-out data.
 
 ## Real agents through MCP

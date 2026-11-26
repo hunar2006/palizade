@@ -8,6 +8,7 @@ import type { ArgumentField } from "./arguments.js";
 import type { PalizadeConfig } from "./config.js";
 
 const learnedSchema = z.object({ hosts: z.array(z.string()).default([]), emails: z.array(z.string()).default([]), destinations: z.array(z.string()).default([]) }).strict();
+const maxLearnedBytes = 1024 * 1024;
 
 export function destinationEntries(fields: ArgumentField[]): string[] {
   return [...new Set(fields.flatMap((field) => {
@@ -24,9 +25,13 @@ export function destinationEntries(fields: ArgumentField[]): string[] {
 
 export class LearnedEgress {
   private lastGood: z.infer<typeof learnedSchema>;
+  private readonly sealed: boolean;
 
   /** With `onInvalid`, a file that stops validating keeps the last valid version and reports the error; without it, an invalid file throws (fail closed). */
-  constructor(readonly path: string, private readonly onInvalid?: (error: unknown) => void) { this.lastGood = this.read(); }
+  constructor(readonly path: string, private readonly onInvalid?: (error: unknown) => void, sealedBytes?: Buffer | null) {
+    this.sealed = sealedBytes !== undefined;
+    this.lastGood = sealedBytes === undefined ? this.read() : this.parse(sealedBytes);
+  }
 
   allowlist(configured: PalizadeConfig["egress"]["allowlist"]): PalizadeConfig["egress"]["allowlist"] {
     const learned = this.current();
@@ -39,6 +44,7 @@ export class LearnedEgress {
   }
 
   private current(): z.infer<typeof learnedSchema> {
+    if (this.sealed) return this.lastGood;
     try {
       this.lastGood = this.read();
     } catch (error) {
@@ -50,7 +56,7 @@ export class LearnedEgress {
 
   /** The learned file's own entries, without the configured allowlist. */
   entries(): z.infer<typeof learnedSchema> {
-    return this.current();
+    return this.sealed ? structuredClone(this.lastGood) : this.current();
   }
 
   remember(destinations: string[]): void {
@@ -78,6 +84,7 @@ export class LearnedEgress {
   }
 
   private update(change: (learned: z.infer<typeof learnedSchema>) => void): void {
+    if (this.sealed) throw new Error("The sealed learned allowlist is read only.");
     const lock = `${this.path}.lock`;
     const fd = openSync(lock, "wx", 0o600);
     const temporary = `${this.path}.${randomUUID()}.tmp`;
@@ -94,9 +101,15 @@ export class LearnedEgress {
   }
 
   private read(): z.infer<typeof learnedSchema> {
-    if (!existsSync(this.path)) return learnedSchema.parse({});
-    if (statSync(this.path).size > 1024 * 1024) throw new Error("Learned allowlist exceeds size limit");
-    return parseYamlWithSchema(learnedSchema, readFileSync(this.path, "utf8"), this.path);
+    if (!existsSync(this.path)) return this.parse(null);
+    if (statSync(this.path).size > maxLearnedBytes) throw new Error("Learned allowlist exceeds size limit");
+    return this.parse(readFileSync(this.path));
+  }
+
+  private parse(bytes: Buffer | null): z.infer<typeof learnedSchema> {
+    if (bytes === null) return learnedSchema.parse({});
+    if (bytes.length > maxLearnedBytes) throw new Error("Learned allowlist exceeds size limit");
+    return parseYamlWithSchema(learnedSchema, bytes.toString("utf8"), this.path);
   }
 }
 

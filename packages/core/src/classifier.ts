@@ -63,6 +63,9 @@ export function classifyToolDetailed(toolName: string, server: ServerConfig, too
   const capabilities = new Set<ToolCapability>(server.toolCapabilities[toolName] ?? []);
   const reasons: string[] = configured ? [`config:${configured}`] : [];
   const trusted = server.trust === "trusted";
+  if (!tool && server.command === "native-tools" && configured !== undefined && Object.hasOwn(server.toolCapabilities, toolName)) {
+    return { toolClass: configured, capabilities: [...capabilities], reasons };
+  }
   const annotationCaps = capabilitiesFromAnnotations(tool?.annotations);
   const raisingAnnotation = tool?.annotations?.destructiveHint === true || tool?.annotations?.openWorldHint === true;
   for (const capability of annotationCaps) {

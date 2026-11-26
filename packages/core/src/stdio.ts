@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AuditLogger } from "@palizade/audit";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { delimiter, extname, isAbsolute, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { InterceptionEngine } from "./interceptor.js";
 import { launchUpstream } from "./launch.js";
@@ -64,7 +64,7 @@ export class LineJsonRpcPeer extends EventEmitter {
       if (framed === "need-more") {
         return;
       }
-      if (framed) {
+      if (framed !== undefined) {
         this.emitEnvelope(framed);
         continue;
       }
@@ -115,9 +115,13 @@ export class LineJsonRpcPeer extends EventEmitter {
     }
     this.neededBytes = 0;
 
-    const body = this.buffer.toString("utf8", bodyStart, bodyEnd);
-    this.buffer = this.buffer.subarray(bodyEnd);
-    return body;
+    const frame = this.buffer;
+    this.buffer = frame.subarray(bodyEnd);
+    if (length > this.maxMessageBytes) {
+      this.emit("error", new Error(`JSON-RPC message exceeded ${this.maxMessageBytes} bytes`));
+      return "";
+    }
+    return frame.toString("utf8", bodyStart, bodyEnd);
   }
 
   private emitEnvelope(raw: string): void {
@@ -311,11 +315,11 @@ function requireCommand(server: ServerConfig): string {
 }
 
 export function resolveCommandForPlatform(command: string): string {
-  if (process.platform !== "win32" || isAbsolute(command) || /\.[a-z0-9]+$/iu.test(command)) {
+  if (process.platform !== "win32" || isAbsolute(command) || /[\\/]/u.test(command)) {
     return command;
   }
   const pathEntries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-  const extensions = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const extensions = extname(command) ? [""] : (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   for (const entry of pathEntries) {
     for (const ext of extensions) {
       const candidate = join(entry, `${command}${ext.toLowerCase()}`);

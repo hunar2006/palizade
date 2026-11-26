@@ -3,7 +3,6 @@
 // one decision per tool call: allow, approval (Palizade asked the user), or block.
 import { createReadStream } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -12,6 +11,7 @@ import { AuditLogger } from "../../packages/audit/dist/index.js";
 import { HeuristicDetector } from "../../packages/detectors/dist/index.js";
 import { parsePolicy } from "../../packages/policy/dist/index.js";
 import { InMemoryTaintStore, extractStatedObservables } from "../../packages/taint/dist/index.js";
+import { benchmarkTempBase } from "./live/temp-base.mjs";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const { values } = parseArgs({
@@ -29,6 +29,7 @@ if (!values.traces || !values.out) {
   process.exit(2);
 }
 
+const tempBase = await benchmarkTempBase();
 const policy = parsePolicy(await readFile(join(ROOT, "policies", `${values.policy}.yaml`), "utf8"));
 const tools = new Map();
 const results = [];
@@ -46,7 +47,7 @@ await writeFile(values.out, results.map((result) => JSON.stringify(result)).join
 console.error(`replayed ${results.length} traces with policy=${values.policy} trust=${values.trust} user-intent=${values["user-intent"]}`);
 
 async function replayTrace(trace, suiteTools) {
-  const dir = await mkdtemp(join(tmpdir(), "palizade-agentdojo-"));
+  const dir = await mkdtemp(join(tempBase, "palizade-agentdojo-"));
   try {
     const serverName = trace.suite;
     const config = parseConfig(JSON.stringify({

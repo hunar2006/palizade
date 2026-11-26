@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { extractAtomicTokens, hammingDistanceHex, makeSensitiveFragments, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
+import { canonicalDestinationUrl, canonicalFieldDestinations, extractAtomicTokens, extractDestinationObservables, hammingDistanceHex, isMatchableToken, isSubstringsTruncated, makeSensitiveFragments, makeSubstrings, normalizeText, simhash } from "./fingerprint.js";
+import { canonicalHost } from "./unicode.js";
 import { hmacSha256Hex, newTaintId, sha256 } from "./hash.js";
 import { emptySession, type SessionState } from "./session.js";
 import type { AddTaintInput, TaintClass, TaintFingerprint, TaintMatch, TaintMatchOptions, TaintRecord, TaintScope, TaintStore, TemporalTaintConfig } from "./types.js";
@@ -50,7 +51,7 @@ export interface SqliteTaintStoreOptions {
   runId?: string;
   keyPath?: string;
   ttlMs?: number;
-  sessionScope?: "client";
+  sessionScope?: "client" | "listener";
 }
 
 export class SqliteTaintStore implements TaintStore {
@@ -59,7 +60,7 @@ export class SqliteTaintStore implements TaintStore {
   private readonly profileId: string;
   private readonly runId: string | undefined;
   private readonly ttlMs: number;
-  private readonly sessionScope: "client" | undefined;
+  private readonly sessionScope: SqliteTaintStoreOptions["sessionScope"];
   private readonly hmacKey: Buffer;
 
   constructor(private readonly path: string, options: SqliteTaintStoreOptions = {}) {
@@ -73,6 +74,7 @@ export class SqliteTaintStore implements TaintStore {
     const sqlite = requireNodeSqlite();
     this.db = new sqlite.DatabaseSync(path);
     this.db.exec(`
+      pragma busy_timeout = 5000;
       create table if not exists taint_records (
         id text primary key,
         profile_id text,
@@ -88,7 +90,9 @@ export class SqliteTaintStore implements TaintStore {
         detector_score real not null,
         labels_json text not null,
         classes_json text,
-        fingerprint_json text not null
+        fingerprint_json text not null,
+        persistent integer not null default 0,
+        provenance_json text
       );
       create index if not exists idx_taint_session on taint_records(session_id);
       create table if not exists temporal_taint (
@@ -136,7 +140,11 @@ export class SqliteTaintStore implements TaintStore {
       detectorScore: input.detectorScore,
       labels: [...input.labels],
       classes: normalizeClasses(input.classes),
-      fingerprint: makeProtectedFingerprint(input.text, this.hmacKey, input.classes?.includes("sensitive"))
+      fingerprint: {
+        ...(input.destinationOnly ? { normalized: "", fragmentLength: 0, substrings: [], tokens: [], simhash: "" } :
+          makeProtectedFingerprint(input.text, this.hmacKey, input.classes?.includes("sensitive"))),
+        destinationTokens: (input.destinations ?? extractDestinationObservables(input.text, input.destinationOnly)).map((token) => this.destinationKey(token))
+      }
     };
     this.db.prepare(
       `insert into taint_records
@@ -169,7 +177,7 @@ export class SqliteTaintStore implements TaintStore {
   // Stored as keyed hashes, like fingerprints, so the database never holds the typed values.
   addUserStatements(sessionId: string, canonicals: string[], ttlMs: number): void {
     if (canonicals.length === 0) return;
-    const scopeId = this.scopeId(sessionId);
+    const scopeId = this.statementKey(sessionId);
     const now = Date.now();
     const insert = this.db.prepare("insert into user_statements (scope_id, key, expires_at) values (?, ?, ?) on conflict(scope_id, key) do update set expires_at = excluded.expires_at");
     this.db.exec("begin immediate");
@@ -183,20 +191,22 @@ export class SqliteTaintStore implements TaintStore {
   verbatimToken(sessionId: string, value: string): TaintMatch | undefined {
     this.pruneExpired();
     const wanted = new Set(["", ".", ",", ";", ":", "!", "?"].map((suffix) => hmacSha256Hex(this.hmacKey, canonicalizeToken(value + suffix))));
+    const destination = this.destinationKey(canonicalDestinationUrl(value)?.toString() ?? normalizeText(value));
     for (const record of this.recordsForScope(sessionId)) {
       if (!record.classes.includes("untrusted")) continue;
-      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate));
+      const token = record.fingerprint.tokens.find((candidate) => wanted.has(candidate)) ??
+        record.fingerprint.destinationTokens?.find((candidate) => destination === candidate);
       if (token) return { taintId: record.id, reason: "token", token, classes: record.classes };
     }
     return undefined;
   }
 
   hasUserStatements(sessionId: string): boolean {
-    return this.db.prepare("select 1 from user_statements where scope_id = ? and expires_at > ? limit 1").get(this.scopeId(sessionId), Date.now()) !== undefined;
+    return this.db.prepare("select 1 from user_statements where scope_id = ? and expires_at > ? limit 1").get(this.statementKey(sessionId), Date.now()) !== undefined;
   }
 
   isUserStated(sessionId: string, canonical: string): boolean {
-    const row = this.db.prepare("select expires_at from user_statements where scope_id = ? and key = ?").get(this.scopeId(sessionId), this.destinationKey(`user:${canonical}`)) as { expires_at: number } | undefined;
+    const row = this.db.prepare("select expires_at from user_statements where scope_id = ? and key = ?").get(this.statementKey(sessionId), this.destinationKey(`user:${canonical}`)) as { expires_at: number } | undefined;
     return row !== undefined && row.expires_at > Date.now();
   }
 
@@ -222,7 +232,7 @@ export class SqliteTaintStore implements TaintStore {
   }
 
   private sessionKey(sessionId: string): string {
-    if (this.sessionScope === "client") return `client:${JSON.stringify([this.profileId, sessionId])}`;
+    if (this.sessionScope) return `client:${JSON.stringify([this.profileId, sessionId])}`;
     if (this.runId) return `session:profile:${this.profileId}:run:${this.runId}`;
     return `session:${this.scopeId(sessionId)}`;
   }
@@ -240,8 +250,10 @@ export class SqliteTaintStore implements TaintStore {
     this.pruneExpired();
     const incoming = makeProtectedFingerprint(text, this.hmacKey, options.sensitiveFragments);
     const sensitiveFragments = new Set(incoming.sensitiveFragments);
-    const incomingFragments = new Set(incoming.substrings);
     const minNormalizedLength = options.minNormalizedLength ?? 16;
+    const incomingFragments = new Set(incoming.fragmentLength >= minNormalizedLength ? incoming.substrings : []);
+    const incomingTokens = new Set(incoming.tokens);
+    const destinationTokens = options.destinationRole ? new Set(canonicalFieldDestinations(text).map((token) => this.destinationKey(token))) : undefined;
     const fuzzyHammingMax = options.fuzzyHammingMax ?? 7;
     const records = this.recordsForScope(sessionId, options.persistentOnly);
     const matches: TaintMatch[] = [];
@@ -254,19 +266,23 @@ export class SqliteTaintStore implements TaintStore {
         matches.push({ taintId: record.id, reason: "substring", classes: record.classes });
         continue;
       }
-      const substring = record.fingerprint.substrings.find((candidate) => candidate.length >= minNormalizedLength && incomingFragments.has(candidate));
-      if (substring) {
-        matches.push({ taintId: record.id, reason: "substring", token: substring, classes: record.classes });
+      const substring = record.fingerprint.substrings.find((candidate) => incomingFragments.has(candidate));
+      const exactShort = incoming.fragmentLength >= minNormalizedLength && incoming.fragmentLength < 16 &&
+        incoming.normalized === record.fingerprint.normalized;
+      if (substring || exactShort) {
+        matches.push({ taintId: record.id, reason: "substring", ...(substring ? { token: substring } : {}), classes: record.classes });
         continue;
       }
 
-      const token = record.fingerprint.tokens.find((candidate) => candidate.length >= 8 && incoming.tokens.includes(candidate));
+      const token = record.fingerprint.tokens.find((candidate) => incomingTokens.has(candidate)) ??
+        (destinationTokens && (record.fingerprint.destinationTokens ?? record.fingerprint.tokens).find((candidate) => destinationTokens.has(candidate)));
       if (token) {
         matches.push({ taintId: record.id, reason: "token", token, classes: record.classes });
         continue;
       }
 
-      if (record.fingerprint.normalized.length >= 32 && incoming.normalized.length >= 32) {
+      // Keep long inputs comparable to legacy fingerprints that did not store the length.
+      if (incoming.fragmentLength >= 32 && (record.fingerprint.fragmentLength ?? 32) >= 32) {
         const distance = hammingDistanceHex(record.fingerprint.simhash, incoming.simhash);
         if (distance <= fuzzyHammingMax) {
           matches.push({ taintId: record.id, reason: "fuzzy", classes: record.classes, score: 1 - distance / 64 });
@@ -324,6 +340,21 @@ export class SqliteTaintStore implements TaintStore {
     this.db.close();
   }
 
+  clearListenerSession(sessionId: string): void {
+    if (this.sessionScope !== "listener") throw new Error("Cannot clear a listener session from a shared state store.");
+    const key = this.sessionKey(sessionId);
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare("delete from session_state where scope_id = ?").run(key);
+      this.db.prepare("delete from temporal_taint where session_id = ?").run(key);
+      this.db.prepare("delete from user_statements where scope_id = ?").run(key);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   /** Record counts for operator status: all stored records, split into expiring and persistent memory provenance. */
   recordCounts(): { normal: number; persistent: number } {
     const rows = this.db.prepare("select persistent, count(*) as count from taint_records group by persistent").all() as Array<{ persistent: number; count: number }>;
@@ -372,7 +403,15 @@ export class SqliteTaintStore implements TaintStore {
   }
 
   private temporalKeys(sessionId: string): string[] {
-    return [this.scopeId(sessionId)];
+    return [this.activityKey(sessionId)];
+  }
+
+  private activityKey(sessionId: string): string {
+    return this.sessionScope === "listener" ? this.sessionKey(sessionId) : this.scopeId(sessionId);
+  }
+
+  private statementKey(sessionId: string): string {
+    return this.sessionScope ? this.sessionKey(sessionId) : this.activityKey(sessionId);
   }
 
   private scopeId(sessionId: string): string {
@@ -426,9 +465,10 @@ function matchesClassFilter(classes: TaintClass[], filter: TaintClass[] | undefi
 }
 
 // A tool result is fingerprinted to look up its provenance and again to store it; reuse the work.
-const fingerprintCache = new Map<string, { key: Buffer; normalized: string; base: Omit<TaintFingerprint, "sensitiveFragments"> }>();
+type ProtectedFingerprint = TaintFingerprint & { fragmentLength: number };
+const fingerprintCache = new Map<string, { key: Buffer; normalized: string; base: ProtectedFingerprint }>();
 
-function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false): TaintFingerprint {
+function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false): ProtectedFingerprint {
   let cached = fingerprintCache.get(input);
   if (!cached || !cached.key.equals(key)) {
     const normalized = normalizeText(input);
@@ -437,9 +477,11 @@ function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false)
       normalized,
       base: {
         normalized: hmacSha256Hex(key, normalized),
+        fragmentLength: normalized.length,
         substrings: makeSubstrings(normalized).map((fragment) => hmacSha256Hex(key, fragment)),
-        tokens: extractAtomicTokens(input).map((token) => hmacSha256Hex(key, canonicalizeToken(token))),
-        simhash: simhash(normalized)
+        tokens: extractAtomicTokens(input).map(canonicalizeToken).filter(isMatchableToken).map((token) => hmacSha256Hex(key, token)),
+        simhash: simhash(normalized),
+        ...(isSubstringsTruncated(normalized) ? { truncated: true } : {})
       }
     };
     if (input.length >= 4096) {
@@ -455,7 +497,7 @@ function makeProtectedFingerprint(input: string, key: Buffer, sensitive = false)
 function canonicalizeToken(token: string): string {
   try {
     const url = new URL(token);
-    url.hostname = url.hostname.toLowerCase();
+    url.hostname = canonicalHost(url.hostname);
     return url.toString();
   } catch {
     return normalizeText(token);
@@ -464,12 +506,24 @@ function canonicalizeToken(token: string): string {
 
 function loadOrCreateHmacKey(path: string): Buffer {
   mkdirSync(dirname(path), { recursive: true });
-  if (existsSync(path)) {
-    return Buffer.from(readFileSync(path, "utf8").trim(), "hex");
+  if (!existsSync(path)) {
+    try {
+      writeFileSync(path, randomBytes(32).toString("hex"), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
-  const key = randomBytes(32);
-  writeFileSync(path, key.toString("hex"), { encoding: "utf8", mode: 0o600 });
-  return key;
+  let key = readFileSync(path, "utf8").trim();
+  if (/^[\da-f]{0,63}$/iu.test(key)) {
+    // A concurrent opener can see the key file between creation and its first write.
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    for (let attempt = 0; attempt < 10 && /^[\da-f]{0,63}$/iu.test(key); attempt++) {
+      Atomics.wait(wait, 0, 0, 20);
+      key = readFileSync(path, "utf8").trim();
+    }
+  }
+  if (!/^[\da-f]{64}$/iu.test(key)) throw new Error(`Invalid Palizade taint key: ${path}`);
+  return Buffer.from(key, "hex");
 }
 
 function dedupeMatches(matches: TaintMatch[]): TaintMatch[] {
