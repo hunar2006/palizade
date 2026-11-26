@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -40,7 +40,7 @@ it.each([" ", "a\u007fb", "file://[", "file:///a%00b"])("rejects unsafe input %j
 });
 
 it.skipIf(process.platform === "win32")("follows symlinks before resolving a parent segment", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "palizade-paths-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "palizade-paths-")));
   try {
     const workspace = join(dir, "workspace");
     const target = join(dir, "outside", "nested");

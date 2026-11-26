@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { copyFile, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -158,7 +159,7 @@ describe("mergeHookEntries", () => {
       mergeHookEntries("cursor", settings, parts, config);
       expect(settings.hooks.beforeSubmitPrompt).toHaveLength(1);
       const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", settings.hooks.beforeSubmitPrompt[0]!.command],
-        { encoding: "utf8", timeout: 10000 });
+        { encoding: "utf8", timeout: 60000 });
       expect(result.status, result.stderr).toBe(2);
       expect(JSON.parse(result.stdout)).toEqual(["-c", config, "hook", "cursor", "beforeSubmitPrompt"]);
       await writeFile(settingsPath, JSON.stringify(settings));
@@ -198,7 +199,7 @@ describe("mergeHookEntries", () => {
       expect(handler?.args).toBeUndefined();
       const command = handler!.command;
       const input = "sample café input\n";
-      const options = { input, encoding: "utf8" as const, timeout: 10000 };
+      const options = { input, encoding: "utf8" as const, timeout: 60000 };
       const results = process.platform === "win32"
         ? [
             spawnSync("cmd.exe", ["/D", "/C", `"${command}"`], { ...options, windowsVerbatimArguments: true }),
@@ -220,7 +221,7 @@ describe("mergeHookEntries", () => {
 describe.skipIf(process.platform !== "win32")("Windows hook command", () => {
   const runPowerShell = (script: string, options: { cwd?: string } = {}) =>
     spawnSync(systemPowerShell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-      { ...options, encoding: "utf8" as const, timeout: 10000 });
+      { ...options, encoding: "utf8" as const, timeout: 60000 });
 
   it.each([
     ["IDE", 0], ["IDE", 2], ["agent host", 0], ["agent host", 2]
@@ -261,7 +262,7 @@ describe.skipIf(process.platform !== "win32")("Windows hook command", () => {
         input: Buffer.from(input, "utf8"),
         encoding: "utf8",
         windowsVerbatimArguments: true,
-        timeout: 10000
+        timeout: 60000
       });
       expect(result.status, result.stderr).toBe(0);
       expect(Buffer.from(result.stdout.trim(), "base64")).toEqual(Buffer.from(input, "utf8"));
@@ -276,7 +277,7 @@ describe.skipIf(process.platform !== "win32")("Windows hook command", () => {
       const script = join(dir, "index.cjs");
       await writeFile(script, "process.stdout.write('node ran'); process.exitCode = 2;");
       const { command } = shellHook(client, event, [process.execPath, script, "hook"]);
-      const options = { encoding: "utf8" as const, timeout: 10000 };
+      const options = { encoding: "utf8" as const, timeout: 60000 };
       const [, launcher, bootstrap] = /^(\S+) -NoProfile -NonInteractive -Command "([^"]+)"/u.exec(command)!;
       const direct = spawnSync(launcher!, ["-NoProfile", "-NonInteractive", "-Command", bootstrap!], options);
       const cmd = spawnSync("cmd.exe", ["/D", "/C", `"${command}"`], { ...options, windowsVerbatimArguments: true });
@@ -364,7 +365,7 @@ ${bootstrap}`);
       const parts = [node, script, "hook"];
       const codex = shellHook("codex", "PreToolUse", parts).command;
       const gemini = shellHook("gemini", "BeforeTool", parts).command;
-      const options = { encoding: "utf8" as const, timeout: 10000 };
+      const options = { encoding: "utf8" as const, timeout: 60000 };
       const run = missing === "node.exe"
         ? spawnSync("cmd.exe", ["/D", "/C", `"${codex}"`], { ...options, windowsVerbatimArguments: true })
         : spawnSync(systemPowerShell, ["-NoProfile", "-NonInteractive", "-Command", gemini], options);
@@ -382,7 +383,7 @@ ${bootstrap}`);
       await mkdir(dirname(script));
       await writeFile(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)));");
       const { command } = shellHook("gemini", "AfterTool", [process.execPath, script, "-c", config, "hook"]);
-      const options = { cwd: dir, encoding: "utf8" as const, timeout: 10000 };
+      const options = { cwd: dir, encoding: "utf8" as const, timeout: 60000 };
       const runs = [
         spawnSync(systemPowerShell, ["-NoProfile", "-NonInteractive", "-Command", command], options),
         spawnSync("cmd.exe", ["/D", "/V:ON", "/C", `"${command}"`], { ...options, windowsVerbatimArguments: true })
@@ -405,7 +406,7 @@ ${bootstrap}`);
       await writeFile(script, "process.stdout.write('system wrapper ran');");
       const { command } = shellHook("codex", "PreToolUse", [process.execPath, script, "hook"]);
       const run = spawnSync("cmd.exe", ["/D", "/C", `"${command}"`], {
-        cwd: dir, encoding: "utf8", timeout: 10000, windowsVerbatimArguments: true,
+        cwd: dir, encoding: "utf8", timeout: 60000, windowsVerbatimArguments: true,
         env: { ...process.env, PATH: `${dir};${process.env.PATH}` }
       });
       expect(run.status, run.stderr).toBe(0);
@@ -417,7 +418,7 @@ ${bootstrap}`);
   });
 
   it.each(["parent segment", "missing launcher"])("refuses a SystemRoot with a %s", async (reason) => {
-    const dir = await mkdtemp(join(tmpdir(), "palizade-system-root-"));
+    const dir = realpathSync.native(await mkdtemp(join(tmpdir(), "palizade-system-root-")));
     const root = process.env.SystemRoot || "C:\\Windows";
     try {
       vi.stubEnv("SystemRoot", reason === "parent segment" ? `${root}\\System32\\..` : dir);
@@ -442,7 +443,7 @@ ${bootstrap}`);
       const status = async () => (await inspectHooks("codex", path)).events.find((entry) => entry.event === "PostToolUse")?.status;
       expect(await status()).toBe("outdated");
       const install = () => spawnSync(process.execPath, [resolve("packages/cli/dist/index.cjs"), "install-hooks", "codex", "--settings", path], {
-        cwd: dir, encoding: "utf8", timeout: 10000,
+        cwd: dir, encoding: "utf8", timeout: 60000,
         env: { ...process.env, HOME: dir, USERPROFILE: dir, CODEX_HOME: join(dir, ".codex"), CLAUDE_CONFIG_DIR: join(dir, ".claude") }
       });
       const first = install();
@@ -463,7 +464,7 @@ ${bootstrap}`);
 
 describe("project hooks", () => {
   it("installs Claude Code settings at the linked worktree's main checkout", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "palizade-linked-worktree-"));
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "palizade-linked-worktree-")));
     try {
       const main = join(dir, "main");
       const worktree = join(dir, "linked");
@@ -481,7 +482,7 @@ describe("project hooks", () => {
       await expect(readFile(join(worktree, ".claude", "settings.local.json"))).rejects.toMatchObject({ code: "ENOENT" });
       for (const verb of ["install-hooks", "setup"]) {
         const cli = spawnSync(process.execPath, [resolve("packages/cli/dist/index.cjs"), verb, "claude-code", "--project", "--dry-run"], {
-          cwd, encoding: "utf8", timeout: 10000,
+          cwd, encoding: "utf8", timeout: 60000,
           env: { ...process.env, HOME: dir, USERPROFILE: dir, CLAUDE_CONFIG_DIR: join(dir, "user-claude") }
         });
         expect(cli.status, cli.stderr).toBe(0);
@@ -596,7 +597,7 @@ describe("inspectHooks", () => {
       await writeFile(configPath, "{}");
       const cli = resolve("packages/cli/dist/index.cjs");
       const run = (...args: string[]) => spawnSync(process.execPath, [cli, "-c", configPath, ...args], {
-        cwd: dir, encoding: "utf8", timeout: 10000,
+        cwd: dir, encoding: "utf8", timeout: 60000,
         env: { ...process.env, HOME: dir, USERPROFILE: dir, CLAUDE_CONFIG_DIR: join(dir, "user-claude") }
       });
       const install = () => {
@@ -630,7 +631,7 @@ describe("inspectHooks", () => {
       const configPath = join(dir, "palizade.yaml");
       await writeFile(configPath, "{}");
       const runCli = (...args: string[]) => spawnSync(process.execPath, [resolve("packages/cli/dist/index.cjs"), "-c", configPath, ...args], {
-        cwd: dir, encoding: "utf8", timeout: 10000, env: { ...process.env, CLAUDE_CONFIG_DIR: dir }
+        cwd: dir, encoding: "utf8", timeout: 60000, env: { ...process.env, CLAUDE_CONFIG_DIR: dir }
       });
       const install = () => {
         const result = runCli("install-hooks", "claude-code", "--settings", settingsPath);

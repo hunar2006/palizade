@@ -182,8 +182,9 @@ function mainCheckoutRoot(worktree: string): string {
     const common = readFileSync(join(gitDir, "commondir"), "utf8").trim();
     const commonDir = resolve(gitDir, common);
     const backlink = readFileSync(join(gitDir, "gitdir"), "utf8").trim();
+    const real = (path: string) => { try { return realpathSync(path); } catch { return path; } };
     if (common && basename(commonDir) === ".git" && relative(dirname(gitDir), join(commonDir, "worktrees")) === "" &&
-        relative(resolve(gitDir, backlink), gitfile) === "" && lstatSync(commonDir).isDirectory()) return dirname(commonDir);
+        relative(real(resolve(gitDir, backlink)), real(gitfile)) === "" && lstatSync(commonDir).isDirectory()) return dirname(commonDir);
   } catch {
     // Incomplete worktree metadata falls back to the worktree itself.
   }

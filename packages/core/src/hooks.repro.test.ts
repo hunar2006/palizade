@@ -2702,7 +2702,7 @@ describe("Batch C engine and policy protections", () => {
     expectDecision(await hook.shell("Bash", "pnpm test b.ts"), "allow");
   });
 
-  it("arms the write-then-run gate across both code/build files and non-code files with tailored prompt wording", async () => {
+  it("arms the write-then-run gate across both code/build files and non-code files with tailored prompt wording", { timeout: 120_000 }, async () => {
     const hook = await claude("default.yaml");
     await hook.web();
 

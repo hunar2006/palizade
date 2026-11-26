@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -37,7 +37,7 @@ it.each([
 });
 
 it("upgrades older Claude Code project hooks without duplicating registrations or changing unrelated hooks", async () => {
-  const home = await mkdtemp(join(tmpdir(), "palizade-project-claude-"));
+  const home = await realpath(await mkdtemp(join(tmpdir(), "palizade-project-claude-")));
   try {
     const cli = resolve("packages/cli/dist/index.cjs");
     const cwd = join(home, "repository", "nested");
@@ -120,7 +120,7 @@ it("never blocks a prompt from the CLI, even with a missing config", () => {
 });
 
 it("installs project hooks in separate workspaces and reports only observations of the matching registration", async () => {
-  const home = await mkdtemp(join(tmpdir(), "palizade-project-hook-"));
+  const home = await realpath(await mkdtemp(join(tmpdir(), "palizade-project-hook-")));
   try {
     const cli = resolve("packages/cli/dist/index.cjs");
     const first = join(home, "workspace one");
