@@ -3,7 +3,8 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Server } from "node:net";
-import { DAEMON_MAX_INPUT_BYTES, DAEMON_PROTOCOL, daemonEndpoint, daemonRunDir, sign, signatureMatches, type HookArgs, type HookRun } from "./hook-client.js";
+import { isDeepStrictEqual } from "node:util";
+import { DAEMON_MAX_INPUT_BYTES, DAEMON_PROTOCOL, daemonEndpoint, daemonRunDir, hookEnvironment, sign, signatureMatches, type HookArgs, type HookRun } from "./hook-client.js";
 
 export type HookHandler = (args: HookArgs, cwd: string, stdin: Buffer) => Promise<HookRun>;
 
@@ -46,11 +47,13 @@ export async function startHookDaemon(configPath: string, handle: HookHandler): 
   const answer = async (line: string): Promise<string | undefined> => {
     const request = JSON.parse(line) as { body?: unknown; mac?: unknown };
     if (typeof request.body !== "string" || !signatureMatches(key, request.body, request.mac)) return undefined;
-    const body = JSON.parse(request.body) as { v?: unknown; nonce?: unknown; config?: unknown; args?: HookArgs; cwd?: unknown; runId?: unknown; stdin?: unknown };
+    const body = JSON.parse(request.body) as { v?: unknown; nonce?: unknown; config?: unknown; args?: HookArgs; cwd?: unknown; runId?: unknown; sealPath?: unknown; env?: unknown; stdin?: unknown };
     if (typeof body.nonce !== "string") return undefined;
     const reply = (value: object) => { const text = JSON.stringify(value); return JSON.stringify({ body: text, mac: sign(key, `${body.nonce}\n${text}`) }); };
     // Anything this daemon would answer differently from an in process run goes back to the client.
     if (body.v !== DAEMON_PROTOCOL || body.config !== configPath || (body.runId ?? null) !== (process.env.PALIZADE_RUN_ID ?? null)
+      || (body.sealPath ?? null) !== (process.env.PALIZADE_SEAL_PATH ?? null)
+      || !isDeepStrictEqual(body.env, hookEnvironment())
       || typeof body.cwd !== "string" || typeof body.stdin !== "string" || !body.args) return reply({ fallback: true });
     const run = queue.then(() => handle(body.args!, body.cwd as string, Buffer.from(body.stdin as string, "base64")));
     queue = run.catch(() => undefined);

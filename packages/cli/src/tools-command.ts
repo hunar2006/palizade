@@ -1,4 +1,4 @@
-import { catalogEntryFor, classifyToolDetailed, TOOL_CATALOG, type McpTool, type PalizadeConfig, type PalizadeLock } from "@palizade/core";
+import { catalogEntryFor, classifyToolDetailed, TOOL_CATALOG, type ArgumentRole, type McpTool, type PalizadeConfig, type PalizadeLock } from "@palizade/core";
 
 export interface ToolRow {
   server: string;
@@ -6,6 +6,8 @@ export interface ToolRow {
   toolClass: string;
   capabilities: string[];
   reasons: string[];
+  argumentRoles: Record<string, ArgumentRole>;
+  suggestedArgumentRoles: Record<string, ArgumentRole>;
 }
 
 export interface ServerToolsReport {
@@ -26,7 +28,12 @@ export function describeServerTools(config: Pick<PalizadeConfig, "servers">, loc
     const tools = Object.entries(locked).map(([toolName, entry]): ToolRow => {
       const snapshot = (entry.snapshot ?? { name: toolName }) as unknown as McpTool;
       const classification = classifyToolDetailed(toolName, server, { ...snapshot, name: toolName });
-      return { server: name, tool: toolName, toolClass: classification.toolClass, capabilities: classification.capabilities, reasons: classification.reasons };
+      const argumentRoles = { ...classification.argumentRoles, ...server.argumentRoles?.[toolName] };
+      return {
+        server: name, tool: toolName, toolClass: classification.toolClass,
+        capabilities: classification.capabilities, reasons: classification.reasons, argumentRoles,
+        suggestedArgumentRoles: suggestArgumentRoles(snapshot.inputSchema, argumentRoles)
+      };
     });
     return { server: name, trust: server.trust, catalog: catalogEntryFor(server)?.id, locked: Object.keys(locked).length > 0, tools };
   });
@@ -42,6 +49,10 @@ export function formatServerTools(reports: ServerToolsReport[]): string {
     }
     for (const row of report.tools) {
       lines.push(`  ${row.toolClass.padEnd(7)} ${row.tool}  ${row.capabilities.join(",") || "-"}  (${row.reasons.join(", ")})`);
+      const roles = Object.entries(row.argumentRoles);
+      if (roles.length > 0) lines.push(`    roles: ${roles.map(([field, role]) => `${JSON.stringify(field)}=${role}`).join(", ")}`);
+      const suggestions = Object.entries(row.suggestedArgumentRoles);
+      if (suggestions.length > 0) lines.push(`    roles to review from the locked schema: ${suggestions.map(([field, role]) => `${JSON.stringify(field)}=${role}`).join(", ")}`);
     }
     const unknown = report.tools.filter((row) => row.toolClass === "unknown").length;
     if (unknown > 0) {
@@ -49,6 +60,23 @@ export function formatServerTools(reports: ServerToolsReport[]): string {
     }
   }
   return lines.join("\n");
+}
+
+const schemaRoles = new Map<string, ArgumentRole>([["email", "email_recipient"], ["hostname", "hostname"], ["uri", "url"]]);
+
+function suggestArgumentRoles(schema: unknown, current: Record<string, ArgumentRole>): Record<string, ArgumentRole> {
+  const properties = schema && typeof schema === "object" && (schema as { properties?: unknown }).properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return {};
+  const suggestions: Array<[string, ArgumentRole]> = [];
+  for (const [name, item] of Object.entries(properties)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(name) || !item || typeof item !== "object") continue;
+    const fieldSchema = item as { type?: string; format?: string; items?: { type?: string; format?: string } };
+    const field = fieldSchema.type === "array" ? `${name}[*]` : name;
+    const value = fieldSchema.type === "array" ? fieldSchema.items : fieldSchema;
+    const role = value?.type === "string" && value.format ? schemaRoles.get(value.format) : undefined;
+    if (role && !Object.hasOwn(current, field) && !Object.hasOwn(current, `$.${field}`)) suggestions.push([field, role]);
+  }
+  return Object.fromEntries(suggestions);
 }
 
 export function formatCatalog(): string {

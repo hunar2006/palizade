@@ -1,0 +1,48 @@
+# Self-protection guarantees the interactive preset must keep. Run: palizade policy test policies/tests/interactive.test.yaml
+policy: ../interactive.yaml
+cases:
+  - name: "self protection: asks before `rm -rf .claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm -rf .claude" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `mv .claude /tmp/backup`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "mv .claude /tmp/backup" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `Remove-Item -Recurse .claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "Remove-Item -Recurse .claude" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `Rename-Item .claude .claude.bak`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "Rename-Item .claude .claude.bak" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `node -e` removing `.claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "node -e \"require('fs').rmSync('.claude', { recursive: true })\"" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `python -c` removing `.claude`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "python -c \"import shutil; shutil.rmtree('.claude')\"" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git clean -fdx`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git clean -fdx" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git checkout -- .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git checkout -- ." }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `git restore .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git restore ." }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `robocopy empty . /MIR`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "robocopy empty . /MIR" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `tar -C .claude -xf x.tar`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "tar -C .claude -xf x.tar" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `tar -xf x.tar -C .`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "tar -xf x.tar -C ." }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: asks before `rm .claude/settings*`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "rm .claude/settings*" }
+    expect: { action: require_approval, rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git status`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git status" }
+    expect: { not_rule: approve-palizade-self-change }
+  - name: "self protection: does not ask for `git diff`"
+    context: { direction: request, method: tools/call, tool_class: sink, capabilities: [executes_code, network_egress, writes_local], argument_roles: [shell_command], argument_text: "git diff" }
+    expect: { not_rule: approve-palizade-self-change }

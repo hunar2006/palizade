@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { domainToASCII, domainToUnicode } from "node:url";
 
 // Matching view only: every Unicode default ignorable code point (covers TAG characters, fillers, bidi controls).
@@ -14,13 +15,22 @@ export function identifierSkeleton(input: string): string {
     .map((char) => CONFUSABLES[char] ?? char).join("");
 }
 
+function canonicalMappedIpv4(host: string): string {
+  const mapped = /^\[::ffff:([\da-f]{1,4}):([\da-f]{1,4})\]$/u.exec(host);
+  if (!mapped) return host;
+  const hi = Number.parseInt(mapped[1]!, 16);
+  const lo = Number.parseInt(mapped[2]!, 16);
+  return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+}
+
 export function canonicalHost(input: string): string {
-  const host = input.normalize("NFKC").replace(HIDDEN_UNICODE, "").trim().replace(/\.$/u, "").toLowerCase();
+  const cleaned = input.normalize("NFKC").replace(HIDDEN_UNICODE, "").trim().replace(/\.$/u, "").toLowerCase();
+  const host = isIP(cleaned) === 6 ? `[${cleaned}]` : cleaned;
   // Let the WHATWG URL parser canonicalize host spellings (IPv4 forms, percent-encoding, IDNA) so
   // every caller compares the same form a client would actually connect to.
   try {
     const parsed = new URL(`http://${host}/`).hostname.replace(/\.$/u, "");
-    if (parsed) return parsed;
+    if (parsed) return canonicalMappedIpv4(parsed);
   } catch {
     // Not a valid URL host; fall back to IDNA only.
   }

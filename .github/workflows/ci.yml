@@ -45,6 +45,7 @@ jobs:
         if: runner.os == 'Linux'
         run: docker pull node:22-slim
       - run: pnpm test
+      - run: node --test scripts/check-release-evidence.test.mjs
       - run: pnpm eval
       - run: pnpm smoke:filesystem
       - name: Latency benchmark (budget enforced on Linux, reported elsewhere)

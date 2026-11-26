@@ -1,3 +1,4 @@
+import { canonicalHost, trimMatchedUrl } from "@palizade/taint";
 import { isDataBearingKey } from "./text.js";
 export type ArgumentRole =
   | "url"
@@ -47,11 +48,13 @@ function visit(value: unknown, path: string, fields: ArgumentField[]): void {
     const role = inferRole(path, value);
     fields.push({ path, role, text: value });
     for (const url of value.matchAll(URL_RE)) {
-      fields.push({ path: `${path}<url:${url.index ?? 0}>`, role: "url", text: url[0] });
+      const cleanedUrl = trimMatchedUrl(url[0]);
+      fields.push({ path: `${path}<url:${url.index ?? 0}>`, role: "url", text: cleanedUrl });
       try {
-        fields.push({ path: `${path}<host:${url.index ?? 0}>`, role: "hostname", text: new URL(url[0]).hostname });
-        if (new URL(url[0]).search) {
-          fields.push({ path: `${path}<query:${url.index ?? 0}>`, role: "http_query", text: new URL(url[0]).search });
+        const parsed = new URL(cleanedUrl);
+        fields.push({ path: `${path}<host:${url.index ?? 0}>`, role: "hostname", text: canonicalHost(parsed.hostname) });
+        if (parsed.search) {
+          fields.push({ path: `${path}<query:${url.index ?? 0}>`, role: "http_query", text: parsed.search });
         }
       } catch {
         // Keep the raw URL field; URL parsing can fail for odd but still exfil-capable strings.

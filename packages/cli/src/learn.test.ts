@@ -30,6 +30,22 @@ afterEach(async () => {
 });
 
 describe("learn", () => {
+  it("prioritizes unknown tools that stopped work and leaves approved or configured tools out of the queue", () => {
+    const draft = learnFromAudit([
+      call("ambiguous_lookup", "block", { toolClass: "unknown" }),
+      call("ambiguous_lookup", "require_approval", { toolClass: "unknown", approved: false }),
+      call("ambiguous_lookup", "require_approval", { toolClass: "unknown", approved: true }),
+      call("another_tool", "block", { toolClass: "unknown" }),
+      call("configured", "block", { toolClass: "unknown" }),
+      call("classified", "block", { toolClass: "sink" })
+    ], { since, existingToolClasses: { github: { configured: "source" } } });
+    expect(draft.review).toEqual([
+      { server: "github", tool: "ambiguous_lookup", stopped: 2, calls: 3 },
+      { server: "github", tool: "another_tool", stopped: 1, calls: 1 }
+    ]);
+    expect(formatLearnDraft(draft, since)).toContain("ambiguous_lookup (2 of 3 calls)");
+  });
+
   it("drafts tool classes and allowlists, leaving out blocked and tainted destinations", () => {
     const draft = learnFromAudit(events, { since, existingToolClasses: { github: { search: "source" } } });
     const yaml = formatLearnDraft(draft, since);
@@ -72,6 +88,7 @@ describe("learn", () => {
     expect(next).toContain("# my servers");
     expect(next).toContain("# keep me");
     expect(YAML.parse(next).servers).toEqual({ github: { command: "node", toolClasses: { weird_tool: "source" } }, other: { command: "x" } });
+    expect(() => addToolClasses(next, proposedToolClasses(draft, ["github"]))).toThrow("already configured");
     expect(() => addToolClasses(raw, [{ server: "missing", tool: "t", toolClass: "sink" }])).toThrow(/not in palizade.yaml/u);
   });
 

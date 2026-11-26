@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AuditEvent, AuditQuery, AuditSink } from "./types.js";
 import { auditEventSchema } from "./types.js";
-import type { VerifyInput } from "./jsonl.js";
+import { matchesQuery, type VerifyInput } from "./jsonl.js";
 import { pruneAnchors } from "./logger.js";
 
 const COLUMNS = ["ts", "session", "server", "tool", "direction", "method", "action", "payload_hash"] as const;
@@ -11,8 +11,9 @@ type SqliteDatabase = {
   exec(sql: string): void;
   prepare(sql: string): {
     run(...args: unknown[]): void;
-      all(...args: unknown[]): unknown[];
-      get(...args: unknown[]): unknown;
+    all(...args: unknown[]): unknown[];
+    get(...args: unknown[]): unknown;
+    iterate(): Iterable<unknown>;
   };
   close(): void;
 };
@@ -47,22 +48,22 @@ export class SqliteAuditSink implements AuditSink {
   }
 
   async query(query: AuditQuery): Promise<AuditEvent[]> {
+    const limit = query.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 0) throw new Error("Audit query limit must be a nonnegative integer");
+    if (limit === 0) return [];
     await this.ensureInit();
     if (!this.db) {
       throw new Error("SQLite audit sink is unavailable");
     }
-    const rows = this.db.prepare("select json from audit_events order by ts desc limit ?").all(query.limit ?? 100) as Array<{ json: string }>;
-    return rows
-      .map((row) => auditEventSchema.parse(JSON.parse(row.json)))
-      .filter((event) => {
-        if (query.since && new Date(event.ts) < query.since) return false;
-        if (query.action && event.action !== query.action) return false;
-        if (query.session && event.session !== query.session) return false;
-        if (query.server && event.server !== query.server) return false;
-        if (query.tool && event.tool !== query.tool) return false;
-        return true;
-      })
-      .reverse();
+    const rows = this.db.prepare("select json from audit_events order by ts desc, id desc").iterate() as Iterable<{ json: string }>;
+    const events: AuditEvent[] = [];
+    for (const row of rows) {
+      const event = auditEventSchema.parse(JSON.parse(row.json));
+      if (!matchesQuery(event, query)) continue;
+      events.push(event);
+      if (events.length === limit) break;
+    }
+    return events.reverse();
   }
 
   close(): void {
@@ -90,17 +91,24 @@ export class SqliteAuditSink implements AuditSink {
   }
 
   async prune(before: Date): Promise<number> {
+    const cutoff = before.toISOString();
     await this.ensureInit();
-    if (!this.db) {
-      throw new Error("SQLite audit sink is unavailable");
+    const db = this.db;
+    if (!db) throw new Error("SQLite audit sink is unavailable");
+    db.exec("begin immediate");
+    try {
+      const parse = (rows: unknown[]) => (rows as Array<{ json: string }>).map((row) => JSON.parse(row.json) as Record<string, unknown>);
+      const removed = parse(db.prepare("select json from audit_events where ts < ?").all(cutoff));
+      const kept = parse(db.prepare("select json from audit_events where ts >= ?").all(cutoff));
+      const addAnchor = db.prepare("insert or ignore into audit_anchors (hash) values (?)");
+      for (const hash of pruneAnchors(removed, kept)) addAnchor.run(hash);
+      db.prepare("delete from audit_events where ts < ?").run(cutoff);
+      db.exec("commit");
+      return removed.length;
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
     }
-    const beforeCount = this.db.prepare("select count(*) as count from audit_events").get() as { count: number };
-    const parse = (rows: unknown[]) => (rows as Array<{ json: string }>).map((row) => JSON.parse(row.json) as Record<string, unknown>);
-    const anchors = pruneAnchors(parse(this.db.prepare("select json from audit_events where ts < ?").all(before.toISOString())), parse(this.db.prepare("select json from audit_events where ts >= ?").all(before.toISOString())));
-    for (const hash of anchors) this.db.prepare("insert or ignore into audit_anchors (hash) values (?)").run(hash);
-    this.db.prepare("delete from audit_events where ts < ?").run(before.toISOString());
-    const afterCount = this.db.prepare("select count(*) as count from audit_events").get() as { count: number };
-    return beforeCount.count - afterCount.count;
   }
 
   private async ensureInit(): Promise<void> {
@@ -113,6 +121,7 @@ export class SqliteAuditSink implements AuditSink {
     const sqlite = await import("node:sqlite");
     this.db = new sqlite.DatabaseSync(this.path);
     this.db.exec(`
+        pragma busy_timeout = 5000;
         create table if not exists audit_events (
           id integer primary key autoincrement,
           ts text not null,

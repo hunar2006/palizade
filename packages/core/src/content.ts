@@ -1,4 +1,4 @@
-import { isDataBearingKey } from "./text.js";
+import { isDataBearingKey, textPathKey } from "./text.js";
 import type { TrustLevel } from "@palizade/policy";
 
 export type ContentOrigin =
@@ -41,7 +41,7 @@ const BASE64ISH_RE = /^[A-Za-z0-9+/]{80,}={0,2}$/u;
 
 export function extractContent(value: unknown, ctx: ExtractionContext): ExtractedContent[] {
   const output: ExtractedContent[] = [];
-  visit(value, "$", ctx, output);
+  visit(value, [], ctx, output);
   return dedupe(output);
 }
 
@@ -52,14 +52,14 @@ export function contentText(contents: ExtractedContent[]): string {
     .join("\n");
 }
 
-function visit(value: unknown, path: string, ctx: ExtractionContext, output: ExtractedContent[]): void {
+function visit(value: unknown, path: Array<string | number>, ctx: ExtractionContext, output: ExtractedContent[]): void {
   if (typeof value === "string") {
-    emitString(value, path, ctx, output);
+    emitString(value, textPathKey(path), ctx, output);
     return;
   }
 
   if (Array.isArray(value)) {
-    value.forEach((item, index) => visit(item, `${path}[${index}]`, ctx, output));
+    value.forEach((item, index) => visit(item, [...path, index], ctx, output));
     return;
   }
 
@@ -71,7 +71,7 @@ function visit(value: unknown, path: string, ctx: ExtractionContext, output: Ext
 
     if (typeof record.blob === "string") {
       output.push({
-        path: `${path}.blob`,
+        path: textPathKey([...path, "blob"]),
         kind: "binary",
         rawValue: "[binary omitted]",
         origin: ctx.origin,
@@ -84,16 +84,13 @@ function visit(value: unknown, path: string, ctx: ExtractionContext, output: Ext
     }
 
     for (const [key, child] of Object.entries(record)) {
-      const childPath = `${path}.${key}`;
+      const childPath = [...path, key];
       // Keys can carry data in structured results too; record them so copies are traced.
-      if (isDataBearingKey(key)) emitString(key, `${path}{${key}}`, childCtx, output, "structured");
-      const nextCtx = key === "text" || key === "content"
-        ? childCtx
-        : childCtx;
-      if (typeof child === "string" && HUMAN_METADATA_KEYS.test(childPath)) {
-        emitString(child, childPath, nextCtx, output, key === "uri" || key === "url" ? "url" : "metadata", mimeType);
+      if (isDataBearingKey(key)) emitString(key, textPathKey(childPath, true), childCtx, output, "structured");
+      if (typeof child === "string" && HUMAN_METADATA_KEYS.test(key)) {
+        emitString(child, textPathKey(childPath), childCtx, output, key === "uri" || key === "url" ? "url" : "metadata", mimeType);
       } else {
-        visit(child, childPath, nextCtx, output);
+        visit(child, childPath, childCtx, output);
       }
     }
   }

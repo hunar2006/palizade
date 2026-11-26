@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import YAML from "yaml";
 import { describe, expect, it } from "vitest";
-import { codexToClientEntry, removeServerTables } from "../src/codex-config.js";
+import { codexToClientEntry, findCodexServerRegistration, removeServerTables } from "../src/codex-config.js";
 import { installAllClientConfigs, resolveClientConfigPath } from "../src/install-config.js";
 
 const CONFIG = `# my codex settings
@@ -47,6 +47,28 @@ describe("Codex config", () => {
       .toEqual({ type: "http", url: "https://x/mcp", headers: { "X-Org": "${ORG_ID}", Authorization: "Bearer ${TOKEN}" } });
   });
 
+  it("returns a Codex registration when the user and workspace sources agree", async () => {
+    const root = await mkdtemp(join(tmpdir(), "palizade-codex-registration-"));
+    try {
+      const home = join(root, "home");
+      const project = join(root, "project");
+      await mkdir(home);
+      await mkdir(join(project, ".git"), { recursive: true });
+      await mkdir(join(project, ".codex"), { recursive: true });
+      const userEntry = '[mcp_servers.notes]\ncommand = "node"\nargs = ["notes.cjs"]\n';
+      await writeFile(join(home, "config.toml"), userEntry);
+      expect(findCodexServerRegistration("notes", project, home)).toEqual({ command: "node", args: ["notes.cjs"] });
+
+      const projectConfig = join(project, ".codex", "config.toml");
+      await writeFile(projectConfig, userEntry);
+      expect(findCodexServerRegistration("notes", project, home)).toEqual({ command: "node", args: ["notes.cjs"] });
+      await writeFile(projectConfig, userEntry.replace("notes.cjs", "different.cjs"));
+      expect(findCodexServerRegistration("notes", project, home)).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes a server's tables and refuses inline definitions", () => {
     const removed = removeServerTables(CONFIG, "github")!;
     expect(removed).not.toContain("server-github");
@@ -80,7 +102,7 @@ describe("Codex config", () => {
     expect(toml.mcp_servers.linear!.url).toBeUndefined();
     expect(toml.mcp_servers.figma).toEqual({ url: "https://mcp.figma.example/mcp" });
     const servers = (YAML.parse(await readFile(palizadeConfigPath, "utf8")) as { servers: Record<string, Record<string, unknown>> }).servers;
-    expect(servers.github).toMatchObject({ command: "npx", env: { LOG: "debug" } });
+    expect(servers.github).toMatchObject({ command: "npx", env: { LOG: "debug" }, passEnv: ["GITHUB_TOKEN"] });
     expect(servers.linear).toMatchObject({ url: "https://mcp.linear.example/mcp", headers: { "X-Team": "eng", Authorization: "Bearer ${LINEAR_TOKEN}" } });
 
     const again = await installAllClientConfigs({ client: "codex", clientConfigPath, configPath: palizadeConfigPath, cliPath, cwd: dir, dryRun: true });

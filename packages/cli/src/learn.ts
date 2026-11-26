@@ -16,6 +16,7 @@ export interface Proposal { toolClass: string; reasons: string[] }
 export interface LearnDraft {
   events: number;
   servers: Record<string, { toolClasses: Record<string, { toolClass: string; calls: number; proposed?: Proposal }> }>;
+  review: Array<{ server: string; tool: string; stopped: number; calls: number }>;
   allowlist: { hosts: Array<{ value: string; calls: number }>; emails: Array<{ value: string; calls: number }> };
   notSuggested: Array<{ value: string; reason: string }>;
   truncated: boolean;
@@ -28,6 +29,7 @@ export function learnFromAudit(events: AuditEvent[], options: LearnOptions): Lea
   const relevant = events.filter((event) => new Date(event.ts) >= options.since && event.direction === "request" && event.method === "tools/call" && event.server && event.tool
     && (options.session === undefined || event.session === options.session));
   const classes = new Map<string, Map<string, Map<string, number>>>();
+  const blocked = new Map<string, Map<string, number>>();
   const destinations = new Map<string, { kind: "hosts" | "emails"; allowed: number; blocked: number; tainted: number; alreadyAllowed: boolean }>();
 
   for (const event of relevant) {
@@ -38,9 +40,15 @@ export function learnFromAudit(events: AuditEvent[], options: LearnOptions): Lea
     byTool.set(event.tool!, counts);
     classes.set(event.server!, byTool);
 
+    const allowed = ALLOWED_ACTIONS.has(event.action) || event.metadata?.approved === true;
+    if (toolClass === "unknown" && (event.action === "block" || (event.action === "require_approval" && !allowed))) {
+      const tools = blocked.get(event.server!) ?? new Map<string, number>();
+      tools.set(event.tool!, (tools.get(event.tool!) ?? 0) + 1);
+      blocked.set(event.server!, tools);
+    }
+
     const destination = event.metadata?.destination as { allowed?: boolean; hosts?: unknown; emailRecipients?: unknown } | undefined;
     if (!destination) continue;
-    const allowed = ALLOWED_ACTIONS.has(event.action) || event.metadata?.approved === true;
     for (const [kind, values] of [["hosts", destination.hosts], ["emails", destination.emailRecipients]] as const) {
       if (!Array.isArray(values)) continue;
       for (const value of values) {
@@ -57,14 +65,19 @@ export function learnFromAudit(events: AuditEvent[], options: LearnOptions): Lea
 
   let truncated = false;
   const servers: LearnDraft["servers"] = {};
+  const review: LearnDraft["review"] = [];
   for (const [server, byTool] of [...classes].sort(([left], [right]) => left.localeCompare(right))) {
     const toolClasses: Record<string, { toolClass: string; calls: number; proposed?: Proposal }> = {};
-    for (const [tool, counts] of [...byTool].sort(([left], [right]) => left.localeCompare(right))) {
+    const stopped = blocked.get(server);
+    for (const [tool, counts] of [...byTool].sort(([left], [right]) => (stopped?.get(right) ?? 0) - (stopped?.get(left) ?? 0) || left.localeCompare(right))) {
       if (options.existingToolClasses?.[server]?.[tool] !== undefined) continue;
       if (Object.keys(toolClasses).length >= MAX_ENTRIES) { truncated = true; break; }
       const [toolClass] = [...counts].sort((left, right) => right[1] - left[1])[0]!;
       const proposed = toolClass === "unknown" ? options.propose?.(server, tool) : undefined;
-      toolClasses[tool] = { toolClass, calls: [...counts.values()].reduce((sum, count) => sum + count, 0), ...(proposed && proposed.toolClass !== "unknown" ? { proposed } : {}) };
+      const calls = [...counts.values()].reduce((sum, count) => sum + count, 0);
+      toolClasses[tool] = { toolClass, calls, ...(proposed && proposed.toolClass !== "unknown" ? { proposed } : {}) };
+      const stoppedCount = stopped?.get(tool) ?? 0;
+      if (stoppedCount > 0) review.push({ server, tool, stopped: stoppedCount, calls });
     }
     if (Object.keys(toolClasses).length > 0) servers[server] = { toolClasses };
   }
@@ -80,7 +93,8 @@ export function learnFromAudit(events: AuditEvent[], options: LearnOptions): Lea
     allowlist[entry.kind].push({ value, calls: entry.allowed });
   }
 
-  return { events: relevant.length, servers, allowlist, notSuggested: notSuggested.slice(0, MAX_ENTRIES), truncated };
+  review.sort((left, right) => right.stopped - left.stopped || left.server.localeCompare(right.server) || left.tool.localeCompare(right.tool));
+  return { events: relevant.length, servers, review: review.slice(0, MAX_ENTRIES), allowlist, notSuggested: notSuggested.slice(0, MAX_ENTRIES), truncated: truncated || review.length > MAX_ENTRIES };
 }
 
 export function formatLearnDraft(draft: LearnDraft, since: Date): string {
@@ -88,6 +102,10 @@ export function formatLearnDraft(draft: LearnDraft, since: Date): string {
     `# Draft from 'palizade learn --from-audit': ${draft.events} tools/call event(s) since ${since.toISOString()}.`,
     "# Review every entry before copying it into palizade.yaml. Palizade did not write any file."
   ];
+  if (draft.review.length > 0) {
+    lines.push("# Review first: calls that did not proceed while the tool was classified as unknown.");
+    for (const entry of draft.review) lines.push(`#   ${scalar(entry.server)} / ${scalar(entry.tool)} (${entry.stopped} of ${entry.calls} calls); check its class and argument roles with 'palizade tools'.`);
+  }
   const serverNames = Object.keys(draft.servers);
   if (serverNames.length > 0) {
     lines.push("servers:");
@@ -136,7 +154,9 @@ export function addToolClasses(raw: string, entries: Array<{ server: string; too
   if (document.errors.length > 0) throw new Error(`palizade.yaml does not parse: ${document.errors[0]!.message}`);
   for (const entry of entries) {
     if (!document.hasIn(["servers", entry.server])) throw new Error(`Server '${entry.server}' is not in palizade.yaml.`);
-    document.setIn(["servers", entry.server, "toolClasses", entry.tool], entry.toolClass);
+    const path = ["servers", entry.server, "toolClasses", entry.tool];
+    if (document.hasIn(path)) throw new Error(`Tool class for '${entry.server}/${entry.tool}' is already configured. Re-run learn to refresh the draft.`);
+    document.setIn(path, entry.toolClass);
   }
   return document.toString();
 }

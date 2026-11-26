@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { once } from "node:events";
+import { existsSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AuditLogger, type AuditEvent } from "@palizade/audit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseConfig } from "./config.js";
 import { EgressProxy } from "./egress-proxy.js";
 import { launchUpstream } from "./launch.js";
@@ -61,6 +63,64 @@ describe("placeholder expansion", () => {
     expect(plan.missingEnv).toBeUndefined();
     expect(JSON.stringify(describeLaunchForAudit(plan, server))).not.toContain("sk_live_expanded_secret");
     expect(buildLaunchPlan("api", server, { platform: "linux", hostEnv: {} }).missingEnv).toEqual(["API_KEY", "APP_DIR"]);
+  });
+});
+
+describe("unsandboxed environment inheritance", () => {
+  const secrets = {
+    ANTHROPIC_API_KEY: "fake-anthropic",
+    OPENROUTER_API_KEY: "fake-openrouter",
+    GITHUB_TOKEN: "fake-github",
+    AWS_SECRET_ACCESS_KEY: "fake-aws",
+    PALIZADE_LISTENER_TOKEN: "fake-palizade"
+  };
+
+  it.each(["win32", "linux", "darwin"] as const)("defaults old YAML to a minimal child environment on %s", (platform) => {
+    const server = parseConfig("servers:\n  demo: { command: node }\n").servers.demo!;
+    const hostEnv = { ...secrets, PATH: "fake-path", SSH_AUTH_SOCK: "fake-socket" };
+    expect(buildLaunchPlan("demo", server, { platform, hostEnv }).env).toEqual({ PATH: "fake-path" });
+    expect(server).toMatchObject({ inheritEnv: "minimal", passEnv: [] });
+  });
+
+  it.each(["win32", "linux", "darwin"] as const)("expands templates and passes only selected names on %s", (platform) => {
+    const server = {
+      command: "${APP_COMMAND}", args: ["${ARG_VALUE}"], passEnv: ["PROJECT_ENV", "UNSET_VAR", "PALIZADE_LISTENER_TOKEN"],
+      env: { DECLARED: "fake-declared", RESOLVED: "${ARG_VALUE}", PATH: "fake-override", PALIZADE_EXPLICIT: "fake-reserved" }
+    };
+    const hostEnv = platform === "win32"
+      ? { ...secrets, Path: "fake-path", project_env: "fake-selected", app_command: "node", arg_value: "fake-template", SystemRoot: "fake-root" }
+      : { ...secrets, PATH: "fake-path", PROJECT_ENV: "fake-selected", APP_COMMAND: "node", ARG_VALUE: "fake-template", HOME: "fake-home" };
+    const plan = buildLaunchPlan("demo", server, { platform, hostEnv });
+    expect(plan).toMatchObject({ command: "node", args: ["fake-template"] });
+    expect(plan.env).toEqual({ PATH: "fake-override", PROJECT_ENV: "fake-selected", DECLARED: "fake-declared", RESOLVED: "fake-template", ...(platform === "win32" ? { SystemRoot: "fake-root" } : { HOME: "fake-home" }) });
+    const audit = describeLaunchForAudit(plan, server);
+    expect(audit).toMatchObject({ envMode: "minimal", envKeys: Object.keys(plan.env).sort() });
+    expect(JSON.stringify(audit)).not.toContain("fake-template");
+  });
+
+  it("allows explicit secrets and full mode while excluding Palizade variables", () => {
+    const server = { command: "node", args: [], env: {}, inheritEnv: "full" as const };
+    const plan = buildLaunchPlan("demo", server, { platform: "linux", hostEnv: secrets });
+    expect(plan.env).toEqual({ ANTHROPIC_API_KEY: "fake-anthropic", OPENROUTER_API_KEY: "fake-openrouter", GITHUB_TOKEN: "fake-github", AWS_SECRET_ACCESS_KEY: "fake-aws" });
+    expect(buildLaunchPlan("demo", { ...server, inheritEnv: "minimal", passEnv: ["GITHUB_TOKEN"] }, { platform: "linux", hostEnv: secrets }).env).toEqual({ GITHUB_TOKEN: "fake-github" });
+    expect(describeLaunchForAudit(plan, server)).toMatchObject({ envMode: "full", envKeys: Object.keys(plan.env).sort() });
+    expect(sandboxStatus({ demo: server }, "linux", secrets)[0]?.detail).toMatch(/WARNING.*env=full.*GITHUB_TOKEN/u);
+    expect(sandboxStatus({ demo: { ...server, inheritEnv: "minimal", passEnv: ["GITHUB_TOKEN"] } }, "linux", secrets)[0]?.detail).toMatch(/env=minimal.*GITHUB_TOKEN/u);
+  });
+
+  it("prints one migration hint only when a minimal child exits with an error", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      for (const [inheritEnv, code] of [["minimal", 1], ["full", 1], ["minimal", 0]] as const) {
+        const { child } = await launchUpstream("demo", { command: process.execPath, args: ["-e", `process.exit(${code})`], env: {}, inheritEnv }, { resolveCommand: (command) => command });
+        expect((await once(child, "close"))[0]).toBe(code);
+      }
+      const hints = stderr.mock.calls.filter(([message]) => String(message).includes("passEnv"));
+      expect(hints).toHaveLength(1);
+      expect(hints[0]?.[0]).toMatch(/inheritEnv: full/u);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
 
@@ -143,18 +203,60 @@ describe("sandbox egress proxy", () => {
 });
 
 describe("spawn audit", () => {
+  const nodeDirectory = dirname(process.execPath);
+  const npxShim = join(nodeDirectory, "npx.cmd");
+  it.runIf(process.platform === "win32" && existsSync(npxShim))("starts the Windows Node npx shim without a shell", async () => {
+    const { child } = await launchUpstream("npx", {
+      command: npxShim,
+      args: ["--version"],
+      env: {}
+    }, { resolveCommand: (command) => command });
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+    const [code] = await once(child, "close");
+
+    expect(code).toBe(0);
+    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it.runIf(process.platform === "win32")("passes Windows npx arguments with spaces, quotes and shell characters intact", async () => {
+    const cwd = await tempDir();
+    const bin = join(cwd, "node_modules", "npm", "bin");
+    await mkdir(bin, { recursive: true });
+    await copyFile(process.execPath, join(cwd, "node.exe"));
+    await writeFile(join(bin, "npx-cli.js"), "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
+    const args = ["two words", 'say "hello"', "a&b", "a^b", "%PALIZADE_TEST_VAR%", 'space \\"quoted" & ^ %PALIZADE_TEST_VAR%'];
+    const { child } = await launchUpstream("npx", {
+      command: join(cwd, "npx.cmd"), args, cwd, env: {}
+    }, { resolveCommand: (command) => command });
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+    expect((await once(child, "close"))[0]).toBe(0);
+    expect(JSON.parse(stdout)).toEqual(args);
+  });
+
+  it("rejects when the configured executable cannot be started", async () => {
+    await expect(launchUpstream("missing", {
+      command: "palizade-test-command-that-does-not-exist",
+      args: [],
+      env: {}
+    }, { resolveCommand: (command) => command })).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("logs every spawn with masked arguments and no environment values", async () => {
     const events: AuditEvent[] = [];
     const audit = new AuditLogger([{ write: async (event) => { events.push(event); } }]);
-    const { child } = await launchUpstream("plain", {
+    const { child, plan } = await launchUpstream("plain", {
       command: process.execPath,
-      args: ["-e", "process.exit(0)", "--api_key=sk-test-should-not-leak"],
+      args: ["-e", "process.exit(0)", "--", "--api_key=sk-test-should-not-leak"],
       env: { SERVICE_PASSWORD: "hunter2hunter2" },
       sandbox: "none"
     }, { resolveCommand: (command) => command, audit, sessionId: "s1" });
-    await new Promise((resolveExit) => child.on("exit", resolveExit));
+    expect((await once(child, "close"))[0]).toBe(0);
     const spawn = events.find((event) => event.method === "process/spawn");
-    expect(spawn?.metadata?.spawn).toMatchObject({ sandbox: "none", envKeys: ["SERVICE_PASSWORD"] });
+    const envKeys = Object.keys(plan.env).sort();
+    expect(envKeys).toContain("SERVICE_PASSWORD");
+    expect(spawn?.metadata?.spawn).toMatchObject({ sandbox: "none", envMode: "minimal", envKeys });
     expect(JSON.stringify(spawn)).not.toContain("sk-test-should-not-leak");
     expect(JSON.stringify(spawn)).not.toContain("hunter2hunter2");
   });

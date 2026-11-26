@@ -8,17 +8,65 @@ Agents often treat web pages, emails, files, tickets, and tool output as if they
 
 Runs locally on Windows, macOS and Linux. Requires Node.js 22.13 or newer.
 
+## Where It Stands
+
+Palizade is a research preview built by one student. Here is what has been shown so far and what has not.
+
+What it does. It remembers where text came from. When text from a web page, an MCP server or a file outside your workspace later shows up in a tool call that sends data out, runs code or changes a sensitive file, Palizade blocks the call or asks you first. It works as a proxy in front of MCP servers and as hooks for the built in tools of Claude Code, Cursor, Codex and Gemini CLI, including PowerShell on Windows.
+
+What has been shown.
+
+- A scripted regression set of 50 attacks and 25 benign cases. With the default policy none of the 50 attacks succeed, even if every approval prompt is granted. One benign case out of 25 gets an approval prompt and none is blocked. The strict policy blocks 8 of the 25 benign cases and prompts on all 25. These cases were written alongside the rules, so treat them as a regression check and not as a benchmark. Run `pnpm eval:asr`.
+- A scripted replay of AgentDojo, shown in the table below. It replays a fixed agent that always obeys the injection. No language model is involved. With approvals refused, none of the 949 scripted attacks get through and 74 of 97 clean tasks still complete. If a user grants every approval prompt, 71 of the 949 get through.
+- Live runs in Claude Code on Windows with a local test page, a fake key and a local collector. With Palizade off, the model followed a setup step on the page and sent the fake key to the collector. With Palizade on, nothing reached the collector in any run. On the first version of the page the model never tried the upload, because Palizade's earlier blocks and prompts reached it first and it held back. The page was then set up so the upload is the first shell step. On that page, in two of four runs the model issued the upload command and Palizade denied it. In the other two the model did not try. That is four runs on one model, so it shows the block happening and says nothing about how often. See [the run notes](docs/live-demo-run.md) and [the demo folder](demo/claude-code-windows/README.md).
+- Reviews by a second model after each round of changes. Each review found real problems. The findings that had to be fixed were fixed, and what was left open is in the limits below.
+
+What has not been shown.
+
+- No benchmark run with a live model. The harness for one is in `eval/agentdojo/live` and has only been run against a scripted stub.
+- No measurement against attackers who know how Palizade works and adapt to it.
+- No testing on macOS or Linux in this round. The work here was done on Windows.
+
+Limits you should know before relying on it.
+
+- Palizade runs as you, and so does the agent. It is built to stop an agent that was misled by something it read. It is not a sandbox against a process that sets out to defeat it. An agent that tries can delete the hook settings, edit state files, or approve its own request through the local approval page. The policy asks before the obvious forms of this, and a seal can pin the policy files, but none of that holds against a determined process running under your account.
+- It tracks copied text and recorded destinations. Text that the model rewrites in its own words is only caught by the weaker timing rules, which ask for a few turns after untrusted content was seen.
+- A command copied from a page is blocked, with one exception. A single plain command from a short list of test, lint and inspection commands asks first. The list is in [copied-commands.ts](packages/core/src/copied-commands.ts). A test command runs whatever code is in the workspace, so the prompt says its scripts were not checked. A chained command is blocked even when each part is on the list, and the same test command asks again each time while the page is still remembered. After a page that scores as a strong injection, even listed commands are blocked for a while. A short command that the page only mentions inside a sentence is often not recognized as copied at all and then runs like any command the agent typed. The strict and coding agent policies block every copied command without asking. This is the main cost in daily use, and you will notice it right after the agent reads documentation from the web.
+- When outside text is written into a workspace file and Palizade recognizes the text, the next command that can run code asks once. A command that names the written file is blocked. Text written in pieces too short to match is not recognized. That works as described in Claude Code. Codex and Gemini CLI cannot show a prompt from a hook. There, after outside text is written into a code or build file, commands that run code are blocked for up to 15 minutes. After it is written into any other file, only a command that names that file is blocked. Cursor does not report file writes to hooks, so the rule does not apply there.
+- Shell commands are read with pattern rules, not a real shell parser. This is a best effort layer on top of the provenance tracking, which is the main idea. Unusual spellings of a host or a path can be missed, for example a host inside a UNC path.
+- Very long tool results are only partly fingerprinted. Palizade then falls back to asking for a while after such a result arrives from outside the workspace.
+- Inside your workspace, files you read are tracked lightly by default so that normal read, edit and test work is not interrupted. Files that the agent downloads, clones or unpacks during the session are treated as outside text when Palizade recognizes the command. A repository you cloned yourself before the session, or a file fetched by a script, is trusted like the rest of the workspace. Set `hooks.readTaint: all` when you look at a repository you do not trust.
+
+The longer list is under [What Palizade Does Not Protect](#what-palizade-does-not-protect).
+
 ## Get Started
 
-Install it globally, so the path written into your client config stays valid (an `npx` cache can be cleared), then run setup for your client from the folder where you want `palizade.yaml` to live:
+npm currently serves Palizade `0.3.2`. The features below are in the unreleased `0.4.0`. Run these commands from the root of a source checkout with pnpm installed.
 
 ```bash
-npm install -g palizade
-mkdir -p ~/.palizade-home && cd ~/.palizade-home
-palizade setup claude-code --lock      # or claude-desktop, cursor, codex
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm build
+node packages/cli/dist/index.cjs --version
 ```
 
-`setup` creates `palizade.yaml` with the default policy if there is none, wraps every MCP server in the client's config, installs the native tool and prompt hooks (Claude Code, Cursor, Codex), and with `--lock` starts each new server once to approve its current tool list. Add `--dry-run` to see the changes first, `--project` to use the repository's own client config, and restart the client afterwards. The steps below do the same thing one at a time.
+Save the absolute path to the built CLI, then run setup from the folder where you want `palizade.yaml` to live. Use `node` and the same CLI path for the other `palizade` commands below.
+
+```bash
+palizade_cli="$PWD/packages/cli/dist/index.cjs"
+mkdir -p ~/.palizade-home && cd ~/.palizade-home
+node "$palizade_cli" setup claude-code --lock      # or claude-desktop, cursor, codex
+```
+
+In Windows PowerShell, run these commands from the root of the source checkout after building.
+
+```powershell
+$palizadeCli = (Resolve-Path 'packages/cli/dist/index.cjs').Path
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE/.palizade-home" | Out-Null
+Set-Location "$env:USERPROFILE/.palizade-home"
+node $palizadeCli setup claude-code --lock
+```
+
+`setup` creates `palizade.yaml` with the default policy if there is none, wraps supported MCP servers in the client's config, installs the native tool and prompt hooks, and with `--lock` starts each newly wrapped server once to approve its tool list. Use `--dry-run` to preview changes or `--project` to keep the MCP and hook settings in the workspace. Restart the client afterwards.
 
 ### Step by step
 
@@ -85,7 +133,7 @@ palizade doctor --client <name>    # shows which servers and tools are protected
 
 Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` (Claude Code) and `${env:NAME}` (Cursor) are filled from your environment when Palizade starts the server or connects to its url. A header whose variable is unset is left out; a url whose variable is unset is an error. Remote servers with no static credentials are skipped, because they usually sign in with OAuth, which the stdio wrapper cannot do. In Claude Code and Codex the hooks cover them instead: `install-hooks` matches `mcp__*` tools, so calls to servers Palizade does not wrap (such as a Linear, Notion or Atlassian remote) are checked against the shared taint store as `trust: untrusted` (`hooks.mcpTrust`), recognized by the catalog from the client's own config, while wrapped servers are left to their proxy. Pass `--include-remote` to wrap a remote that needs no sign in. Servers using the legacy `sse` or `ws` transports are skipped with a message, since Palizade proxies stdio and Streamable HTTP only.
 
-## Held Out Evaluation (AgentDojo)
+## Scripted Replay (AgentDojo)
 
 [AgentDojo](https://github.com/ethz-spylab/agentdojo) v1.2.2 with the `important_instructions` attack, replaying each suite's scripted ground truth (an agent that does the user's task and then fully obeys the injection) through the default preset with every tool untrusted, and refusing every approval prompt:
 
@@ -98,7 +146,7 @@ Placeholders in imported entries keep working: `${NAME}` and `${NAME:-default}` 
 
 This is a replay, not an LLM run, and the utility cost is real: tasks that send to an address read from untrusted content are blocked like attacks, unless you typed that address yourself. The last row's credential rule was found by looking at banking traces, so only the travel suite is still unseen; zero means none of these scripted attacks got through, not that every injection is stopped. Method, per suite numbers, approval modes and limits: [results/agentdojo](results/agentdojo/README.md). Reproduce with `pnpm eval:agentdojo`.
 
-## Held Out Evaluation (MCPTox)
+## Recorded Call Replay (MCPTox)
 
 [MCPTox](https://github.com/zhiqiangwang4/MCPTox-Benchmark) (AAAI-26) hides instructions in the description of an extra tool so the model misuses the server's other tools. Replaying the tool calls real models made in that benchmark, with every tool classified:
 
@@ -207,19 +255,32 @@ That smoke uses the official `@modelcontextprotocol/server-filesystem` server an
 
 ## Regression Check (In Sample)
 
-These are not benchmark results. Palizade's ASR harness translates a stratified sample of InjecAgent cases into MCP source-tool responses and sink-tool calls. The table below is generated by `pnpm eval:asr` and stored in [results/asr_table.md](results/asr_table.md).
+Palizade's ASR harness replays a stratified sample of InjecAgent cases as mock MCP source responses and sink calls. No model runs in this check. Every sink call is scripted, so the table shows what the policy does when an agent fully obeys the injection. `pnpm eval:asr` generates the table. [Results and metric definitions](results/asr_table.md).
 
-| Category | N | ASR (off) | ASR (default) | ASR (strict) |
-|---|---:|---:|---:|---:|
-| Direct injection | 15 | 100% | 0% | 0% |
-| Indirect/tool injection | 25 | 100% | 0% | 0% |
-| Encoded/obfuscated | 10 | 100% | 0% | 0% |
-| Total attacks | 50 | 100% | 0% | 0% |
-| Benign FP rate | 25 | 0% | 0% | 0% |
+| Category | Measure | Off | Default | Strict |
+|---|---|---:|---:|---:|
+| Direct injection | ASR with approvals denied | 15/15 (100%) | 0/15 (0%) | 0/15 (0%) |
+| Direct injection | ASR with approvals granted | 15/15 (100%) | 0/15 (0%) | 0/15 (0%) |
+| Direct injection | Attacks needing approval | 0/15 (0%) | 0/15 (0%) | 0/15 (0%) |
+| Indirect/tool injection | ASR with approvals denied | 25/25 (100%) | 0/25 (0%) | 0/25 (0%) |
+| Indirect/tool injection | ASR with approvals granted | 25/25 (100%) | 0/25 (0%) | 0/25 (0%) |
+| Indirect/tool injection | Attacks needing approval | 0/25 (0%) | 0/25 (0%) | 0/25 (0%) |
+| Encoded/obfuscated | ASR with approvals denied | 10/10 (100%) | 0/10 (0%) | 0/10 (0%) |
+| Encoded/obfuscated | ASR with approvals granted | 10/10 (100%) | 0/10 (0%) | 0/10 (0%) |
+| Encoded/obfuscated | Attacks needing approval | 0/10 (0%) | 0/10 (0%) | 0/10 (0%) |
+| Total attacks | ASR with approvals denied | 50/50 (100%) | 0/50 (0%) | 0/50 (0%) |
+| Total attacks | ASR with approvals granted | 50/50 (100%) | 0/50 (0%) | 0/50 (0%) |
+| Total attacks | Attacks needing approval | 0/50 (0%) | 0/50 (0%) | 0/50 (0%) |
+| Benign | Hard blocked with approvals granted | 0/25 (0%) | 0/25 (0%) | 8/25 (32%) |
+| Benign with a sink call | Hard blocked with approvals granted | 0/8 (0%) | 0/8 (0%) | 8/8 (100%) |
+| Benign | Disrupted with approvals denied | 0/25 (0%) | 1/25 (4%) | 25/25 (100%) |
+| Benign | Any approval prompt | 0/25 (0%) | 1/25 (4%) | 25/25 (100%) |
 
-Replay verification sample: 10; mismatches: 0.
+Default and strict each hard blocked all 50 attacks. Default hard blocked 0 of 25 benign runs and prompted on 1. Strict would still hard block 8 of 25 benign runs with approvals granted, including all 8 with a sink call. Strict prompted on all 25 benign runs, so denying approvals would disrupt all 25.
 
-Caption: Derived from [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent), [Zhan et al., ACL 2024 Findings](https://arxiv.org/abs/2403.02691), pinned local snapshot `f19c9f2c79a41046eb13c03c51a24c567a8ffa07`, translated to MCP tool-call format with seed `424242`. This is not a run of the original benchmark. Of 225 total replay runs, 0 were classified as model refusals and 100 were Palizade blocks. **These figures are in-sample.** An earlier run let two attacks through (4% default, 2% strict). Inspecting them showed a bug in taint fingerprinting: fixed-stride substring windows only matched a verbatim copy when it sat at the same offset mod 24 in the source response and the sink argument. Fingerprints now use winnowing, which is position independent and is tested outside this corpus in `packages/taint/src/alignment.test.ts`. Because the fix came from looking at this corpus, a held-out set is needed before these numbers mean more than "no known misses". See [NOTES.md](NOTES.md) for methodology, inferred sink arguments, and benign fixture caveats.
+Of 225 replays, 108 ended in a hard block. The model refusal label is for runs with no sink attempt, no hard block and no prompt, and 0 runs received it, which is expected because the sink calls are scripted. Replay verification checked 11 runs and found 0 mismatches.
+
+The fixtures use seed `424242` and InjecAgent snapshot `f19c9f2c79a41046eb13c03c51a24c567a8ffa07`. These rates describe the same sample that exposed a bug in taint fingerprint alignment. A separate test covers the winnowing fix. [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent), [Zhan et al., ACL 2024 Findings](https://arxiv.org/abs/2403.02691), [fixture notes](NOTES.md), [alignment test](packages/taint/src/alignment.test.ts).
 
 ## Demos
 
@@ -275,7 +336,7 @@ Operate a running setup:
 
 - `palizade status [--json]` shows each server's transport, configured and last seen protocol era, lock state and sandbox; the policy file and hash; taint record counts (normal and persistent); quarantined sessions; sessions where the Rule of Two is armed (untrusted and sensitive content both seen); and the last 10 blocks.
 - `palizade policy check [file]` validates a policy before you deploy it: schema and unknown keys (with a "did you mean" hint), rules that can never run because an earlier rule matches everything, conditions that can never be true (`labels_any: []`, `detector_score_gte` above `detector_score_lt`, an invalid `argument_regex`), and `server` or `tool` names that are not in `palizade.yaml` or `palizade.lock`. It exits 1 on errors, and on warnings too with `--strict`.
-- `palizade learn --since 7d` prints a draft YAML of tool classes and allowlist entries observed in audit, and does not suggest destinations that were only seen in blocked calls or with tainted data. `--session <id>` limits it to one session. For a tool Palizade saw as unknown it proposes a class from the locked tool's name, description and schema, as if you trusted the server (Palizade does not use an untrusted server's description by itself). `--write` then shows the proposals and adds them to `palizade.yaml` as `toolClasses` only if you answer yes at the terminal, keeping your comments and writing a `.bak` first. Without `--write` it never writes a file.
+- `palizade learn --since 7d` prints draft classes and allowlist entries from audit and ranks unknown tools by calls that did not proceed. `--session <id>` limits it to one session. Check these tools with `palizade tools <server>`, which shows configured and catalog argument roles alongside suggestions from locked schemas. `learn --write` adds proposed classes based on approved tool snapshots after terminal confirmation, keeping comments and writing a `.bak` first. Review argument roles before adding them to `palizade.yaml`.
 - Edits to `palizade.yaml`, the policy file and `palizade.allow.yaml` are picked up by running `wrap` and `serve` processes within about a second. An invalid edit is rejected: the previous version keeps running, the failure is audited and printed on stderr with the YAML path and a fix hint. Turn this off with `reload: { enabled: false }`; change the poll interval with `reload.intervalMs`.
 - For SIEM ingestion, `metrics: { jsonl: .palizade/metrics.jsonl }` writes one line per decision with counters only (no payloads), rotating at `metrics.maxBytes` (default 64 MiB).
 
@@ -285,7 +346,7 @@ Common Windows and client gotchas:
 - If Palizade is launched from a different working directory, pass `-c <absolute path to palizade.yaml>`.
 - Claude Desktop stores MCP config in `claude_desktop_config.json`.
 - Claude Code uses `.claude.json` / `claude mcp add`; its `claude mcp add` parsing can mis-handle `-c`, so use a `.cmd` wrapper that pins the config path, as shown in [examples/claude-code-fetch-demo.md](examples/claude-code-fetch-demo.md).
-- Headless clients do not have an interactive terminal. Use `approvals.mode: localhost` and keep `http://127.0.0.1:32145/` open for interactive approval flows.
+- For headless clients, use `approvals.mode: localhost`. If the browser does not open, use the inbox link printed where you launched Palizade or saved in `~/.palizade/run/<config hash>/pending-approval.url`.
 - If the model reports a tool failure that begins with `Palizade blocked this tool call`, the upstream tool is not broken. Palizade returned an MCP `isError` result because policy blocked the action.
 
 If `doctor` says no config exists:
@@ -296,18 +357,18 @@ No palizade.yaml found in current directory. Run 'palizade init' first, or pass 
 
 ## What Palizade Does Not Protect
 
-- Palizade only guards traffic through MCP servers it wraps, plus native tool hooks where `palizade install-hooks` is installed (Claude Code PreToolUse/PostToolUse, Cursor beforeShellExecution/beforeMCPExecution, Codex PreToolUse). Native tools without installed hooks remain unprotected, and shell parsing is heuristic — it extracts URLs, hosts, redirect targets, and suspicious constructs but is not a shell parser.
+- Palizade only guards traffic through MCP servers it wraps, plus native tool hooks where `palizade install-hooks` is installed (Claude Code PreToolUse, PostToolUse and UserPromptSubmit, Cursor shell and MCP events before and after execution, Codex and Gemini CLI tool events before and after execution). Native tools without installed hooks remain unprotected, and shell parsing is heuristic — it extracts URLs, hosts, redirect targets, and suspicious constructs but is not a shell parser.
 - It does not protect against a malicious MCP client or a compromised host OS.
 - Pattern-based secret and PII detection misses obfuscated, split, transformed, or custom secrets. See [docs/detector-coverage.md](docs/detector-coverage.md).
 - Taint matching uses observable fragments/tokens, lightweight SimHash and temporal evidence. Rule of Two gates paraphrased remote/memory actions after both exposure flags are set; it does not provide unrestricted semantic matching.
 - Outbound windows are process-local. Splits across wrapper/hook processes or independently padded encoded shards can evade concatenation; the later adaptive evaluation must measure these cases.
 - Critical paths are checked against the local filesystem at decision time. They do not enforce a malicious server's actual I/O or prevent subsequent symlink races. Unknown edit formats cannot produce a complete approval diff.
 - Client-rendered side effects such as automatically fetched Markdown images are outside observable proxy/hook traffic.
-- Input-required gating currently covers tool results; prompt/resource input-required handlers, full discover schemas, structured string constraints and listener inbound parameter-header disagreement remain limited. The [integration report](docs/v0.4-report.md) distinguishes these gaps from tested behavior.
-- Substring fingerprints cover all of a tool response up to about 17 KB; for longer responses they cover the first and last 8 KB or so. Text copied from the middle of a long response is caught only by token, fuzzy, or temporal matching. Urls, email addresses and other tokens are extracted from the whole response.
+- Input-required gating currently covers tool results; prompt and resource input-required handlers, full discover schemas, structured string constraints, and parameter header checks for unknown tools remain limited. The [integration report](docs/v0.4-report.md) distinguishes these gaps from tested behavior.
+- Substring fingerprints cover all of a tool response up to about 17 KB; for longer responses they cover the first and last 8 KB or so. Text copied from the middle of a long response is caught only by token, fuzzy, or temporal matching. Urls, email addresses and other tokens are extracted from the whole response. When such a long response comes from outside the workspace, Palizade also asks before sink calls for a while afterwards.
 - The in sample benign corpus is small and synthetic: 17 of its 25 fixtures contain no sink call and cannot produce a false positive. The AgentDojo replay is the better utility measure, and shows the real cost: a task that sends to an address it read from untrusted content is blocked like an attack.
-- Streamable HTTP is supported for both protocol eras, but request-scoped SSE notifications from a 2026-07-28 upstream are relayed to the client only when the client asks for `text/event-stream`; a JSON-only client receives the final response and audit still records every upstream notification.
-- The transparent listener shares one upstream session per configured server: several legacy-era clients cannot each hold their own `Mcp-Session-Id` through a single listener. Use `palizade wrap` (one bridge process per client) when that matters.
+- Streamable HTTP is supported for both protocol eras: POST SSE notifications and legacy server requests from upstream are inspected for taint and policy and relayed in order when the client accepts `text/event-stream`; clients requesting JSON only receive the final response while inspection, audit, and taint recording still run, and POST stream resumption is not supported.
+- The listener gives legacy clients distinct MCP sessions. Stateless clients without a session ID get request-local replies and share policy state if they use the same endpoint and upstream credentials. Use distinct credentials or listener instances to separate that state. See [HTTP session routing](docs/architecture.md#streamable-http-transport).
 - Tool name collision and shadowing checks only compare servers wrapped by Palizade that share one state directory, and only from the moment each server has answered `tools/list`. The server that lists a shared name first keeps it until that server restarts; after that both copies are withheld until one is renamed or removed from `palizade.yaml`.
 - Sandboxing is opt-in and limited by its backend. A network `allowlist` is only enforced with seatbelt, or with docker plus a `sandbox.dockerNetwork` internal network; other combinations are refused unless you set `advisoryNetwork: true`, in which case the server could ignore the proxy; seatbelt restricts writes and network but not reads; Palizade does not sandbox `url` servers or the client itself, and it does not harden the docker daemon or the image you choose.
 - Hot reload only applies settings the interception engine reads per message (policy, egress allowlist and mode, limits, trust, tool classes and other per-server classification). Changes to stores, sinks, detectors, transport or the upstream launch are reported and need a restart. A message already being processed when a reload lands may evaluate its later rules against the new policy. `palizade learn` output is a starting point built from what was observed, not a reviewed policy.
@@ -360,7 +421,7 @@ Preset guidance:
 | --- | --- |
 | `policies/audit-only.yaml` | You want to observe what Palizade would flag without enforcement. |
 | `policies/interactive.yaml` | A human should be able to approve legitimate tainted sink calls. |
-| `policies/default.yaml` | Hard-block general copied-content sinks, with explicit memory approval and session gates. |
+| `policies/default.yaml` | Hard-block general copied-content sinks, with explicit memory approval and session gates. Workspace edits with outside text are allowed and gated at the next code run. A copied command from the short list asks. |
 | `policies/strict.yaml` | You want stricter metadata, output, unknown-tool, taint, and egress enforcement. |
 | `policies/egress.yaml` | You want the default posture plus opt-in secret/PII outbound controls. |
 | `policies/coding-agent.yaml` | Add shell and tainted critical-write protection to default. |
@@ -376,9 +437,9 @@ v0.4 behavior changes:
 - Tainted memory writes require approval in default, interactive and egress; strict blocks them. Approved observable provenance persists beyond TTL. Default's generic copied-content sink block remains, with this explicit memory exception.
 - Metadata collisions/shadowing are blocked and hidden Unicode is sanitized; audit-only logs those findings. Common built-in names are labelled without being blocked. Lock approval stores snapshots, prints escaped diffs and asks in a TTY (`--yes` skips the prompt).
 - All enforcing presets approval-gate elicitation. Strict now blocks strong suspicious output before sanitization. Destination/query, secret and split hard blocks precede generic approval/redaction rules. Egress exceptions cannot bypass critical, temporal, quarantine, rate or loop gates.
-- `egress.mode` remains `open` by default. Use `approve_new` with default for allow once/always/deny; remembered grants go to the separate `palizade.allow.yaml`. Strict blocks new destinations even with open mode. Typed IDs use `egress.allowlist.destinations`, for example `channel_id:C123`.
+- `egress.mode` remains `open` by default. Use `approve_new` with the default policy to approve new destinations. Permanent grants go to `palizade.allow.yaml` when unsealed. While sealed, destination grants stay in memory for the current session. Strict blocks new destinations even with open mode. Typed IDs use `egress.allowlist.destinations`, for example `channel_id:C123`.
 - Running wrap/serve processes reload valid policy/config/allowlist edits by default. Invalid edits keep the last valid version and are audited; `reload.enabled: false` restores fail-closed learned-file errors. Startup still rejects invalid files. Schema validation rejects unknown keys with path/line hints.
-- Optional raw audit capture masks observable tainted payloads entirely and masks known sensitive text otherwise. Copied destinations are masked in audit and approvals. Sandboxing remains opt-in, metrics remain off, and existing stdio configs keep working.
+- Optional raw audit capture masks observable tainted payloads entirely and masks known sensitive text otherwise. Copied destinations are masked in audit and approvals. Sandboxing remains optional and metrics remain off. Existing stdio configs still load. Servers that rely on inherited variables may need `passEnv`.
 
 ## Commands
 
@@ -422,7 +483,7 @@ palizade doctor [--client <name>]
 
 ### Upgrading
 
-New releases add rules to the shipped presets, but your `policies/<preset>.yaml` is your copy and is never overwritten. `palizade doctor` says when it is missing rules, and `palizade policy upgrade` adds them in the right place, keeping your own rules, edits and comments (a `.bak` is written first). `doctor --client <name>` also reports hook entries that are missing or out of date; `palizade install-hooks <client>` updates them in place.
+New releases add rules to the shipped presets, but your `policies/<preset>.yaml` is your copy. `palizade doctor` says when rules are missing, and `palizade policy upgrade` adds them while keeping your rules, edits, comments, and a `.bak` backup. `doctor --client <name> [--project]` reports whether the current hook definition has been observed executing. Reinstall existing hooks to enable that evidence. For project installs, `doctor` warns when user-level Palizade hooks may also run.
 
 ### Canary secrets
 
@@ -430,20 +491,32 @@ New releases add rules to the shipped presets, but your `policies/<preset>.yaml`
 
 ### Sealing the policy
 
-`palizade seal` records hashes of `palizade.yaml` and the policy file. If either changes afterwards, for example through a branch checkout or a script the agent ran, every hooked call asks (denies on Codex and Gemini CLI) until you run `palizade seal` again. `palizade seal --check` and `palizade doctor` report the state. It is off until you seal once, and it only covers hooks, not wrapped MCP servers.
+`palizade seal` records hashes of the selected config, policy, learned allowlist and tool lockfile. It records when the allowlist or lockfile is missing. The default checkpoint is `.palizade/seal.json` next to the config file. If it is absent, Palizade checks the old state directory location and `doctor` reports when it finds a seal there. Older seals need an explicit `palizade seal` after you review the four files.
+
+Native hooks ask on drift, or deny on Codex and Gemini CLI. `wrap` and `serve` refuse an invalid seal at runtime startup and audit blocked MCP requests if drift appears during a session. Sealed wrappers enforce the verified config, policy, learned allowlist and lockfile they loaded at startup. After approving and resealing changes, restart the wrapper or listener to load them.
+
+For a managed checkpoint, set `PALIZADE_SEAL_PATH` to an absolute path in an existing directory outside the config directory, workspace working directory and `stateDir`. Set it in the trusted launcher environment for the agent client, hook daemon if used, and MCP wrapper or listener. Run `palizade -c <config> seal` with the same environment and confirm with `palizade -c <config> seal --check`. The managed seal is required once configured. A missing, unreadable or mismatched checkpoint denies native tool calls and blocks proxy enforcement paths.
+
+Give the runtime read access to the checkpoint and reserve writes to the file and its directory for the operator. Use OS permissions or an enforced sandbox when the agent runs under the operator's account. A seal inside the workspace protects against accidental edits. An agent with write access can replace or remove it. Keep the Palizade executable, launcher environment and hook registration under operator control for the managed seal to be trustworthy.
+
+### Pruning audit logs
+
+`palizade audit prune --older-than 30d` prunes the JSONL log. It coordinates writes made by this version of Palizade using an exclusive `<audit.jsonl>.lock` file. It preserves chain links that running writers can still extend. Use the same audit path and current version for all writers. If a crash leaves the lock behind, stop all Palizade processes using that log and remove the stale lock before retrying. `palizade audit verify` checks each available store's retained chains. Proof that the stores contain every event requires an independently protected checkpoint.
 
 ### Checking a machine
 
 `palizade scan` reads every MCP client config it knows (Claude Desktop, Claude Code user, local and project scope, Cursor user and project) plus `palizade.yaml`, and reports servers that are not routed through Palizade, credentials written in plain text, packages and images run without a fixed version, plain http urls, legacy transports, and locked tool descriptions with hidden text, cross server references or instruction like wording. It also reads agent instruction files in the project and your home folder (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.cursor/rules`, `.claude/commands`, `.claude/agents`, `.claude/skills`, Copilot instructions) and reports invisible characters (`rules-hidden-unicode`) and instructions that look like data theft or hiding actions from the user (`rules-suspicious-instruction`). It starts no servers. `--json` and `--fail-on medium` make it usable in CI. To check a repository's committed MCP configs (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`) for leaked credentials and unpinned packages on every push:
 
+Build Palizade from source as shown in Get Started. Set `PALIZADE_CLI` in the job environment to the absolute path to the built `packages/cli/dist/index.cjs`. Run the scan from the repository you want to check.
+
 ```yaml
-- run: npx -y palizade@0.4.0 scan --project-only --skip unprotected --fail-on low
+- run: node "${{ env.PALIZADE_CLI }}" scan --project-only --skip unprotected --fail-on low
 ```
 
 `--format sarif` prints SARIF 2.1.0 for the same pipelines as other scanners, such as GitHub code scanning. Each check is a rule, severity maps to `error` (high), `warning` (medium) and `note` (low, info), and files in the current directory get paths relative to it. Scan findings have no line numbers, so results point at the file. `--fail-on` still sets the exit code; run the upload step with `if: always()`.
 
 ```yaml
-- run: npx -y palizade@0.4.0 scan --project-only --format sarif > palizade.sarif
+- run: node "${{ env.PALIZADE_CLI }}" scan --project-only --format sarif > palizade.sarif
 - uses: github/codeql-action/upload-sarif@v3
   if: always()
   with: { sarif_file: palizade.sarif }
@@ -465,12 +538,12 @@ Hooks reuse the same SQLite taint store, policy, and audit as the proxy: Bash/Sh
 
 | Client | Status | Payload source for the contract tests |
 |---|---|---|
-| Claude Code | payload tested only | the hooks reference's own examples |
-| Gemini CLI | payload tested only | the field lists in the hooks reference (it has no full example) |
-| Cursor | payload tested only | the fields Palizade's adapter reads; not rechecked against Cursor's docs |
-| Codex | payload tested only | the fields Palizade's adapter reads; not rechecked against Codex's docs |
+| Claude Code | Payload tests and a scripted Windows client run | The hooks reference examples |
+| Gemini CLI | Payload tests and a scripted Windows client run | The hooks reference field lists |
+| Cursor | Payload and Windows command-launch tests | The fields consumed by the adapter |
+| Codex | Payload tests and a scripted Windows client run | The fields consumed by the adapter |
 
-"Payload tested" means `packages/cli/test/hook-contract.test.ts` runs the client's sample payloads through `palizade hook` and checks the exact JSON and exit code for allow, deny, ask, invalid input, a post tool event and a prompt. No client has been run live against Palizade in these tests; a live run needs the client and a model. Sources are noted in `packages/cli/test/hook-payloads/`.
+The payload tests feed sample events through `palizade hook` and check the JSON and exit code. Scripted runs exercise an installed client against a local test provider. See [release verification](docs/release-verification.md) for the results and the separate real-model release gate.
 
 ### Faster hooks: `palizade daemon` (optional)
 
@@ -492,13 +565,19 @@ servers:
       Authorization: "${GITHUB_TOKEN}"
 ```
 
-`palizade wrap <server>` bridges the remote server over stdio so existing client integrations keep working. `palizade serve` runs a transparent local listener at `http://127.0.0.1:32146/mcp/<serverName>`: the upstream is always taken from config (never from request input), client `Authorization` headers are forwarded only to the configured upstream origin (never to redirect targets), `401`/`403`/`WWW-Authenticate` pass through untouched for OAuth discovery, and the listener requires Palizade's own bearer token (generated at `init`, stored at `.palizade/listener.token`, sent as `X-Palizade-Token`). Both protocol eras are supported: 2025-11-25 (initialize, sessions, GET SSE streams) and 2026-07-28 (POST only, `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Param-*` headers, request-scoped SSE).
+`palizade wrap <server>` bridges the remote server over stdio so existing client integrations keep working. `palizade serve` runs a transparent local listener at `http://127.0.0.1:32146/mcp/<serverName>`: `Host` and `Origin` checks run before token authentication or body reads, the upstream is always taken from config (never from request input), client `Authorization` headers are forwarded only to the configured upstream origin (never to redirect targets), `401`/`403`/`WWW-Authenticate` pass through untouched for OAuth discovery, and the listener requires Palizade's own bearer token (generated at `init`, stored at `.palizade/listener.token`, sent as `X-Palizade-Token`). Both protocol eras are supported while rejecting unsupported protocol versions: 2025-11-25 (initialize, sessions, GET SSE streams) and 2026-07-28 (POST only, `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name`/`Mcp-Param-*` headers, request-scoped SSE).
 
 RFC 8707 caveat: forwarded tokens must target the configured upstream resource. Palizade does not mint upstream tokens or act as an OAuth authorization server. The listener has not been validated as an OAuth-terminating gateway; avoiding TLS termination alone does not establish audience compliance. MCP forbids accepting another resource's token and passing it downstream. See the official [authorization requirements](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) and [token-passthrough guidance](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices#token-passthrough).
 
+### Environment for stdio servers
+
+An unsandboxed server uses `inheritEnv: minimal` by default. It receives a small set of system variables for its platform, any host variable names listed in `passEnv`, and values set in `env`. Templates such as `${NAME}` in the command, arguments, or `env` still read from the host environment. The launcher filters out `PALIZADE_*` names even in full mode. `palizade doctor` and the spawn audit show the mode and variable names.
+
+If an existing server depended on an inherited variable, add its name to that server's `passEnv`, for example `passEnv: [GITHUB_TOKEN]`. Use `inheritEnv: full` only if the server needs the broader host environment. If a server exits with an error within five seconds of a minimal launch, Palizade prints a hint with both options. New Codex wrapper installs copy `env_vars` names into `passEnv`. For an existing wrapper, copy the names into `palizade.yaml` and restart it.
+
 ### Sandboxed stdio servers
 
-Stdio servers can optionally be launched inside a sandbox. The default is `none` (unchanged behavior):
+Stdio servers can optionally be launched inside a sandbox. The default sandbox is `none`.
 
 ```yaml
 servers:
@@ -553,7 +632,7 @@ pnpm eval:combined
 - Raw capture requires `audit.captureRawPayloads: true`; observable tainted payloads are replaced by a redaction marker and other text receives known-secret/PII masking.
 - SQLite taint fingerprints are HMAC-protected by `.palizade/taint.key`; the key is local and never printed.
 - Policy evaluation errors fail closed in enforcing presets.
-- Localhost approval is tokenized, one-time, POST-only, loopback-bound, and served from a persistent inbox at `http://127.0.0.1:32145/` by default.
+- The approval inbox listens on loopback and requires a secret link. Decisions use a token for each request and accept only POST requests with a loopback Host and, when present, the inbox Origin. Keep the link private. Anyone who can read the launcher output, the browser URL or the file under the user profile can open the inbox.
 - Unknown tools on untrusted servers are blocked by the default policy; unknown tools on semi-trusted servers require approval; unknown tools on trusted servers are audit-logged.
 
 ## Package Layout

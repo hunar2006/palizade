@@ -2,7 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { daemonEndpoint, parseHookArgs } from "./hook-client.js";
 
@@ -13,6 +13,8 @@ describe("parseHookArgs", () => {
     expect(parseHookArgs(["-c", "/p/palizade.yaml", "hook", "claude-code"])).toEqual({ config: "/p/palizade.yaml", client: "claude-code" });
     expect(parseHookArgs(["--config=/p/x.yaml", "hook", "cursor", "beforeSubmitPrompt", "--session", "s", "--cwd=/w"])).toEqual({ config: "/p/x.yaml", client: "cursor", event: "beforeSubmitPrompt", session: "s", cwd: "/w" });
     expect(parseHookArgs(["hook", "gemini", "BeforeTool"])).toEqual({ config: "palizade.yaml", client: "gemini", event: "BeforeTool" });
+    expect(parseHookArgs(["-c", "/p/palizade.yaml", "hook", "--hook-source", "/p/.codex/hooks.json", "codex"]))
+      .toEqual({ config: "/p/palizade.yaml", hookSource: "/p/.codex/hooks.json", client: "codex" });
     expect(parseHookArgs(["status"])).toBeUndefined();
     expect(parseHookArgs(["hook"])).toBeUndefined();
     expect(parseHookArgs(["hook", "codex", "--verbose"])).toBeUndefined();
@@ -30,9 +32,10 @@ describe("palizade daemon", () => {
     dir = await mkdtemp(join(process.platform === "win32" ? tmpdir() : "/tmp", "pz-"));
     config = join(dir, "palizade.yaml");
     // The daemon's socket and key live under the home directory; keep them inside the test.
-    env = { ...process.env, HOME: dir, USERPROFILE: dir };
+    env = { ...process.env, HOME: dir, USERPROFILE: dir, CODEX_HOME: join(dir, ".codex"), CLAUDE_CONFIG_DIR: join(dir, ".claude") };
     delete env.PALIZADE_NO_DAEMON;
     delete env.PALIZADE_RUN_ID;
+    delete env.PALIZADE_SEAL_PATH;
     expect(spawnSync(process.execPath, [join(dist, "index.cjs"), "init"], { cwd: dir, env, encoding: "utf8" }).status).toBe(0);
     // A copy of the launcher without the main bundle can only answer through the daemon.
     launcherOnly = join(dir, "launcher");
@@ -80,6 +83,12 @@ describe("palizade daemon", () => {
       }
       expect(inProcess("codex", "PreToolUse", cases[2]![2]).stdout).toContain('"permissionDecision":"deny"');
       expect(inProcess("claude-code", "PreToolUse", cases[5]![2]).status).toBe(2);
+      // A hook with a managed checkpoint runs locally if the daemon uses a different seal setting.
+      const managed = hook(dist, "claude-code", "PreToolUse", cases[0]![2], {
+        PALIZADE_SEAL_PATH: join(dirname(dir), `${basename(dir)}-seal.json`)
+      });
+      expect(managed.stdout).toContain('"permissionDecision":"deny"');
+      expect(managed.stdout).toContain("configuration seal");
       // A policy edit applies on the next call, without restarting the daemon.
       await writeFile(join(dir, "policies/default.yaml"), "version: 1\ndefaults: { action: block }\nrules: []\n");
       const blocked = hook(launcherOnly, "claude-code", "PreToolUse", cases[0]![2]);
@@ -118,4 +127,26 @@ describe("palizade daemon", () => {
       expect(contacted).toBe(1);
     } finally { await new Promise<void>((ok) => squatter.close(() => ok())); }
   }, 120000);
+
+  it.each(["CODEX_HOME", "CLAUDE_CONFIG_DIR", "HOME", "USERPROFILE"])("runs in process when %s differs from the daemon", async (name) => {
+    const daemon = await startDaemon();
+    try {
+      const [client, event, input] = cases[5]!;
+      expect(hook(launcherOnly, client, event, input).status).toBe(2);
+      const other = join(dir, "alternate-profile");
+      if ((process.platform === "win32" && name === "USERPROFILE") || (process.platform !== "win32" && name === "HOME")) {
+        const runDir = join(other, ".palizade", "run");
+        await mkdir(runDir, { recursive: true });
+        const key = basename(daemonEndpoint(config).keyFile);
+        await copyFile(join(dir, ".palizade", "run", key), join(runDir, key));
+      }
+      const override = { [name]: other };
+      if (process.platform === "win32" || name !== "HOME") {
+        const withoutBundle = hook(launcherOnly, client, event, input, override);
+        expect(withoutBundle.status).toBe(1);
+        expect(withoutBundle.stderr).toContain("Cannot find module './cli.cjs'");
+      }
+      same(hook(dist, client, event, input, override), hook(dist, client, event, input, { ...override, PALIZADE_NO_DAEMON: "1" }));
+    } finally { await stop(daemon, "SIGTERM"); }
+  });
 });

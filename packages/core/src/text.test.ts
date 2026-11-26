@@ -35,4 +35,21 @@ describe("object keys", () => {
     expect(out.meta["[MASKED] value here"]).toBe("x");
     expect(value.meta).toHaveProperty("secret value here");
   });
+
+  it("transforms root-level scalar strings", () => {
+    const out = applyTextTransforms("use token secret-value now", (text) => text.replace("secret-value", "[REDACTED]"));
+    expect(out).toBe("use token [REDACTED] now");
+  });
+
+  it("preserves all values when three same-length object keys collide on replacement", () => {
+    const value = {
+      "secret-key-alpha-0001": "first",
+      "secret-key-bravo-0002": "second",
+      "secret-key-charl-0003": "third"
+    };
+    const out = applyTextTransforms(value, (text) => text.replace(/secret-key-\S+/gu, "[REDACTED]")) as Record<string, string>;
+    expect(Object.keys(out)).toHaveLength(3);
+    expect(new Set(Object.keys(out))).toEqual(new Set(["[REDACTED]", "[REDACTED]~21", "[REDACTED]~21~2"]));
+    expect(Object.values(out)).toEqual(["first", "second", "third"]);
+  });
 });

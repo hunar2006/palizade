@@ -7,6 +7,11 @@ it("expands nested printable encodings", () => {
   expect(expandCandidates(encoded).map((view) => view.text)).toContain(text);
   expect(expandCandidates(`https://host.test/?q=${Buffer.from(text).toString("base64")}`).some((view) => view.text.includes(text))).toBe(true);
 });
+it("expands the UTF-16LE base64 format used by PowerShell", () => {
+  const command = "Write-Output 'sample Unicode text: résumé'";
+  const encoded = Buffer.from(command, "utf16le").toString("base64");
+  expect(expandCandidates(`pwsh -enc ${encoded}`)).toContainEqual({ text: command, kind: "base64-utf16le" });
+});
 it("supports percent, entities, escapes, RFC2047 and punycode", () => {
   for (const [encoded, plain] of [["a%20b%ZZ", "a b%ZZ"], ["p&#x61;ypal.com", "paypal.com"], ["p\\u0061ypal.com", "paypal.com"], ["=?utf-8?b?cGF5cGFsLmNvbQ==?=", "paypal.com"], ["=?utf-8?q?hello=20world?=", "hello world"], ["xn--pypal-4ve.com", "pаypal.com"]]) {
     expect(expandCandidates(encoded!).map((view) => view.text)).toContain(plain);

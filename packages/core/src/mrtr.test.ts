@@ -169,7 +169,7 @@ describe("input_required gating (MRTR)", () => {
         }
       });
       expect(output.toClient).toHaveLength(1);
-      expect(output.toClient[0]).toMatchObject({ result: { isError: true } });
+      expect(output.toClient[0]).toMatchObject({ result: { resultType: "completed", isError: true } });
       expect(JSON.stringify(output.toClient[0])).toContain("sampling");
       const blockEvent = events.find((event) => event.action === "block" && (event.reason ?? "").includes("sampling"));
       expect(blockEvent).toBeDefined();
@@ -307,6 +307,17 @@ describe("inputResponses taint", () => {
 });
 
 describe("subscriptions/listen and tools/list_changed", () => {
+  it("audits failed internal tool list refreshes without forwarding an unexpected reply", async () => {
+    const { engine, events, cleanup } = await makeEngine();
+    try {
+      const relock = await engine.handleServerMessage({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      const id = (relock.toServer[0] as { id: string }).id;
+      const result = await engine.handleServerMessage({ jsonrpc: "2.0", id, error: { code: -32603, message: "Tool list temporarily unavailable" } });
+      expect(result).toEqual({ toServer: [], toClient: [] });
+      expect(events.at(-1)?.reason).toBe("Upstream tool list refresh failed.");
+    } finally { await cleanup(); }
+  });
+
   it("triggers a re-lock on list_changed and gates drifted tool metadata", async () => {
     const { engine, events, cleanup } = await makeEngine();
     try {

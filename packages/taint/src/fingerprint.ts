@@ -1,6 +1,9 @@
 import { hash } from "node:crypto";
+import { isIP } from "node:net";
+import { domainToASCII } from "node:url";
+import { IANA_TLDS } from "./iana-tlds.js";
 import type { TaintFingerprint } from "./types.js";
-import { HIDDEN_UNICODE, tokenViews } from "./unicode.js";
+import { canonicalEmail, canonicalHost, HIDDEN_UNICODE, tokenViews } from "./unicode.js";
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"')]+/giu;
 // Starts only where a run of local part characters starts: with \b, a long "a.a.a..." run was
@@ -8,6 +11,132 @@ const URL_RE = /\bhttps?:\/\/[^\s<>"')]+/giu;
 const EMAIL_RE = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 const BASE64_RE = /\b[A-Za-z0-9+/]{40,}={0,2}\b/gu;
 const HEX_RE = /\b[a-fA-F0-9]{48,}\b/gu;
+const HOSTNAME = String.raw`(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+([\p{L}][\p{L}\p{M}]{1,23}|xn--[\da-z]{1,59})\.?`;
+const BARE_HOST_RE = new RegExp(String.raw`(?<![\p{L}\p{N}@._/\\-])${HOSTNAME}(?![\p{L}\p{N}@_-]|\.[a-z0-9._-])`, "giu");
+const SCP_HOST_RE = new RegExp(String.raw`(?<![\p{L}\p{N}@._/\\-])(?:[a-z0-9._-]+@)?(${HOSTNAME}):[/~\w.-][^\s<>"')]*`, "giu");
+const IPV4_RE = /(?<![\p{L}\d._-])\d{1,3}(?:\.\d{1,3}){3}(?![\p{L}\d_-]|\.[\p{L}\d._-])/gu;
+const IPV6_RE = /\[[0-9a-f:.]*:[0-9a-f:.]*\]/giu;
+const BARE_IPV6_RE = /(?<![\da-f:.])([\da-f:.]*:[\da-f:.]*:[\da-f:.]*)(?![\da-f:.])/giu;
+const SPECIAL_USE_TLDS = ["test", "example", "invalid", "internal", "onion"] as const;
+const DESTINATION_TLDS = new Set([...IANA_TLDS, ...SPECIAL_USE_TLDS]);
+// Common source, script, document, archive and media extensions that are also IANA TLDs.
+const FILE_EXTENSION_TLDS = new Set(["sh", "py", "md", "zip", "rs", "pl", "ps", "so", "cc", "mov", "app", "tf", "mk", "ml", "pm", "java"]);
+const SCHEME_HOST_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"')]+/giu;
+const NETWORK_HOST_PREFIX = /\b(curl|wget|nc|ncat|ssh|ftp|sftp|ping|nslookup|dig|telnet|invoke-webrequest|invoke-restmethod|iwr|irm|test-netconnection|tnc|resolve-dnsname)((?:[ \t]+-[\w-]+)*?)[ \t]+(?:(?:--url|-uri|-computername|-name)(?:[ \t]+|[=:]))?["']?$/iu;
+const SCP_STAGE_PREFIX = /\b(?:scp|rsync)[ \t]+[^;&|\r\n]*$/iu;
+
+function isDestinationTld(tld: string): boolean {
+  const lower = tld.toLowerCase();
+  return DESTINATION_TLDS.has(domainToASCII(lower) || lower);
+}
+
+function isNetworkHostArgument(prefix: string): boolean {
+  const match = NETWORK_HOST_PREFIX.exec(prefix);
+  if (!match) return false;
+  const verb = match[1]!.toLowerCase();
+  const switches = verb === "curl" ? /^(?:-[fsSLkqvIOJ46]+|--silent|--verbose)$/u
+    : verb === "wget" ? /^(?:-[qvNS46]+|--quiet|--verbose)$/u : /^-[qv46]+$/u;
+  return (match[2]!.match(/\S+/gu) ?? []).every((flag) => switches.test(flag));
+}
+
+export function isMatchableToken(token: string): boolean {
+  return (token.length >= 8 && token !== "req.body") || /^[\w.%+-]+@[\w.-]+\.[a-z]{2,}$/iu.test(token);
+}
+
+export function canonicalDestinationUrl(value: string): URL | null {
+  const url = URL.parse(value.normalize("NFKC").replace(HIDDEN_UNICODE, ""));
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) return null;
+  url.hostname = canonicalHost(url.hostname);
+  return url;
+}
+
+export function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host.endsWith(".localhost") || (host.startsWith("127.") && isIP(host) === 4) || host === "0.0.0.0" ||
+    host === "[::1]" || host === "[::]" || /^\[::ffff:7f[\da-f]{2}:[\da-f]+\]$/u.test(host);
+}
+
+export function trimMatchedUrl(raw: string): string {
+  let out = raw.replace(/[.,;:!?]+$/u, "");
+  while (out.endsWith("]") && (out.match(/\]/gu)?.length ?? 0) > (out.match(/\[/gu)?.length ?? 0)) {
+    out = out.slice(0, -1).replace(/[.,;:!?]+$/u, "");
+  }
+  return out;
+}
+
+export function extractDestinationObservables(text: string, destinationOnly = false): string[] {
+  const observables = new Set<string>();
+  const addHost = (input: string) => {
+    const host = canonicalHost(input);
+    if (!host || isLoopbackHost(host)) return;
+    observables.add(host);
+    return host;
+  };
+  const view = text.normalize("NFKC").replace(HIDDEN_UNICODE, "");
+  const remainder = view.replace(SCHEME_HOST_RE, (match) => {
+    const url = URL.parse(trimMatchedUrl(match));
+    if (url?.hostname) {
+      const host = addHost(url.hostname);
+      if (host && /^https?:$/u.test(url.protocol)) {
+        url.hostname = host;
+        observables.add(url.toString());
+      }
+    }
+    return " ";
+  }).replace(SCP_HOST_RE, (match: string, host: string, tld: string) => {
+    if (!isDestinationTld(tld)) return match;
+    addHost(host);
+    return " ";
+  }).replace(EMAIL_RE, (match) => {
+    observables.add(canonicalEmail(match.replace(/^[.%+-]+/u, "")));
+    return " ";
+  });
+  for (const match of remainder.matchAll(BARE_HOST_RE)) {
+    const [host, tld] = match;
+    if (!tld || !isDestinationTld(tld)) continue;
+    if (destinationOnly && FILE_EXTENSION_TLDS.has(tld.toLowerCase()) && host.replace(/\.$/u, "").split(".").length === 2) {
+      const next = remainder[match.index + host.length];
+      const prefix = remainder.slice(Math.max(0, match.index - 256), match.index);
+      if (next !== "/" && !(next === ":" && SCP_STAGE_PREFIX.test(prefix)) && !isNetworkHostArgument(prefix)) continue;
+    }
+    addHost(host);
+  }
+  for (const [literal] of remainder.matchAll(IPV4_RE)) {
+    if (isIP(literal) === 4) addHost(literal);
+  }
+  const withoutBracketedIpv6 = remainder.replace(IPV6_RE, (literal) => {
+    if (isIP(literal.slice(1, -1)) === 6) addHost(literal);
+    return " ";
+  });
+  for (const [, literal] of withoutBracketedIpv6.matchAll(BARE_IPV6_RE)) {
+    const candidate = literal?.replace(/\.+$/u, "");
+    if (candidate && isIP(candidate) === 6) addHost(`[${candidate}]`);
+  }
+  if (isIP(view.trim()) === 6) addHost(`[${view.trim()}]`);
+  return [...observables];
+}
+
+export function canonicalFieldDestinations(text: string): string[] {
+  const observables = new Set(extractDestinationObservables(text));
+  const trimmed = text.normalize("NFKC").replace(HIDDEN_UNICODE, "").trim();
+  if (trimmed && !/\s/u.test(trimmed)) {
+    const parsedUrl = canonicalDestinationUrl(trimmed);
+    const bare = trimmed.startsWith("[")
+      ? trimmed.replace(/:\d+$/u, "")
+      : (trimmed.match(/:/gu)?.length ?? 0) === 1
+        ? trimmed.replace(/:\d+$/u, "")
+        : trimmed;
+    const withoutTrailingDot = bare.replace(/\.$/u, "");
+    const decimalInt = /^\d+$/u.test(withoutTrailingDot);
+    const intVal = decimalInt ? Number(withoutTrailingDot) : -1;
+    const validDecimalIp = !decimalInt || (intVal >= 0x01000000 && intVal <= 0xffffffff);
+    const candidate = parsedUrl ? parsedUrl.hostname : validDecimalIp ? canonicalHost(withoutTrailingDot) : "";
+    if (candidate && !isLoopbackHost(candidate) && (parsedUrl || isIP(candidate.replace(/^\[|\]$/gu, "")) !== 0 || candidate.includes("."))) {
+      observables.add(candidate);
+      if (parsedUrl) observables.add(parsedUrl.toString());
+    }
+  }
+  return [...observables];
+}
 
 export function normalizeText(input: string): string {
   return input
@@ -30,14 +159,23 @@ export function extractAtomicTokens(input: string): string[] {
   return [...tokens];
 }
 
-export function makeFingerprint(input: string, sensitive = false): TaintFingerprint {
+export function isSubstringsTruncated(normalized: string, k = 32, w = 16, max = 2048): boolean {
+  const covered = max * Math.ceil((w + 1) / 2);
+  return normalized.length >= k && normalized.length > covered + k;
+}
+
+export function makeFingerprint(input: string, sensitive = false, destinationOnly = false): TaintFingerprint {
+  if (destinationOnly) {
+    return { normalized: "", fragmentLength: 0, substrings: [], tokens: [], simhash: "", destinationTokens: extractDestinationObservables(input, true) };
+  }
   const normalized = normalizeText(input);
   return {
     normalized,
     substrings: makeSubstrings(normalized),
-    tokens: extractAtomicTokens(input).map(normalizeText),
+    tokens: extractAtomicTokens(input).map(normalizeText).filter(isMatchableToken),
     simhash: simhash(normalized),
-    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized) } : {})
+    ...(sensitive ? { sensitiveFragments: makeSensitiveFragments(normalized) } : {}),
+    ...(isSubstringsTruncated(normalized) ? { truncated: true } : {})
   };
 }
 

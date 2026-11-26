@@ -38,11 +38,13 @@ const contextSchema = z.object({
   argument_text: z.string().optional(),
   argument_paths: z.array(z.string()).optional(),
   critical_path: z.boolean().optional(),
+  local_workspace_write: z.boolean().optional(),
   git_push_unapproved: z.boolean().optional(),
   output_path_allowed: z.boolean().optional(),
   argument_roles: z.array(z.string()).optional(),
   tainted_argument_roles: z.array(z.string()).optional(),
   session_quarantined: z.boolean().optional(),
+  tainted_code_write_pending: z.boolean().optional(),
   tool_shadowing_detected: z.boolean().optional(),
   name_collision_detected: z.boolean().optional(),
   hidden_unicode_detected: z.boolean().optional()

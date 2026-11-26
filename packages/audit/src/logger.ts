@@ -8,6 +8,7 @@ export interface AuditLoggerOptions {
 
 export class AuditLogger {
   private previousEventHash = ZERO_HASH;
+  private writeQueue = Promise.resolve();
 
   constructor(
     private readonly sinks: AuditSink[],
@@ -18,18 +19,26 @@ export class AuditLogger {
     const { payload, ...rest } = event;
     const payloadText = payload === undefined ? undefined : typeof payload === "string" ? payload : JSON.stringify(payload);
     const eventBase = auditEventSchema.parse({
+      ...rest,
       event_id: event.event_id ?? `audit_${randomUUID()}`,
       ts: event.ts ?? new Date().toISOString(),
-      ...rest,
-      payload_hash: rest.payload_hash ?? (payloadText ? sha256(payloadText) : undefined),
+      payload_hash: rest.payload_hash ?? (payloadText === undefined ? undefined : sha256(payloadText)),
       raw_payload: this.options.captureRawPayloads ? payload : undefined,
       previous_event_hash: this.previousEventHash
     });
-    const eventHash = sha256(`${this.previousEventHash}${canonicalStringify({ ...eventBase, event_hash: undefined })}`);
-    const parsed = auditEventSchema.parse({ ...eventBase, event_hash: eventHash });
+    // Hash what the sinks will persist, including JSON's conversions of nested metadata and payload values.
+    const { event_hash: _eventHash, ...persisted } = JSON.parse(JSON.stringify(eventBase)) as AuditEvent;
+    const eventHash = sha256(`${this.previousEventHash}${canonicalStringify(persisted)}`);
+    const parsed = { ...persisted, event_hash: eventHash };
     this.previousEventHash = eventHash;
 
-    await Promise.all(this.sinks.map((sink) => sink.write(parsed)));
+    const write = this.writeQueue.then(async () => {
+      const results = await Promise.allSettled(this.sinks.map((sink) => sink.write(parsed)));
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
+    });
+    this.writeQueue = write.catch(() => {});
+    await write;
   }
 
   async query(query: AuditQuery): Promise<AuditEvent[]> {
@@ -42,6 +51,7 @@ export class AuditLogger {
   }
 
   async close(): Promise<void> {
+    await this.writeQueue;
     await Promise.all(this.sinks.map((sink) => sink.close?.()));
   }
 }
@@ -64,8 +74,9 @@ export interface ChainFailure {
  * once. `anchors` are hashes of events removed by `audit prune` that kept events still point to.
  */
 export function verifyAuditChain(events: ReadonlyArray<Record<string, unknown>>, anchors: Iterable<string> = []): { ok: boolean; legacyCount: number; segmentCount: number; failures: ChainFailure[] } {
-  const heads = new Set<string>(anchors);
-  const anchored = new Set<string>(anchors);
+  const present = new Set(events.map((event) => event.event_hash));
+  const anchored = new Set([...anchors].filter((anchor) => !present.has(anchor)));
+  const heads = new Set(anchored);
   const seen = new Set<string>();
   let legacyCount = 0;
   let segmentCount = 0;
@@ -95,10 +106,12 @@ export function verifyAuditChain(events: ReadonlyArray<Record<string, unknown>>,
   return { ok: failures.length === 0, legacyCount, segmentCount, failures };
 }
 
-/** Hashes of pruned events that the kept events point to, so a pruned log still verifies. */
+/** Keep predecessors of retained events and open chain ends that a live writer can still extend. */
 export function pruneAnchors(removed: ReadonlyArray<Record<string, unknown>>, kept: ReadonlyArray<Record<string, unknown>>): string[] {
   const gone = new Set(removed.map((event) => event.event_hash).filter((hash): hash is string => typeof hash === "string"));
-  return [...new Set(kept.map((event) => event.previous_event_hash).filter((hash): hash is string => typeof hash === "string" && gone.has(hash)))];
+  const referencedByRemoved = new Set(removed.map((event) => event.previous_event_hash));
+  const referencedByKept = new Set(kept.map((event) => event.previous_event_hash));
+  return [...gone].filter((hash) => !referencedByRemoved.has(hash) || referencedByKept.has(hash));
 }
 
 function canonicalStringify(value: unknown): string {

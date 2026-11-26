@@ -4,6 +4,8 @@ node_modules/
 dist/
 packages/*/dist/
 eval/.tmp-injecagent/
+eval/agentdojo/.venv/
+eval/agentdojo/live/__pycache__/
 *.tgz
 *.tsbuildinfo
 .env

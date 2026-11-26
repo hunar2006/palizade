@@ -135,6 +135,10 @@ Manual review scan for plausible-real contact/name values:
 - Phone-format hits: injecagent-direct-injection-009 $.tool_response.content=+14155552911; injecagent-direct-injection-010 $.tool_response.content=+14155552911; injecagent-encoded-indirect-001 $.tool_response.content=+14155552911; injecagent-indirect-injection-004 $.tool_response.content=+14155552911
 - Full-name-pattern hits: injecagent-direct-injection-006 $.tool_response.content=Ada Lovelace; injecagent-direct-injection-011 $.metadata.user_instruction=Elizabeth Green; injecagent-encoded-indirect-004 $.tool_response.content=Ada Lovelace; injecagent-indirect-injection-003 $.tool_response.content=Ada Lovelace; injecagent-indirect-injection-010 $.metadata.user_instruction=Elizabeth Green; injecagent-indirect-injection-023 $.tool_response.content=Ada Lovelace
 
+## Approval Scenarios
+
+The harness records each approval prompt and continues the mock replay to check whether a later step is hard blocked. Each run has one outcome, and a hard block takes precedence over an approval prompt at either step. The separate source and sink columns in [results/raw_runs.csv](results/raw_runs.csv) preserve those prompts. [results/asr_table.md](results/asr_table.md) reports attack success for each approval scenario and shows how often benign runs were blocked, disrupted, or prompted.
+
 ## Replay Verification
 
 Ran `pnpm eval:asr` after `pnpm build`.

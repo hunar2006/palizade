@@ -121,6 +121,21 @@ rules:
     action: require_approval
     reason: Unknown tools on semi-trusted servers require approval.
 
+  - id: approve-exec-after-tainted-code-write
+    name: Ask before running code after a tainted workspace code or build file write
+    when:
+      direction: request
+      capabilities_any: [ executes_code ]
+      tainted_code_write_pending: true
+    action: require_approval
+    reason: A workspace code or build file was written using text from an untrusted source. Review the edit before running this command.
+
+  - id: approve-tainted-local-command
+    name: Ask before running a local command copied from untrusted content
+    when: { direction: request, method: tools/call, tool_class: sink, tainted_local_command: true }
+    action: require_approval
+    reason: This command's text came from untrusted content.
+
   - id: block-tainted-sink
     name: Require approval for tainted content entering sinks
     when:
@@ -208,6 +223,15 @@ rules:
       }
     action: require_approval
     reason: Writing a critical configuration or execution target requires approval.
+
+  - id: approve-palizade-self-change
+    name: Ask before a shell command changes or removes Palizade
+    when:
+      direction: request
+      argument_role_any: [ shell_command ]
+      argument_regex: '^(?:[\s\S]{16385}|(?:(?=(?<text>[^"'';&|({)\n\x60]+))\k<text>|"(?:[^"\\]|\\[\s\S])*"|''[^'']*''|[;&|({)\n\x60])*?(?<=^|[;&|({\n\x60])[\t \r]*(?:(?:(?:["'']?(?:[^\s"'';&|(){}\x60]*[\\/])?(?:(?:bash|sh|zsh|pwsh|powershell|eval|iex|invoke-expression|xargs|timeout|nice|doas|busybox)(?:\.exe|\.cmd)?|(?:env|sudo)(?=[ \t]+-)|cmd(?:\.exe)?[ \t]+\/[ck])["'']?|then|do|else)[ \t]+|(?:%[ \t]*)?\{[ \t]*)(?:[^"'';&|\r\n]*"(?:(?=[^"\r\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*)))[^"\r\n]*?(?<![\w.-])(?:rm|rmdir|rd|mv|del|erase|remove-item|move-item|rename-item|ren|shred|unlink|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|ln|chmod|chown|chattr|touch|install|copy|xcopy|robocopy|copy-item|set-content|out-file|clear-content)(?:\.exe|\.cmd)?["'']?[ \t]+[^"\r\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*))|(?=[^"\r\n]*\bpalizade\b)[^"\r\n]*?(?<![\w.-])(?:npm|pnpm|yarn|bun)(?:\.exe|\.cmd)?["'']?[ \t]+(?:--?[^\s;&|]+[ \t]+)*(?:uninstall|remove|rm|r|un|unlink)[ \t]+[^"\r\n]*\bpalizade\b)|[^"'';&|\r\n]*''(?:(?=[^''\r\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*)))[^''\r\n]*?(?<![\w.-])(?:rm|rmdir|rd|mv|del|erase|remove-item|move-item|rename-item|ren|shred|unlink|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|ln|chmod|chown|chattr|touch|install|copy|xcopy|robocopy|copy-item|set-content|out-file|clear-content)(?:\.exe|\.cmd)?["'']?[ \t]+[^''\r\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*))|(?=[^''\r\n]*\bpalizade\b)[^''\r\n]*?(?<![\w.-])(?:npm|pnpm|yarn|bun)(?:\.exe|\.cmd)?["'']?[ \t]+(?:--?[^\s;&|]+[ \t]+)*(?:uninstall|remove|rm|r|un|unlink)[ \t]+[^''\r\n]*\bpalizade\b)|(?:(?=[^;&|{\r\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*)))[^;&|{\r\n]*?(?<![\w.-])(?:rm|rmdir|rd|mv|del|erase|remove-item|move-item|rename-item|ren|shred|unlink|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|ln|chmod|chown|chattr|touch|install|copy|xcopy|robocopy|copy-item|set-content|out-file|clear-content)(?:\.exe|\.cmd)?["'']?[ \t]+[^;&|{\r\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*))|(?=[^;&|{\r\n]*\bpalizade\b)[^;&|{\r\n]*?(?<![\w.-])(?:npm|pnpm|yarn|bun)(?:\.exe|\.cmd)?["'']?[ \t]+(?:--?[^\s;&|]+[ \t]+)*(?:uninstall|remove|rm|r|un|unlink)[ \t]+[^;&|{\r\n]*\bpalizade\b))|(?=[^\s;&|()\x60])(?:(?:sudo|env|command|exec|nohup|time|start-process(?:[ \t]+-filepath)?|cmd(?:\.exe)?[ \t]+\/[ck])[ \t]+|\w+=\S*[ \t]+)*(?:(?:(?:npx|bunx|pnpx)(?:[ \t]+(?:-y|--yes))?[ \t]+|(?:npm[ \t]+exec|pnpm[ \t]+(?:exec|dlx)|yarn[ \t]+(?:exec|dlx)|bun[ \t]+(?:x|exec))(?:[ \t]+(?:-y|--yes))?[ \t]+(?:--[ \t]+)?)?(?:(?:node|bun|deno(?:[ \t]+run)?)[ \t]+(?:--\S+[ \t]+)*)?["'']?(?:(?:(?:(?<=["''])[^\s"'']*|[^\s"'';&|(){}\x60]*)[\\/])?palizade(?:@\S+)?(?:\.c?js|\.cmd|\.exe)?|(?:(?<=["''])[^\s"'']*(?:palizade[^\s"'']*[\\/]dist[\\/]index|packages[\\/]cli[\\/]dist[\\/]index)\.(?:c?js|ts)|[^\s"'';&|(){}\x60]*(?:palizade[^\s"'';&|(){}\x60]*[\\/]dist[\\/]index|packages[\\/]cli[\\/]dist[\\/]index)\.(?:c?js|ts)))["'']?[ \t]+(?:(?:--|-(?:argumentlist|args))[ \t]+)?["'']?(?!(?:status|why|doctor|tools|scan|wrap|serve|audit\b(?![ \t]+prune)|lock[ \t]+diff|policy[ \t]+(?:check|test)|allow[ \t]+list|-V|--version|-h|--help|help)(?:[\s"'';&|)]|$))|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:npm|pnpm|yarn|bun)(?:\.exe|\.cmd)?["'']?[ \t]+(?:--?[^\s;&|]+[ \t]+)*(?:uninstall|remove|rm|r|un|unlink)[ \t]+[^;&|\n]*\bpalizade\b|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:rm|rmdir|rd|mv|del|erase|remove-item|move-item|rename-item|ren|shred|unlink|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|ln|chmod|chown|chattr|touch|install|git[ \t]+(?:checkout|restore|rm|mv|apply|reset|clean)|copy|xcopy|robocopy|tar|copy-item|set-content|out-file|clear-content)(?:\.exe|\.cmd)?["'']?[ \t]+[^;&|\n]*(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*))|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:python3?|node|perl|ruby)(?:\.exe|\.cmd)?["'']?[ \t]+(?:[^;&|\n]*?[ \t]+)?(?:-[ec]|--eval)(?:[ \t]+|=)(?:"[^"]*?(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*))|''[^'']*?(?:\.(?:palizade|claude|cursor|codex|gemini|mcp)\b|palizade\.(?:ya?ml\b|allow\.ya?ml\b|lock\b|\*)|claude_desktop_config\.(?:json\b|\*)))|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:git[ \t]+clean)(?:\.exe|\.cmd)?["'']?(?=$|[\s"'';&|)])|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:rm|rmdir|rd|mv|del|erase|remove-item|move-item|rename-item|ren|shred|unlink|git[ \t]+(?:rm|mv))(?:\.exe|\.cmd)?["'']?[ \t]+[^;&|\n]*(?:(?<=[\s"''\\/])\.(?:cl(?:a(?:u(?:d(?:e)?)?)?)?|pal(?:i(?:z(?:a(?:d(?:e)?)?)?)?)?|cu(?:r(?:s(?:o(?:r)?)?)?)?|co(?:d(?:e(?:x)?)?)?|ge(?:m(?:i(?:n(?:i)?)?)?)?)\*(?=$|[\s"''\\/;&|)])|(?<=[\t "''=])(?:\.\.(?:[\\/]\*?)?|\.[\\/]\*|\*)(?=$|[\s"'';&|)]))|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:git[ \t]+(?:checkout|restore))(?:\.exe|\.cmd)?["'']?[ \t]+(?:[^;&|\n]*[\t "''=])?(?:\.\.?(?:[\\/]\*?)?|\*)(?=$|[\s"'';&|)])|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:robocopy)(?:\.exe|\.cmd)?["'']?[ \t]+[^;&|\n]*[ \t]\/(?:mir|purge)(?=$|[\s"'';&|)])|["'']?(?:(?:(?<=["''])[^\s"'';&|]*|[^\s"'';&|(){}\x60]*)[\\/])?(?:tar)(?:\.exe|\.cmd)?["'']?[ \t]+(?=(?:[^;&|\n]*[ \t])?(?:--extract|--get|-[a-z]*x[a-z]*|[a-z]*x[a-z]*)(?=$|[\s"'';&|)]))[^;&|\n]*(?<=[ \t])(?:-C|--directory)(?:[ \t]+|=)["'']?\.(?:[\\/])?(?=$|[\s"'';&|)]))))'
+    action: require_approval
+    reason: This shell command changes, prunes or removes Palizade's own configuration, state or hooks.
 
   - id: sanitize-hidden-unicode-metadata
     name: Strip hidden Unicode from metadata

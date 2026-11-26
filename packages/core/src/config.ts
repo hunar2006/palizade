@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { TOOL_CATALOG } from "./tool-catalog.js";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -6,6 +7,7 @@ import { z } from "zod";
 import { normalizeSandbox, sandboxConfigSchema } from "./sandbox.js";
 
 const trustSchema = z.enum(["trusted", "semi", "untrusted"]);
+export const DEFAULT_NON_INTERACTIVE_WRITE_GATE_TTL_MS = 900_000;
 const toolClassSchema = z.enum(["source", "sink", "pure", "unknown"]);
 const capabilitySchema = z.enum([
   "reads_untrusted_content",
@@ -29,6 +31,8 @@ export const serverConfigSchema = z.object({
   args: z.array(z.string()).default([]),
   cwd: z.string().optional(),
   env: z.record(z.string(), z.string()).default({}),
+  inheritEnv: z.enum(["minimal", "full"]).default("minimal").optional(),
+  passEnv: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u, "passEnv entries must be environment variable names")).default([]).optional(),
   headers: z.record(z.string(), z.string()).default({}),
   protocolVersion: z.enum(["auto", "2026-07-28", "2025-11-25"]).default("auto"),
   trust: trustSchema.default("untrusted"),
@@ -193,12 +197,16 @@ export const palizadeConfigSchema = z.object({
   }),
   hooks: z.object({
     failMode: z.enum(["closed", "open"]).default("closed"),
+    readTaint: z.enum(["external", "all"]).default("external").optional(),
+    nonInteractiveWriteGateTtlMs: z.number().int().positive().max(24 * 60 * 60 * 1000).default(DEFAULT_NON_INTERACTIVE_WRITE_GATE_TTL_MS).optional(),
     timeoutMs: z.number().int().min(1000).default(30_000),
     maxInputBytes: z.number().int().min(1024).default(1024 * 1024),
     // Trust for MCP servers seen only through hooks (not wrapped), such as OAuth remotes.
     mcpTrust: z.enum(["trusted", "semi", "untrusted"]).default("untrusted")
   }).default({
     failMode: "closed",
+    readTaint: "external",
+    nonInteractiveWriteGateTtlMs: DEFAULT_NON_INTERACTIVE_WRITE_GATE_TTL_MS,
     timeoutMs: 30_000,
     maxInputBytes: 1024 * 1024,
     mcpTrust: "untrusted"
@@ -275,6 +283,19 @@ export const palizadeConfigSchema = z.object({
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export type PalizadeConfig = z.infer<typeof palizadeConfigSchema>;
 
+const configSources = new WeakMap<PalizadeConfig, { path: string; sha256: string }>();
+
+export function configSource(config: PalizadeConfig): { path: string; sha256: string } | undefined {
+  return configSources.get(config);
+}
+
+export function cloneConfig(config: PalizadeConfig): PalizadeConfig {
+  const copy = structuredClone(config);
+  const source = configSource(config);
+  if (source) configSources.set(copy, source);
+  return copy;
+}
+
 export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): Promise<PalizadeConfig> {
   const absolute = resolve(cwd, path);
   return parseConfigFile(await readFile(absolute, "utf8"), absolute);
@@ -284,7 +305,9 @@ export async function loadConfig(path = "palizade.yaml", cwd = process.cwd()): P
 export function parseConfigFile(raw: string, absolute: string): PalizadeConfig {
   const parsed = parseYamlWithSchema(palizadeConfigSchema, raw, absolute);
   parsed.protectedTargets.criticalPaths.push(absolute);
-  return resolveConfigPaths(parsed, dirname(absolute));
+  const config = resolveConfigPaths(parsed, dirname(absolute));
+  configSources.set(config, { path: absolute, sha256: createHash("sha256").update(raw).digest("hex") });
+  return config;
 }
 
 export function parseConfig(raw: string, baseDir = process.cwd()): PalizadeConfig {

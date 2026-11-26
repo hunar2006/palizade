@@ -6,6 +6,7 @@ declare module "node:sqlite" {
       run(...args: unknown[]): void;
       all(...args: unknown[]): unknown[];
       get(...args: unknown[]): unknown;
+      iterate(): Iterable<unknown>;
     };
     close(): void;
   }

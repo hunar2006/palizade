@@ -21,8 +21,17 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **More tools are classified on servers Palizade does not know.** Action words in a tool name (click, fill, start, stop, deploy, merge, install, connect, ...) make it a sink and read words (status, diff, log, show, info, describe, find, retrieve, ...) a source, and `urls`/`links` or `prompt` arguments add network egress or model use. Fewer unknown tools are blocked on untrusted servers; a tool that is now a sink is still blocked when its arguments are tainted.
 - **Library users:** `InterceptionEngine` now validates its config on construction and rejects invalid values that were previously ignored.
 - **Packaging:** the npm package now ships a single self contained bundle (`dist/index.cjs`) and no type declarations.
+- **Local setup and hooks.** Setup honors custom config filenames. Reinstalling hooks preserves other commands in the same settings group and keeps the existing backup when nothing changed. Generated commands follow the Codex and Windows Cursor launch formats. Large hook inputs can fall back from the daemon to direct evaluation.
+- **MCP transport.** Responses keep numeric and string request IDs distinct. Stock Windows Node installations can launch upstream `npm` and `npx` servers directly without a shell.
+- **Taint and audit.** SQLite applies matching thresholds to the underlying text lengths. A malformed taint key is reported during startup. Audit writes preserve hash-chain order, and filtered queries apply the limit after filtering.
+- **Project hook coverage.** `setup --project` and `install-hooks --project` write hooks into the workspace. Use `doctor --project` to check the workspace and distinguish configured hooks from observed execution. Existing user hook files are preserved. Reinstall to update generated hooks.
+- **HTTP listener sessions.** Legacy clients receive separate listener session IDs. Stateless responses and authorization challenges stay with their requests. Stateless clients that share upstream credentials share policy state.
+- **Seals and audit retention.** Sealed proxies enforce the verified config, policy, learned allowlist and tool lockfile loaded at startup. Review the four files and run `palizade seal` again if you have an older seal, then restart the proxy. JSONL pruning coordinates with active writers, and SQLite pruning runs in a transaction.
+- **Browser approvals.** The local inbox opens with a secret link, and approval posts check Host and Origin. The link file lives under the user's profile. Sealed sessions keep destination grants for the current session.
 
 ### Added
+
+- **Review and release.** `learn` ranks unknown tools by stopped calls, and `tools` shows configured, catalog, and suggested argument roles. The npm workflow requires [live client verification](docs/release-verification.md) for the tagged commit before publishing.
 
 - **Native tool hooks** for Claude Code, Cursor and Codex: `palizade hook` and `palizade install-hooks <client>`. Native Bash, Read, Write and WebFetch share the same taint store, policy and audit log as MCP traffic.
 - **Remote MCP servers** over Streamable HTTP, for both the 2025-11-25 and 2026-07-28 protocol eras: a stdio bridge (`wrap` a server that has a `url`) and a local listener (`palizade serve`) with its own bearer token, Origin checks, loopback binding, and Authorization forwarded only to the configured upstream.
@@ -31,7 +40,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **Session gates:** Rule of Two, quarantine, rate limits and loop detection, with `palizade session` commands to inspect and reset them.
 - **Protected targets and memory:** approval with a diff for critical file writes; memory writes treated as sinks with persistent provenance.
 - **Tool metadata hardening:** hidden Unicode in descriptions and schemas, dangerous defaults, cross server shadowing and name collisions, and `palizade lock diff` with escaped characters.
-- **Egress modes:** `open`, `approve_new` and `allowlist_only`, with "allow always" grants stored in `palizade.allow.yaml`.
+- **Egress modes.** `open`, `approve_new` and `allowlist_only`. When unsealed, "allow always" grants are stored in `palizade.allow.yaml`.
 - **Optional sandboxed launch** for stdio servers: docker (including Windows), bubblewrap and seatbelt.
 - **Operations:** hot reload, `palizade policy check`, `palizade status`, `palizade learn --from-audit`, optional metrics JSONL, and `doctor` coverage reports.
 - **Presets:** `coding-agent` and `research-readonly`.
@@ -52,7 +61,7 @@ Read these before upgrading an existing setup. Most of them make Palizade block 
 - **`palizade scan --format sarif`:** SARIF 2.1.0 output for code scanning pipelines, checked against the SARIF schema in tests. JSON findings for client configs gain a `path` field with the file they are in.
 - **Hardening from property based tests (fast-check):** four patterns took quadratic time on long inputs and are now linear: the fingerprint email pattern (1.4 s on 32 KB of `a.a.a...`), the shell `$(` and `curl ... | sh` checks (0.35 s on 32 KB), and the self protection rule's shell scan (1.3 s on 32 KB of `npm npm ...`). Content-Length frames arriving in small chunks were joined once per chunk (1.3 s for 16 MB in 16 KB chunks, now 0.14 s). Two framing bugs: a JSON line just before a Content-Length frame was dropped, and a header that arrived before its blank line was read as a message. A YAML alias bomb in a policy file is now reported as an invalid file instead of a bare ReferenceError.
 - **Canary secrets:** `palizade canary` plants a fake credential in `.env`; any call that carries it, plain or encoded, is blocked by the new `block-canary-egress` rule in `default`, `interactive`, `strict` and `coding-agent`. Run `palizade policy upgrade` to add the rule to an existing policy.
-- **`palizade seal`:** records hashes of `palizade.yaml` and the policy; hooks ask on every call when either changes until you seal again. Opt in.
+- **`palizade seal`.** Records the config, policy, learned allowlist and tool lockfile in `.palizade/seal.json` next to the config. The seal records missing allowlists and lockfiles too.
 - **`palizade scan` reads agent instruction files** (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, Cursor rules, Claude Code commands, agents and skills, Copilot instructions) and reports invisible characters and exfiltration style instructions.
 - **Clearer approval prompts in Claude Code and Cursor:** the reason no longer ends with "approval denied (native hooks defer approval decisions to the client)".
 - **`palizade audit verify` checks both stores:** the JSONL log and the SQLite store, reporting the first broken link with its line or row and exiting 1. It handles chains from several processes interleaved in one log, which it reported as broken before, hashes the raw records so added fields are caught, checks SQLite columns against the stored event, and still verifies after `audit prune`. Limits are in [the architecture notes](docs/architecture.md).

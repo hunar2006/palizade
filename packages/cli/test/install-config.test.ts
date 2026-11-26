@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Command } from "commander";
@@ -211,6 +211,37 @@ describe("installClientConfig", () => {
       expect(result.skipped.map((server) => server.name)).toEqual(["fetch", "github"]);
       expect(result.written).toBe(false);
       expect(await readFile(clientConfigPath, "utf8")).toBe(afterFirstRun);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)("keeps the original client config when saving upstream definitions fails", async () => {
+    const { clientConfigPath, palizadeConfigPath, cliPath, cleanup } = await makeFixture();
+    try {
+      const original = JSON.stringify({ mcpServers: { notes: { command: "node", args: ["notes.mjs"] } } });
+      await writeFile(clientConfigPath, original);
+      await chmod(palizadeConfigPath, 0o444);
+      await expect(installAllClientConfigs({ clientConfigPath, configPath: palizadeConfigPath, cliPath })).rejects.toThrow();
+      expect(await readFile(clientConfigPath, "utf8")).toBe(original);
+    } finally {
+      await chmod(palizadeConfigPath, 0o600);
+      await cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("matches Claude Code local scope keys with case-sensitive paths", async () => {
+    const { root, clientConfigPath, cleanup } = await makeFixture();
+    try {
+      const cwd = join(root, "Notes");
+      await writeFile(clientConfigPath, JSON.stringify({
+        projects: {
+          [join(root, "notes")]: { mcpServers: { other: { command: "node", args: ["other.mjs"] } } },
+          [cwd]: { mcpServers: { actual: { command: "node", args: ["actual.mjs"] } } }
+        }
+      }));
+      const coverage = await inspectClientCoverage({ client: "claude-code", clientConfigPath, local: true, cwd });
+      expect(coverage.rows.map((row) => row.name)).toEqual(["actual"]);
     } finally {
       await cleanup();
     }

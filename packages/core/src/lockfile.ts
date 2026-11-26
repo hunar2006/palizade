@@ -32,9 +32,19 @@ export interface ToolLockCheck {
 }
 
 export class LockfileStore {
-  constructor(private readonly path: string) {}
+  private readonly sealedLock?: PalizadeLock;
+
+  constructor(private readonly path: string, sealedBytes?: Buffer | null) {
+    if (sealedBytes === undefined) return;
+    const lock = sealedBytes === null ? { version: 1, servers: {} } as const : JSON.parse(sealedBytes.toString("utf8")) as PalizadeLock;
+    if (!lock || lock.version !== 1 || !lock.servers || typeof lock.servers !== "object" || Array.isArray(lock.servers)) {
+      throw new Error("Invalid sealed tool lockfile.");
+    }
+    this.sealedLock = lock;
+  }
 
   async read(): Promise<PalizadeLock> {
+    if (this.sealedLock) return structuredClone(this.sealedLock);
     try {
       const raw = await readFile(this.path, "utf8");
       return JSON.parse(raw) as PalizadeLock;
@@ -47,6 +57,7 @@ export class LockfileStore {
   }
 
   async write(lock: PalizadeLock): Promise<void> {
+    if (this.sealedLock) throw new Error("The sealed tool lockfile is read only.");
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(this.path, `${stableStringify(lock)}\n`, "utf8");
   }

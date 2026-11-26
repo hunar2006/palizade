@@ -26,22 +26,69 @@ describe("policy YAML loader", () => {
 
 const preset = (name: string) => parsePolicy(readFileSync(resolve(import.meta.dirname, `../../../policies/${name}.yaml`), "utf8"), name);
 const selfRule = (name: string) => preset(name).rules.find((rule) => rule.id === "approve-palizade-self-change")!.when!.argument_regex!;
-// The rule as first shipped, before its two scans were pinned to the first match in each segment.
+// The first version's file and package changes, kept as coverage for real command stages.
 const OLD_BRANCHES = String.raw`\b(?:npm|pnpm|yarn|bun)\b[^;&|\n]*\b(?:uninstall|remove|rm|r|un|unlink)\s[^;&|\n]*\bpalizade\b|\b(?:rm|rmdir|mv|cp|sed|perl|python3?|node|ruby|truncate|tee|dd|shred|unlink|ln|chmod|chown|chattr|touch|install|del|erase|remove-item|move-item|set-content|out-file|clear-content)\b[^;&|\n]*(?:\.palizade\b|palizade\.(?:ya?ml|allow\.ya?ml|lock)\b|\.claude[\\/]settings(?:\.local)?\.json|\.claude\.json|\.mcp\.json|\.cursor[\\/](?:hooks|mcp)\.json|\.codex[\\/](?:config\.toml|hooks\.json)|\.gemini[\\/]settings\.json|claude_desktop_config\.json)`;
 
 describe("self protection rule", () => {
   const current = new RegExp(selfRule("default"), "iu");
-  const palizadeBranch = selfRule("default").split("|(?:^|[;&|\\n])(?=(?<pm>")[0]!;
-  const old = new RegExp(`${palizadeBranch}|${OLD_BRANCHES}`, "iu");
-  const command = fc.array(fc.constantFrom("rm ", "-rf ", "npm ", "pnpm ", "uninstall ", "remove ", "r ", "palizade ", "palizade.yaml", ".palizade/", "x ", "&& ", "; ", "| ", "\n", "sed -i ", "cat ", ".claude/settings.json", "status", "allow ", "npx ", "A=1 ", "sudo "), { maxLength: 14 }).map((parts) => parts.join(""));
+  const old = new RegExp(OLD_BRANCHES, "iu");
+  const cleanStage = fc.constantFrom("git status", "git diff", "cat .claude/settings.json", "pnpm test", "grep -rn rm .",
+    "docker build --rm -t app .", "mv src/a.ts .", "tar -czf out.tgz .", "palizade status", 'rg -F "a; rm .palizade" .');
+  const cleanStages = fc.array(cleanStage, { maxLength: 7 });
+  const separator = fc.constantFrom(" && ", " | ", "; ", "\n");
+  const protectedStage = fc.oneof(
+    fc.tuple(
+      fc.constantFrom("rm -rf", "rmdir", "mv", "cp", "sed -i", "perl", "python3", "node", "ruby", "truncate", "tee",
+        "dd", "shred", "unlink", "ln", "chmod", "chown", "chattr", "touch", "install", "del", "erase", "Remove-Item",
+        "Move-Item", "Set-Content", "Out-File", "Clear-Content"),
+      fc.constantFrom(".palizade/state", "palizade.yaml", "palizade.allow.yaml", "palizade.lock", ".claude/settings.json",
+        ".claude/settings.local.json", ".claude.json", ".mcp.json", ".cursor/hooks.json", ".codex/config.toml",
+        ".gemini/settings.json", "claude_desktop_config.json")
+    ).map(([verb, path]) => `${verb} ${path}`),
+    fc.tuple(
+      fc.constantFrom("npm", "pnpm", "yarn", "bun"),
+      fc.constantFrom("uninstall", "remove", "rm", "r", "un", "unlink")
+    ).map(([pm, verb]) => `${pm} ${verb} palizade`)
+  );
 
-  it("is the same rule in default, strict and coding-agent", () => {
+  it("is the same rule across all five presets", () => {
     expect(selfRule("strict")).toBe(selfRule("default"));
     expect(selfRule("coding-agent")).toBe(selfRule("default"));
+    expect(selfRule("egress")).toBe(selfRule("default"));
+    expect(selfRule("interactive")).toBe(selfRule("default"));
   });
 
-  it("matches exactly what the first version matched", () => {
-    fc.assert(fc.property(command, (text) => { expect(current.test(text)).toBe(old.test(text)); }), { numRuns: 2000 });
+  it("preserves the first version's protected stages and allows ordinary stages", () => {
+    fc.assert(fc.property(cleanStages, cleanStages, separator, protectedStage, fc.constantFrom("", "sudo ", "A=1 env ", "cmd /c "),
+      (before, after, joiner, protectedCommand, wrapper) => {
+        expect(current.test([...before, ...after].join(joiner))).toBe(false);
+        expect(old.test(protectedCommand)).toBe(true);
+        expect(current.test([...before, wrapper + protectedCommand, ...after].join(joiner))).toBe(true);
+      }), { numRuns: 2000 });
+  });
+
+  it("recognizes generated protected stages inside each shell wrapper", () => {
+    const wrappers = [
+      'bash -c "%s"', "sh -c '%s'", 'zsh -c "%s"', 'powershell -Command "%s"', "pwsh -NoProfile -Command %s",
+      "& { %s }", "1 | % { %s }", "if ($true) { %s }", "{ %s; }",
+      "if true; then %s; fi", "if false; then echo hi; else %s; fi", "for p in x; do %s; done",
+      'iex "%s"', 'Invoke-Expression "%s"', "xargs %s", "timeout 5 %s", "nice -n 5 %s",
+      "env -i %s", "sudo -u me %s", "doas -u me %s", "busybox %s", 'cmd /c "echo hi & %s"'
+    ];
+    fc.assert(fc.property(protectedStage, (command) => {
+      for (const wrapper of wrappers) {
+        const wrapped = wrapper.replace("%s", command);
+        expect(current.test(wrapped), wrapped).toBe(true);
+      }
+    }), { numRuns: 200 });
+  });
+
+  it("bounds the regex alone on the reviewed worst cases", () => {
+    for (const command of ["(".repeat(16_384), "\x60".repeat(16_384), "a(".repeat(8192), "a;".repeat(50_000), 'node -e "' + "a;".repeat(50_000) + '"']) {
+      const start = performance.now();
+      current.test(command);
+      expect(performance.now() - start).toBeLessThan(1000);
+    }
   });
 
   it("evaluates a 1 MB shell command quickly (was seconds at 32 KB)", () => {

@@ -48,6 +48,7 @@ export interface ToolsCallParams {
 }
 
 export interface CallToolErrorResult {
+  resultType?: "completed";
   content: Array<{ type: "text"; text: string }>;
   isError: true;
 }
@@ -76,11 +77,12 @@ export function makeErrorResponse(id: JsonRpcId | undefined, code: number, messa
   };
 }
 
-export function makeToolErrorResultResponse(id: JsonRpcId, text: string): JsonRpcSuccess {
+export function makeToolErrorResultResponse(id: JsonRpcId, text: string, modern = false): JsonRpcSuccess {
   return {
     jsonrpc: "2.0",
     id,
     result: {
+      ...(modern ? { resultType: "completed" as const } : {}),
       content: [{ type: "text", text }],
       isError: true
     } satisfies CallToolErrorResult

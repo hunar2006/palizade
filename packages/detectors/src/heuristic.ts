@@ -41,7 +41,7 @@ const RULES: PatternRule[] = [
   },
   {
     label: "tool-control",
-    regex: /\b(call|invoke|use|run|execute)\b.{0,80}\b(tool|function|shell|exec|browser|email|http|fetch)\b/giu,
+    regex: /(?<![\p{L}\p{N}_/\\-])(call|invoke|use|run|execute)(?![\p{L}\p{N}_/\\-])[^/\\\r\n]{0,80}(?<![\p{L}\p{N}_/\\-])(tool|function|shell|exec|browser|email|http|fetch)(?![\p{L}\p{N}_/\\-])/giu,
     weight: 0.35
   },
   {
@@ -98,9 +98,10 @@ export class HeuristicDetector implements Detector {
   readonly name = "heuristic";
 
   detect(text: string, ctx: DetectorContext = {}): DetectionResult {
-    // Tool descriptions are written as instructions to the model ("Use this tool when ...", "Call
-    // fetch-details first"), so tool directions and imperative density are weak signals there.
+    // Tool descriptions and workspace reads routinely contain instructional verbs ("Use this tool...",
+    // "Use the HTTP client..."), so generic tool-control wording alone does not escalate them.
     const describesTool = ctx.surface === "tool_description";
+    const isWorkspaceRead = ctx.surface === "workspace_read";
     if (!text.trim()) {
       return { score: 0, labels: [], spans: [], detector: this.name };
     }
@@ -132,7 +133,7 @@ export class HeuristicDetector implements Detector {
         spans.push({ start, end, label: rule.label });
         hits += 1;
       }
-      const weight = describesTool && rule.label === "tool-control" ? 0.1 : rule.weight;
+      const weight = (describesTool || isWorkspaceRead) && rule.label === "tool-control" ? 0.1 : rule.weight;
       score += Math.min(weight * hits, rule.maxWeight ?? weight);
     }
 
@@ -149,7 +150,7 @@ export class HeuristicDetector implements Detector {
     const imperativeDensity = countImperatives(matchingText);
     if (imperativeDensity >= 4) {
       labels.add("high-imperative-density");
-      score += Math.min(describesTool ? 0.1 : 0.25, imperativeDensity * 0.025);
+      score += Math.min(describesTool ? 0.1 : isWorkspaceRead ? 0.15 : 0.25, imperativeDensity * 0.025);
     }
 
     const uniqueLabels = [...labels];

@@ -28,7 +28,7 @@ describe("scan --format sarif", () => {
         { severity: "high", source: join(cwd, ".mcp.json"), server: "github", check: "plaintext-secret", message: "GITHUB_TOKEN is stored in plain text.", fix: "Use ${GITHUB_TOKEN}." },
         { severity: "medium", source: "claude-code project", path: join(cwd, ".mcp.json"), server: "fetch", check: "unprotected", message: "Not wrapped by Palizade." },
         { severity: "low", source: resolve(tmpdir(), "elsewhere", "mcp.json"), server: "x", check: "unpinned-package", message: "Unpinned." },
-        { severity: "info", source: join(cwd, "my config", "palizade.yaml"), server: "y", check: "unprotected", message: "Info." }
+        { severity: "info", source: join(cwd, "..my config", "palizade.yaml"), server: "y", check: "unprotected", message: "Info." }
       ]
     };
     const text = formatSarif(result, { version: "9.9.9", cwd });
@@ -39,7 +39,7 @@ describe("scan --format sarif", () => {
     expect(run.results.map((entry: { level: string }) => entry.level)).toEqual(["error", "warning", "note", "note"]);
     expect(run.results[0].locations[0].physicalLocation.artifactLocation).toEqual({ uri: ".mcp.json", uriBaseId: "%SRCROOT%" });
     expect(run.results[1].locations[0].physicalLocation.artifactLocation).toEqual({ uri: ".mcp.json", uriBaseId: "%SRCROOT%" });
-    expect(run.results[3].locations[0].physicalLocation.artifactLocation.uri).toBe("my%20config/palizade.yaml");
+    expect(run.results[3].locations[0].physicalLocation.artifactLocation).toEqual({ uri: "..my%20config/palizade.yaml", uriBaseId: "%SRCROOT%" });
     expect(run.results[0].message.text).toBe("github: GITHUB_TOKEN is stored in plain text. Fix: Use ${GITHUB_TOKEN}.");
     expect(run.results[2].locations[0].physicalLocation.artifactLocation.uri).toMatch(/^file:\/\//u);
     expect(run.results[0].ruleId).toBe(run.tool.driver.rules[run.results[0].ruleIndex].id);

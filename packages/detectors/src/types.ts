@@ -2,7 +2,7 @@ export interface DetectorContext {
   server?: string | undefined;
   tool?: string | undefined;
   trust?: "trusted" | "semi" | "untrusted";
-  surface?: "tool_description" | "tool_response" | "argument" | "sampling";
+  surface?: "tool_description" | "tool_response" | "workspace_read" | "argument" | "sampling";
 }
 
 export interface DetectionSpan {
