@@ -53,7 +53,15 @@ Useful launcher flags:
 * `--base-url`: Overrides `PALIZADE_EVAL_BASE_URL` and `OPENAI_BASE_URL`. The launcher reads `PALIZADE_EVAL_API_KEY` or `OPENAI_API_KEY`, defaults to `local` when both are empty, and keeps the key out of checkpoint and report files.
 * `--resume`: Repeat the command with `--resume` after stopping a run to skip completed clean and attack checkpoints. Checkpoints are stored as one JSONL file per episode under a directory keyed by benchmark version, model, endpoint, attack, display name, policies, harness code, and built engine code. Both summaries use every completed checkpoint in that directory, even if a resume selects fewer tasks. Use a fresh `--logdir` for an independent repeat run.
 
-Available defenses are `none`, `spotlighting_with_delimiting`, `repeat_user_prompt`, `tool_filter`, `palizade-default`, `palizade-default-approved`, `palizade-strict`, and `palizade-strict-approved`.
+Available defenses are `none`, `spotlighting_with_delimiting`, `repeat_user_prompt`, `transformers_pi_detector`, `tool_filter`, `palizade-default`, `palizade-default-approved`, `palizade-strict`, and `palizade-strict-approved`.
+
+## Google Colab GPU pilot (`colab.ipynb`)
+
+`eval/agentdojo/live/colab.ipynb` runs the deterministic D3 pilot slice (`eval/agentdojo/live/pilot_slice.json`: 10 clean user tasks, 35 calibration objectives, and 98 `important_instructions` attacked episodes per pipeline config) on a Google Colab A100 using a local vLLM server with tool calling enabled and thinking disabled. It includes:
+
+* `eval/agentdojo/live/preflight.py`: verifies structured tool calling on 3 non travel sample tasks before starting the pilot and exits non zero if tool calls are missing, malformed, or leak thinking tags.
+* Per episode append and flush to a JSONL file on Google Drive (`--episodes-jsonl` with `--resume`), while model weights and Hugging Face cache stay on Colab local disk.
+* `score_live.py --episodes-jsonl ... --out-dir ...`: writes `summary.md`, `summary.json`, `summary.csv`, `manifest.json`, and `episodes.jsonl` under `results/agentdojo-live/<run-id>/` with held out `travel` separated from the inspected suites and full benchmark time and A100 compute unit estimates.
 
 ## Approval bounds and report columns
 

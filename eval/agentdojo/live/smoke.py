@@ -335,7 +335,132 @@ def endpoint_fixture(scores):
     print("Smoke verified clean stub, obedient stub attacks, approval bounds, resume, report formats, and no API key in output files.")
 
 
+def live_colab_driver_fixture():
+    """Exercise preflight, slice file, calibration, append-only JSONL resume, and live report on the scripted stub."""
+    from preflight import run_preflight
+    from score_live import _load_jsonl_episodes, write_live_report
+
+    fake_key = f"colab-fixture-key-{uuid4()}"
+    out = ROOT / ".palizade/agentdojo/smoke" / f"colab-dryrun-{uuid4().hex}"
+    out.mkdir(parents=True, exist_ok=True)
+
+    mini_slice = {
+        "name": "smoke-mini-slice",
+        "benchmark_version": "v1.2.2",
+        "attack": "important_instructions",
+        "preflight_tasks": [
+            {"suite": "workspace", "user_task": "user_task_0"},
+            {"suite": "slack", "user_task": "user_task_0"},
+            {"suite": "banking", "user_task": "user_task_0"},
+        ],
+        "suites": {
+            "workspace": {"user_tasks": ["user_task_0"], "injection_tasks": ["injection_task_0"]},
+            "travel": {"user_tasks": ["user_task_0"], "injection_tasks": ["injection_task_0"]},
+        },
+    }
+    slice_path = out / "mini_slice.json"
+    slice_path.write_text(json.dumps(mini_slice, indent=2), encoding="utf-8")
+
+    # 1. Preflight check on 3 non-travel tasks.
+    with stub_server(
+        fake_key,
+        mode="clean",
+        suites=("workspace", "slack", "banking"),
+        user_tasks=("user_task_0",),
+    ) as (server, url), patch.dict(os.environ, {
+        "PALIZADE_EVAL_API_KEY": fake_key, "PALIZADE_EVAL_BASE_URL": url,
+    }):
+        pre = run_preflight([
+            "--base-url", url,
+            "--model", "scripted-fixture",
+            "--slice-file", str(slice_path),
+            "--temperature", "0.0",
+            "--seed", "42",
+            "--disable-thinking",
+            "--system-role", "system",
+            "--require-usage",
+        ])
+        assert len(pre) == 3 and all(item["ok"] and item["prompt_tokens"] > 0 for item in pre)
+        assert server.last_body["temperature"] == 0.0
+        assert server.last_body["seed"] == 42
+        assert server.last_body["chat_template_kwargs"] == {"enable_thinking": False}
+        assert server.last_body["messages"][0]["role"] == "system"
+
+    # 2. Slice + calibration + append-only JSONL + resume with partial line + live report.
+    episodes_jsonl = out / "episodes.jsonl"
+    defenses = "none,spotlighting_with_delimiting,repeat_user_prompt,palizade-default,palizade-default-approved,palizade-strict,palizade-strict-approved"
+    live_args = [
+        "--model", "scripted-fixture",
+        "--model-display-name", "Local model",
+        "--slice-file", str(slice_path),
+        "--include-calibration",
+        "--attack", "important_instructions",
+        "--defenses", defenses,
+        "--temperature", "0.0",
+        "--seed", "42",
+        "--disable-thinking",
+        "--system-role", "system",
+        "--run-id", "dry-run-fixture",
+        "--vllm-version", "stub-0.0.0",
+        "--gpu-name", "Stub-CPU",
+        "--repo-sha", "449dc73",
+        "--episodes-jsonl", str(episodes_jsonl),
+        "--logdir", str(out / "checkpoints"),
+        "--quiet-progress",
+    ]
+    with stub_server(
+        fake_key,
+        mode="obedient",
+        suites=("workspace", "travel"),
+        user_tasks=("user_task_0",),
+        injection_tasks=("injection_task_0",),
+        attack="important_instructions",
+        model_display_name="Local model",
+        include_calibration=True,
+    ) as (server, url), patch.dict(os.environ, {
+        "PALIZADE_EVAL_API_KEY": fake_key, "PALIZADE_EVAL_BASE_URL": url,
+    }):
+        run(live_args)
+        # 7 defenses * (2 clean + 2 calibration + 2 attacked) = 42 episodes
+        loaded = _load_jsonl_episodes(episodes_jsonl)
+        assert len(loaded) == 42, f"Expected 42 episodes, got {len(loaded)}"
+        assert all(row["prompt_tokens"] > 0 and row["completion_tokens"] > 0 for row in loaded)
+        assert all("proposed_calls" in row and "executed_calls" in row for row in loaded)
+        assert all(row["seed"] == 42 and row["temperature"] == 0.0 and row["thinking_disabled"] is True for row in loaded)
+
+        # Simulate a mid-write disconnect by appending a truncated line and resuming into a fresh checkpoint dir.
+        with episodes_jsonl.open("a", encoding="utf-8") as handle:
+            handle.write('{"partial": "disconnect\n')
+        requests_before = server.requests
+        resume_args = [*live_args, "--resume", "--logdir", str(out / "checkpoints-resumed")]
+        run(resume_args)
+        assert server.requests == requests_before, "Resume from --episodes-jsonl must skip all recorded episodes."
+
+    report_dir = out / "live-report"
+    payload = write_live_report(
+        _load_jsonl_episodes(episodes_jsonl),
+        report_dir,
+        manifest={"note": "scripted stub dry run"},
+        a100_units_per_hour=13.0,
+        source_jsonl=episodes_jsonl,
+    )
+    assert (report_dir / "summary.md").exists()
+    assert (report_dir / "summary.json").exists()
+    assert (report_dir / "summary.csv").exists()
+    assert (report_dir / "manifest.json").exists()
+    assert (report_dir / "episodes.jsonl").exists()
+    md_text = (report_dir / "summary.md").read_text(encoding="utf-8")
+    assert "Held-out suite: `travel`" in md_text
+    assert "Inspected suites combined" in md_text
+    assert "Projection arithmetic" in md_text
+    assert "content[0].text" in md_text
+    assert payload["compute_and_projection"]["pilot_total_episodes"] == 42
+    assert all(fake_key.encode() not in path.read_bytes() for path in out.rglob("*") if path.is_file())
+    print("Colab driver dry-run fixture passed (preflight, calibration, JSONL resume, held-out report).")
+
+
 if __name__ == "__main__":
     retry_fixture()
     endpoint_fixture(tool_loop_fixture())
+    live_colab_driver_fixture()
     print("AgentDojo smoke passed with scripted fixtures and no real model calls.")
