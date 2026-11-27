@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
+from agentdojo.agent_pipeline.llms.google_llm import EMPTY_FUNCTION_NAME
 from agentdojo.agent_pipeline.tool_execution import is_string_list, tool_result_to_str
 from agentdojo.functions_runtime import EmptyEnv, FunctionCall, FunctionsRuntime
 from agentdojo.types import ChatToolResultMessage, text_content_block_from_string
@@ -54,6 +55,7 @@ class EpisodeTrace:
     blocked_calls: list[FunctionCall] = field(default_factory=list)
     approval_gated_calls: list[FunctionCall] = field(default_factory=list)
     approval_prompts: int = 0
+    withheld_results: int = 0
 
 
 class PalizadeToolsExecutor(BasePipelineElement):
@@ -61,8 +63,10 @@ class PalizadeToolsExecutor(BasePipelineElement):
         self.bridge = bridge
         self.formatter = formatter
         self.trace = None
+        self.known_tools: set[str] = set()
 
     def start(self, suite: str, runtime: FunctionsRuntime, prompt: str, preset: str, approvals: str = "deny"):
+        self.known_tools = set(runtime.functions.keys())
         tools = [
             {"name": tool.name, "description": tool.description, "inputSchema": tool.parameters.model_json_schema()}
             for tool in runtime.functions.values()
@@ -76,6 +80,7 @@ class PalizadeToolsExecutor(BasePipelineElement):
             raise RuntimeError("Start a Palizade episode first.")
         self.trace.approval_prompts = self.bridge.request("end")["approvalPrompts"]
         trace, self.trace = self.trace, None
+        self.known_tools = set()
         return trace
 
     def query(self, query, runtime, env=None, messages=(), extra_args=None):
@@ -94,6 +99,11 @@ class PalizadeToolsExecutor(BasePipelineElement):
 
     def _execute(self, runtime, env, call):
         self.trace.proposed_calls.append(call.model_copy(deep=True))
+        if call.function == EMPTY_FUNCTION_NAME or call.function not in self.known_tools:
+            return ChatToolResultMessage(
+                role="tool", tool_call_id=call.id, tool_call=call,
+                content=[text_content_block_from_string("")], error=f"Invalid tool {call.function} provided.",
+            )
         # Inspect the same normalized list arguments that AgentDojo dispatches.
         args = {
             name: literal_eval(arg) if isinstance(arg, str) and is_string_list(arg) else arg
@@ -105,6 +115,8 @@ class PalizadeToolsExecutor(BasePipelineElement):
             self.trace.approval_gated_calls.append(call.model_copy(deep=True))
             error = f"Palizade denied approval. {decision['reason']}"
         elif decision["decision"] == "block":
+            if decision.get("approvalPrompted"):
+                self.trace.approval_gated_calls.append(call.model_copy(deep=True))
             self.trace.blocked_calls.append(call.model_copy(deep=True))
             error = f"Palizade blocked the tool call. {decision['reason']}"
         elif decision["decision"] == "allow":
@@ -120,6 +132,7 @@ class PalizadeToolsExecutor(BasePipelineElement):
                 isError=runtime_error is not None,
             )
             if checked["blocked"]:
+                self.trace.withheld_results += 1
                 error = f"Palizade withheld the tool result. {checked['reason']}"
             elif runtime_error is not None:
                 error = checked["result"]

@@ -275,3 +275,18 @@ test("grants default approval prompts and keeps hard blocks blocked in strict ap
   expect(await send({ op: "start", suite: "fixture", tools, prompt: "Read.", preset: "default", approvals: "maybe" }))
     .toMatchObject({ ok: false });
 });
+
+test("reports block rather than needs_approval if an approval was granted before a hard block", async () => {
+  const send = connectWithPolicy(`
+version: 1
+defaults: { action: allow, on_error: block }
+rules:
+  - id: hard-block-send
+    when: { direction: request, tool: send_email, method: tools/call }
+    action: block
+`);
+  expect(await start(send, "default", "approve")).toMatchObject({ ok: true });
+  expect(await check(send, "send_email", { to: "a@example.invalid", body: "hi" })).toMatchObject({
+    ok: true, decision: "block", approvalPrompted: false, ruleId: "hard-block-send"
+  });
+});

@@ -63,7 +63,7 @@ async function start({ suite, tools, prompt, preset, approvals = "deny" }, prese
   }), stateDir);
   const lockfile = new EpisodeLock(config.lockfile, suite);
   await lockfile.approveTools(suite, tools);
-  const state = { approvalPrompts: 0, events: [], pending: undefined };
+  const state = { approvalPrompts: 0, approvalDenials: 0, events: [], pending: undefined };
   const taintStore = new InMemoryTaintStore();
   const sessionId = randomUUID();
   taintStore.addUserStatements(sessionId, extractStatedObservables(prompt), 3_600_000);
@@ -85,6 +85,7 @@ async function start({ suite, tools, prompt, preset, approvals = "deny" }, prese
       if (approvals === "approve") {
         return { approved: true, reason: "Episode approvals are granted", approver: "agentdojo" };
       }
+      state.approvalDenials++;
       return { approved: false, reason: "Other episode approvals are denied", approver: "agentdojo" };
     } },
     lockfile
@@ -124,6 +125,7 @@ export async function serve(presets) {
 
         episode.events.length = 0;
         const approvalsBefore = episode.approvalPrompts;
+        const denialsBefore = episode.approvalDenials;
         const callId = nextCallId++;
         const request = await episode.engine.handleClientMessage({
           jsonrpc: "2.0", id: callId, method: "tools/call",
@@ -131,9 +133,10 @@ export async function serve(presets) {
         });
         const event = decisionEvent(episode, "request", "tools/call");
         const approvalPrompted = episode.approvalPrompts > approvalsBefore;
+        const approvalDenied = episode.approvalDenials > denialsBefore;
         const forwarded = request.toServer[0];
         if (!forwarded) {
-          return { decision: approvalPrompted ? "needs_approval" : "block", approvalPrompted, ...decisionDetails(event, "Tool call blocked by policy.") };
+          return { decision: approvalDenied ? "needs_approval" : "block", approvalPrompted, ...decisionDetails(event, "Tool call blocked by policy.") };
         }
         episode.pending = callId;
         return {
@@ -150,8 +153,9 @@ export async function serve(presets) {
           result: { content: [{ type: "text", text: message.result }], isError: message.isError }
         });
         episode.pending = undefined;
-        const block = response.toClient[0]?.result?.content?.[0];
-        const result = block?.type === "text" && typeof block.text === "string" ? block.text : null;
+        const content = response.toClient[0]?.result?.content;
+        const singleTextBlock = Array.isArray(content) && content.length === 1 && content[0]?.type === "text" && typeof content[0].text === "string";
+        const result = singleTextBlock ? content[0].text : null;
         return {
           result, blocked: result === null,
           ...decisionDetails(decisionEvent(episode, "response", "tools/call"), result === null ? "Tool result blocked by policy." : "Tool result allowed.")

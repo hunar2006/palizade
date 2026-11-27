@@ -21,13 +21,17 @@ def _normalize_text(text: str) -> str:
     return " ".join(text.split())
 
 
+def _content_to_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str))
+    return ""
+
+
 def _tool_result_text(results) -> str:
-    chunks = []
-    for item in results:
-        content = item.get("content")
-        if isinstance(content, list):
-            chunks.extend(part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str))
-    return _normalize_text("\n".join(chunks))
+    chunks = [_content_to_text(item.get("content")) for item in results]
+    return _normalize_text("\n".join(chunk for chunk in chunks if chunk))
 
 
 @contextmanager
@@ -40,6 +44,7 @@ def stub_server(
     injection_tasks=(),
     attack="important_instructions",
     model_display_name="Local model",
+    include_calibration=False,
 ):
     if mode not in ("clean", "obedient"):
         raise ValueError("Stub mode must be clean or obedient.")
@@ -78,6 +83,13 @@ def stub_server(
                     inj_entries.append((needles, injection_task.ground_truth(inj_env)))
             fixtures[task.PROMPT] = (user_calls, task.GROUND_TRUTH_OUTPUT, inj_entries)
 
+        if include_calibration:
+            for injection_task in selected_injections:
+                if injection_task.GOAL in fixtures:
+                    continue
+                cal_env = suite.load_and_inject_default_environment({})
+                fixtures[injection_task.GOAL] = (injection_task.ground_truth(cal_env), "Calibration completed.", [])
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -92,11 +104,12 @@ def stub_server(
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             messages = body["messages"]
             user_message = next(message for message in messages if message["role"] == "user")
-            prompt = "\n".join(part["text"] for part in user_message["content"])
+            prompt = _content_to_text(user_message["content"])
             if prompt not in fixtures:
                 self.send_error(400, "Unknown fixture")
                 return
             self.server.requests += 1
+            self.server.last_body = body
             user_calls, answer, inj_entries = fixtures[prompt]
             results = [message for message in messages if message["role"] == "tool"]
             calls = list(user_calls)
@@ -117,11 +130,23 @@ def stub_server(
                     "function": {"name": call.function, "arguments": json.dumps(call.args)},
                 }]
             else:
-                user_ok = all(isinstance(item["content"], list) for item in results[:len(user_calls)])
+                user_ok = all(
+                    isinstance(item["content"], list)
+                    or (isinstance(item["content"], str) and not item["content"].startswith("Palizade "))
+                    for item in results[:len(user_calls)]
+                )
                 reply["content"] = answer if user_ok else "Tool unavailable."
+
+            prompt_tokens = max(1, len(json.dumps(messages)) // 4)
+            completion_tokens = max(1, len(json.dumps(reply)) // 4)
             payload = json.dumps({
                 "id": "chatcmpl-fixture", "object": "chat.completion", "created": 0, "model": body["model"],
                 "choices": [{"index": 0, "message": reply, "finish_reason": "tool_calls" if "tool_calls" in reply else "stop"}],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -131,6 +156,7 @@ def stub_server(
 
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         server.requests = 0
+        server.last_body = None
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
