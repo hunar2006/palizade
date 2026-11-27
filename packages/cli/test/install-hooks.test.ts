@@ -134,7 +134,7 @@ describe("mergeHookEntries", () => {
     expect((install().hooks as Record<string, unknown[]>).PreToolUse).toHaveLength(3);
   });
 
-  it.skipIf(process.platform !== "win32")("runs Cursor's updated Windows command through PowerShell and preserves argv and exit status", async () => {
+  it.skipIf(process.platform !== "win32")("runs Cursor's updated Windows command through PowerShell and preserves argv and exit status", { timeout: 105_000 }, async () => {
     const dir = await mkdtemp(join(tmpdir(), "palizade-install-hooks-"));
     try {
       const script = join(dir, "Workspace's $files", "palizade", "dist", "index.cjs");

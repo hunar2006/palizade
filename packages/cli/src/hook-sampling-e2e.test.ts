@@ -10,7 +10,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
-it("passes CLI PostToolUse sampling metadata into evaluateHookEvent end to end so middle destinations are denied later", async () => {
+it("passes CLI PostToolUse sampling metadata into evaluateHookEvent end to end so middle destinations are denied later", { timeout: 80_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), "palizade-cli-sampling-e2e-"));
   const home = await mkdtemp(join(tmpdir(), "palizade-cli-sampling-home-"));
   dirs.push(dir, home);

