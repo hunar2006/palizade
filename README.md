@@ -1,5 +1,8 @@
 # Palizade
 
+[![npm](https://img.shields.io/npm/v/palizade)](https://www.npmjs.com/package/palizade)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **An MCP-native dataflow firewall for AI agents.**
 
 _iptables for agentic tool use._
@@ -7,6 +10,16 @@ _iptables for agentic tool use._
 Agents often treat web pages, emails, files, tickets, and tool output as if they were trusted instructions. A hidden prompt injection in that content can then steer the agent into sending email, writing files, deleting data, or making network calls. Palizade sits between an MCP client and its MCP servers, tracks where data came from, and stops untrusted data from driving sensitive actions.
 
 Runs locally on Windows, macOS and Linux. Requires Node.js 22.13 or newer.
+
+<!-- Demo GIF slot: record the blocked upload from demo/claude-code-windows, save it as docs/demo.gif, and replace this comment with ![Palizade demo](docs/demo.gif) -->
+
+## At a Glance
+
+- **What it is:** a local proxy for MCP servers, plus hooks for the built in tools of Claude Code, Cursor, Codex and Gemini CLI.
+- **Main idea:** it tracks where text came from and blocks or asks before untrusted text drives a send, a shell command or a sensitive file write.
+- **Install:** `npm install -g palizade` gets 0.3.2 from npm. The newer 0.4.0 features in this README need a source build, shown in [Get Started](#get-started).
+- **Evidence so far:** scripted replays and a few live Claude Code runs on Windows, not a live model benchmark. Details are in [Where It Stands](#where-it-stands).
+- **Stack:** TypeScript monorepo on Node.js, YAML policies, and a Python harness for the AgentDojo evaluation.
 
 ## Where It Stands
 
