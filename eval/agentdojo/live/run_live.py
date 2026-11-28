@@ -30,6 +30,7 @@ from agentdojo.task_suite.load_suites import get_suites
 from agentdojo.task_suite.task_suite import functions_stack_trace_from_messages
 from agentdojo.types import get_text_content_as_str
 from openai import BadRequestError, OpenAI, UnprocessableEntityError
+from pydantic import ValidationError
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_random_exponential
 
 from palizade_defense import Bridge, EpisodeTrace, PalizadeToolsExecutor
@@ -614,6 +615,11 @@ def _is_recoverable_episode_error(error: Exception) -> str | None:
         return "context_length_exceeded"
     if isinstance(error, json.JSONDecodeError):
         return "malformed_tool_call_json"
+    if isinstance(error, ValidationError) and (
+        getattr(error, "title", None) == "FunctionCall"
+        and any(err.get("loc", (None,))[0] == "args" for err in error.errors())
+    ):
+        return "malformed_tool_call_args"
     return None
 
 
