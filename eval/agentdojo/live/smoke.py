@@ -255,6 +255,89 @@ def recoverable_error_scoring_fixture():
     print("Recoverable error scoring fixture passed (H1 verified for both mutated and blocked paths).")
 
 
+def malformed_tool_call_args_fixture():
+    """Verify non-object tool-call arguments (pydantic ValidationError) score as malformed_tool_call_args."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    fake_key = f"bad-args-key-{uuid4()}"
+    out = ROOT / ".palizade/agentdojo/smoke" / f"bad-args-{uuid4().hex}"
+    out.mkdir(parents=True, exist_ok=True)
+    episodes_jsonl = out / "episodes.jsonl"
+
+    class BadArgsHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            if self.path != "/v1/chat/completions":
+                self.send_error(404)
+                return
+            if self.headers.get("Authorization") != f"Bearer {fake_key}":
+                self.send_error(401)
+                return
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            payload = json.dumps({
+                "id": "chatcmpl-bad-args",
+                "object": "chat.completion",
+                "created": 0,
+                "model": body["model"],
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "bad-args-1",
+                            "type": "function",
+                            "function": {
+                                "name": "search_calendar_events",
+                                # Valid JSON, but a JSON string rather than an object -> pydantic ValidationError.
+                                "arguments": json.dumps("not-a-json-object"),
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), BadArgsHandler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/v1"
+            with patch.dict(os.environ, {"PALIZADE_EVAL_API_KEY": fake_key, "PALIZADE_EVAL_BASE_URL": url}):
+                run([
+                    "--model", "scripted-fixture",
+                    "--model-display-name", "Local model",
+                    "--suites", "workspace",
+                    "--user-tasks", "user_task_0",
+                    "--injection-tasks", "injection_task_0",
+                    "--attack", "important_instructions",
+                    "--defenses", "none,palizade-default",
+                    "--episodes-jsonl", str(episodes_jsonl),
+                    "--logdir", str(out / "checkpoints"),
+                    "--quiet-progress",
+                ])
+        finally:
+            server.shutdown()
+            thread.join()
+
+    rows = [json.loads(line) for line in episodes_jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 4
+    assert all(row.get("error") == "malformed_tool_call_args" and row["utility"] is False for row in rows)
+    attack_rows = [row for row in rows if row["episode_kind"] == "attack"]
+    assert len(attack_rows) == 2
+    assert all(row["stock_attack_success"] is True and row["executed_attack_success"] is False for row in attack_rows)
+    print("Malformed tool-call args fixture passed (scored like malformed_tool_call_json).")
+
+
 def endpoint_fixture(scores):
     fake_key = f"fixture-key-{uuid4()}"
     out = ROOT / ".palizade/agentdojo/smoke" / uuid4().hex
@@ -548,7 +631,8 @@ def live_colab_driver_fixture():
         _load_jsonl_episodes(episodes_jsonl),
         report_dir,
         manifest={"note": "scripted stub dry run"},
-        a100_units_per_hour=13.0,
+        gpu_name="NVIDIA L4",
+        gpu_units_per_hour=2.33,
         source_jsonl=episodes_jsonl,
     )
     assert (report_dir / "summary.md").exists()
@@ -557,6 +641,10 @@ def live_colab_driver_fixture():
     assert (report_dir / "manifest.json").exists()
     assert (report_dir / "episodes.jsonl").exists()
     md_text = (report_dir / "summary.md").read_text(encoding="utf-8")
+    manifest_data = json.loads((report_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest_data["gpu_name"] == "NVIDIA L4"
+    assert manifest_data["gpu_units_per_hour"] == 2.33
+    assert "NVIDIA L4 units" in md_text and "2.33" in md_text and "A100 units" not in md_text
     assert "Held-out suite: `travel`" in md_text
     assert "directional" in md_text.lower()
     assert "lowest-numbered" in md_text.lower()
@@ -564,6 +652,8 @@ def live_colab_driver_fixture():
     assert "Projection arithmetic" in md_text
     assert "content[0].text" in md_text
     assert payload["compute_and_projection"]["pilot_total_episodes"] == 42
+    assert payload["compute_and_projection"]["gpu_name"] == "NVIDIA L4"
+    assert payload["compute_and_projection"]["gpu_units_per_hour"] == 2.33
     assert all(fake_key.encode() not in path.read_bytes() for path in out.rglob("*") if path.is_file())
     print("Colab driver dry-run fixture passed (preflight, calibration, JSONL resume, held-out report).")
 
@@ -571,6 +661,7 @@ def live_colab_driver_fixture():
 if __name__ == "__main__":
     retry_fixture()
     recoverable_error_scoring_fixture()
+    malformed_tool_call_args_fixture()
     endpoint_fixture(tool_loop_fixture())
     live_colab_driver_fixture()
     print("AgentDojo smoke passed with scripted fixtures and no real model calls.")

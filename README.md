@@ -25,7 +25,7 @@ What has not been shown.
 
 - No benchmark run with a live model. The harness for one is in `eval/agentdojo/live` and has only been run against a scripted stub.
 - No measurement against attackers who know how Palizade works and adapt to it.
-- No testing on macOS or Linux in this round. The work here was done on Windows.
+- The test suite runs in CI on Linux, macOS and Windows, while the hooks have only been tried in a real client on Windows.
 
 Limits you should know before relying on it.
 
